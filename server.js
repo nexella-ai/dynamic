@@ -15,7 +15,7 @@ wss.on('connection', (ws) => {
   console.log('Retell connected via WebSocket.');
 
   ws.send(JSON.stringify({
-    text: "Hi there! Thank you for calling Nexella AI. How are you doing today?",
+    text: "Hi there! Thank you for calling Nexella AI. How are you doing today",
     actions: []
   }));
 
@@ -25,6 +25,12 @@ wss.on('connection', (ws) => {
       const userMessage = parsed.text;
 
       console.log('User said:', userMessage);
+
+      // 🔥 Empty input check to avoid silent hangup
+      if (!userMessage || userMessage.trim() === '') {
+        console.log('Empty user message received, ignoring...');
+        return;
+      }
 
       const openaiResponse = await axios.post(
         'https://api.openai.com/v1/chat/completions',
