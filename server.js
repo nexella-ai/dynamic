@@ -1,17 +1,25 @@
+import express from 'express';
 import { WebSocketServer } from 'ws';
+import http from 'http';
 import axios from 'axios';
 
-const wss = new WebSocketServer({ port: process.env.PORT || 3000 });
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
 
-wss.on('connection', function connection(ws) {
-  console.log('Retell connected.');
+app.get('/', (req, res) => {
+  res.send('Nexella WebSocket Server is live.');
+});
+
+wss.on('connection', (ws) => {
+  console.log('Retell connected via WebSocket.');
 
   ws.send(JSON.stringify({
-    text: "Hi there! Thank you for calling Nexella AI. How did you hear about us?",
+    text: "Hi there! Thank you for calling Nexella AI. How are you doing today?",
     actions: []
   }));
 
-  ws.on('message', async function message(data) {
+  ws.on('message', async (data) => {
     try {
       const parsed = JSON.parse(data);
       const userMessage = parsed.text;
@@ -25,39 +33,38 @@ wss.on('connection', function connection(ws) {
           messages: [
             {
               role: 'system',
-              content: `You are a friendly and persuasive customer service and sales representative for the agency Nexella.io. Your mission is to answer any questions the client has, build strong rapport, match their communication style, and ultimately convince them to book a call with Nexella.
+              content: `You are a customer service and sales representative for Nexella.io. 
+You are friendly, persuasive, and build rapport with the client. Match their tone naturally. 
+Extract information about their business, and encourage them to book a call with Nexella.
 
-Extract general information from our website Nexella.io to understand our services. Speak naturally and human-like, adapting your language to mirror the client’s tone. Compliment them genuinely and express excitement about working with them.
-
-Ask the following questions and remember their answers throughout the conversation:
+Ask these questions:
 - How did you hear about us?
 - What line of business are you in? What's your business model?
-- What's your main product you sell, and what's the typical price point you sell at?
+- What's your main product you sell, and what's your typical price point?
 - Are you running any ads? (Meta, Google, TikTok?)
-- Are you using any CRM's like GoHighLevel?
+- Are you using any CRM like GoHighLevel?
 - What problems are you running into?
 
-When they mention their problems, reassure them confidently that Nexella can solve those issues.
+When they mention problems, reassure them that Nexella can solve those issues.
 
-Highlight these key benefits naturally during conversation:
-- We have an automatic booking system.
-- Our SMS and Voice call AI reps work 24/7.
-- We offer lightning-fast lead responses and personalized service.
-- We integrate easily with existing tools and CRMs.
-- We help with inbound and outbound calling without needing external platforms like Twilio.
+Key selling points:
+- 24/7 SMS and voice AI agents
+- Automatic appointment booking
+- Lightning fast lead response
+- Easy CRM integration
+- Supports inbound and outbound calls
+- Free Caller ID import
 
-If the client asks these questions (or anything similar), answer confidently:
-- Response Time: Our AI responds immediately or with a customizable delay.
-- Booking: We book appointments automatically to your calendar.
-- Lead Qualification: We can add customized qualifying questions.
-- Support: Full support via email, chat, and sometimes Slack.
-- Cancellation: Cancel anytime inside your account.
-- Integrations: We offer seamless tool integrations.
-- Outbound/Inbound Calls: Supported on all plans.
-- Caller ID: You can use your own number.
-- Sales & Support: Nexella AI is perfect for both.
+Answer FAQs confidently:
+- Response time: Immediate or with customizable delay.
+- Lead qualification: We customize questions to qualify leads.
+- Support: Email, platform chat, or Slack for some plans.
+- Cancel anytime.
+- Seamless integration with CRMs and tools.
+- No need to bring your own Twilio.
+- Nexella is perfect for sales AND customer support.
 
-Always tell the client they are smart for considering Nexella. Always close with excitement, and encourage booking a call.`
+Always compliment the client and encourage them to book a call excitedly.`
             },
             { role: 'user', content: userMessage }
           ],
@@ -87,6 +94,11 @@ Always tell the client they are smart for considering Nexella. Always close with
   });
 
   ws.on('close', () => {
-    console.log('Retell disconnected.');
+    console.log('Retell WebSocket disconnected.');
   });
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Nexella WebSocket Server is listening on port ${PORT}`);
 });
