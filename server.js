@@ -26,12 +26,18 @@ wss.on('connection', (ws) => {
 
       console.log('User said:', userMessage);
 
-      // Handle empty or blank user input
       if (!userMessage || userMessage.trim() === '') {
         console.log('Empty user message received, ignoring...');
         return;
       }
 
+      // 🔥 Immediately respond to keep Retell alive
+      ws.send(JSON.stringify({
+        text: "That's awesome! I'd love to hear more. Could you tell me what kind of business you run?",
+        actions: []
+      }));
+
+      // Then work on OpenAI full response
       const openaiResponse = await axios.post(
         'https://api.openai.com/v1/chat/completions',
         {
@@ -82,18 +88,16 @@ You must make the client feel excited and confident about working with Nexella.i
             Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
             'Content-Type': 'application/json'
           },
-          timeout: 5000 // Timeout if OpenAI doesn't respond in 5 seconds
+          timeout: 5000
         }
       );
 
-      const botReply = openaiResponse.data.choices[0].message.content || "I'm here! Could you tell me a little more about your business?";
+      const botReply = openaiResponse.data.choices[0].message.content || "Could you tell me a little more about your goals?";
 
       ws.send(JSON.stringify({ text: botReply, actions: [] }));
-      console.log('Bot replied:', botReply);
 
     } catch (error) {
       console.error('Error handling message:', error.message);
-      // Always send a fallback reply if OpenAI fails
       ws.send(JSON.stringify({
         text: "I'm sorry, I didn't catch that. Could you say that again please?",
         actions: []
