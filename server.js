@@ -1,14 +1,14 @@
-import express from 'express';
-import { WebSocketServer } from 'ws';
-import http from 'http';
-import axios from 'axios';
+const express = require('express');
+const { WebSocketServer } = require('ws');
+const http = require('http');
+const axios = require('axios');
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 app.get('/', (req, res) => {
-  res.send('Nexella WebSocket Server is live.');
+  res.send('Nexella WebSocket Server is up and running!');
 });
 
 wss.on('connection', (ws) => {
@@ -33,11 +33,11 @@ wss.on('connection', (ws) => {
           messages: [
             {
               role: 'system',
-              content: `You are a customer service and sales representative for Nexella.io. 
-You are friendly, persuasive, and build rapport with the client. Match their tone naturally. 
-Extract information about their business, and encourage them to book a call with Nexella.
+              content: `You are a customer service/sales representative for Nexella.io. 
+You are to answer any questions the client has and persuade them to book a call with us. 
+You must sound friendly, relatable, and build rapport. Match their language style naturally. Compliment them genuinely.
 
-Ask these questions:
+Ask them these discovery questions:
 - How did you hear about us?
 - What line of business are you in? What's your business model?
 - What's your main product you sell, and what's your typical price point?
@@ -45,26 +45,27 @@ Ask these questions:
 - Are you using any CRM like GoHighLevel?
 - What problems are you running into?
 
-When they mention problems, reassure them that Nexella can solve those issues.
+When they mention problems, reassure them that Nexella can solve their issues. Make them feel understood.
 
-Key selling points:
+Highlight Nexella's selling points:
 - 24/7 SMS and voice AI agents
-- Automatic appointment booking
-- Lightning fast lead response
-- Easy CRM integration
+- Immediate or delayed responses
+- Automatic appointment booking to calendars
 - Supports inbound and outbound calls
-- Free Caller ID import
+- CRM integrations available
+- No need to bring Twilio — everything included
+- Caller ID import is free
+- Sales and Customer Support automation
 
-Answer FAQs confidently:
-- Response time: Immediate or with customizable delay.
-- Lead qualification: We customize questions to qualify leads.
-- Support: Email, platform chat, or Slack for some plans.
-- Cancel anytime.
-- Seamless integration with CRMs and tools.
-- No need to bring your own Twilio.
-- Nexella is perfect for sales AND customer support.
+If they ask FAQ questions:
+- Our AI systems respond immediately or with a customizable delay.
+- We qualify leads using any set of questions you provide.
+- Comprehensive support via email, chat, and Slack (for some plans).
+- Cancel anytime directly inside your account.
+- Integration flexibility with CRMs and communication platforms.
+- Supports inbound and outbound calling natively.
 
-Always compliment the client and encourage them to book a call excitedly.`
+You must make the client feel excited and confident about working with Nexella.io. Your goal is to get them to book a call!`
             },
             { role: 'user', content: userMessage }
           ],
@@ -80,21 +81,17 @@ Always compliment the client and encourage them to book a call excitedly.`
 
       const botReply = openaiResponse.data.choices[0].message.content;
 
-      const retellResponse = {
-        text: botReply,
-        actions: []
-      };
-
-      ws.send(JSON.stringify(retellResponse));
+      ws.send(JSON.stringify({ text: botReply, actions: [] }));
       console.log('Bot replied:', botReply);
+
     } catch (error) {
-      console.error('Error handling message:', error.message);
+      console.error('Error:', error.message);
       ws.close();
     }
   });
 
   ws.on('close', () => {
-    console.log('Retell WebSocket disconnected.');
+    console.log('Connection closed.');
   });
 });
 
