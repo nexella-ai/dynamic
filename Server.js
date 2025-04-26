@@ -6,6 +6,12 @@ const wss = new WebSocketServer({ port: process.env.PORT || 3000 });
 wss.on('connection', function connection(ws) {
   console.log('Retell connected.');
 
+  // GREETING MESSAGE - answer immediately when Retell connects
+  ws.send(JSON.stringify({
+    text: "Hi there! Thank you for calling Nexella AI. How are you doing today?",
+    actions: []
+  }));
+
   ws.on('message', async function message(data) {
     try {
       const parsed = JSON.parse(data);
