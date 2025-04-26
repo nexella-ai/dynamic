@@ -15,7 +15,7 @@ wss.on('connection', (ws) => {
   console.log('Retell connected via WebSocket.');
 
   ws.send(JSON.stringify({
-    text: "Hi there! Thank you for calling Nexella AI. How are you doing today",
+    text: "Hi there! Thank you for calling Nexella AI. How are you doing today?",
     actions: []
   }));
 
@@ -26,7 +26,7 @@ wss.on('connection', (ws) => {
 
       console.log('User said:', userMessage);
 
-      // 🔥 Empty input check to avoid silent hangup
+      // Handle empty or blank user input
       if (!userMessage || userMessage.trim() === '') {
         console.log('Empty user message received, ignoring...');
         return;
@@ -81,18 +81,23 @@ You must make the client feel excited and confident about working with Nexella.i
           headers: {
             Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
             'Content-Type': 'application/json'
-          }
+          },
+          timeout: 5000 // Timeout if OpenAI doesn't respond in 5 seconds
         }
       );
 
-      const botReply = openaiResponse.data.choices[0].message.content;
+      const botReply = openaiResponse.data.choices[0].message.content || "I'm here! Could you tell me a little more about your business?";
 
       ws.send(JSON.stringify({ text: botReply, actions: [] }));
       console.log('Bot replied:', botReply);
 
     } catch (error) {
-      console.error('Error:', error.message);
-      ws.close();
+      console.error('Error handling message:', error.message);
+      // Always send a fallback reply if OpenAI fails
+      ws.send(JSON.stringify({
+        text: "I'm sorry, I didn't catch that. Could you say that again please?",
+        actions: []
+      }));
     }
   });
 
