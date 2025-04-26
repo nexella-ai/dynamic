@@ -16,6 +16,7 @@ wss.on('connection', (ws) => {
 
   ws.send(JSON.stringify({
     text: "Hi there! Thank you for calling Nexella AI. How are you doing today?",
+    content_complete: true,
     actions: []
   }));
 
@@ -32,10 +33,13 @@ wss.on('connection', (ws) => {
       }
 
       // 🔥 Immediately respond to keep Retell alive
-      ws.send(JSON.stringify({
-        text: "That's awesome! I'd love to hear more. Could you tell me what kind of business you run?",
-        actions: []
-      }));
+      setTimeout(() => {
+        ws.send(JSON.stringify({
+          text: "That's awesome! I'd love to hear more. Could you tell me what kind of business you run?",
+          content_complete: true,
+          actions: []
+        }));
+      }, 500);
 
       // Then work on OpenAI full response
       const openaiResponse = await axios.post(
@@ -94,12 +98,17 @@ You must make the client feel excited and confident about working with Nexella.i
 
       const botReply = openaiResponse.data.choices[0].message.content || "Could you tell me a little more about your goals?";
 
-      ws.send(JSON.stringify({ text: botReply, actions: [] }));
+      ws.send(JSON.stringify({
+        text: botReply,
+        content_complete: true,
+        actions: []
+      }));
 
     } catch (error) {
       console.error('Error handling message:', error.message);
       ws.send(JSON.stringify({
         text: "I'm sorry, I didn't catch that. Could you say that again please?",
+        content_complete: true,
         actions: []
       }));
     }
