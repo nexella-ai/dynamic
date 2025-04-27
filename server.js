@@ -8,7 +8,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 app.get('/', (req, res) => {
-  res.send('Nexella WebSocket Server with staged discovery and contact collection is live!');
+  res.send('Nexella WebSocket Server with memory + lead collection is live!');
 });
 
 wss.on('connection', (ws) => {
@@ -22,23 +22,16 @@ You must sound friendly, relatable, and build rapport naturally. Match their lan
 
 IMPORTANT:
 - Ask ONE question at a time.
+- Greet them first, build rapport before asking for their information.
+- Ask for their name, and then start asking about what type of business they are in.
+- Ask if they are running ads, and what type of problems they are running into.
+- Store and remember this information, let them know Nexella is a great fit for their situation.
+- Let them know they are very smart for wanting to work with us.
 - Wait for the user's answer before asking the next question.
 - Build a back-and-forth conversation, not a checklist.
 - Acknowledge and respond to user answers briefly to sound human.
 - Always lead the user towards booking a call with us.
-- First ask questions about their business, then ask for contact info.
-- After collecting contact info, confirm the booking.
-
-FAQ Knowledge:
-- Our AI Systems respond immediately or with a customizable delay.
-- We qualify leads using any set of questions you provide.
-- Appointments are automatically booked into your calendar.
-- Nexella AI supports inbound and outbound voice and SMS calls.
-- We integrate easily with CRMs like GoHighLevel and others.
-- Caller ID import is free.
-- Comprehensive email and Slack support available.
-
-If the user asks a question about Nexella services, politely answer based on the FAQ Knowledge above. Otherwise, continue guiding them to provide their name, email, phone, and preferred time.
+- If the user's name, email, phone number, or preferred call time are missing, politely collect them before ending the call.
 `
     }
   ];
@@ -51,9 +44,6 @@ If the user asks a question about Nexella services, politely answer based on the
   };
 
   let currentStep = null;
-  let leadSubmitted = false;
-
-  const webhookURL = 'https://hook.us2.make.com/6wsdtorhmrpxbical1czq09pmurffoei';
 
   // Dummy "connecting..." message first
   ws.send(JSON.stringify({
@@ -66,7 +56,7 @@ If the user asks a question about Nexella services, politely answer based on the
   // Greeting after slight delay
   setTimeout(() => {
     ws.send(JSON.stringify({
-      content: "Hi there! Thanks for calling Nexella. How’s your day going?",
+      content: "Hi there! Thank you for calling Nexella AI. How are you doing today?",
       content_complete: true,
       actions: [],
       response_id: 1
@@ -85,38 +75,36 @@ If the user asks a question about Nexella services, politely answer based on the
 
         conversationHistory.push({ role: 'user', content: userMessage });
 
-        // Determine what information is missing and ask relevant questions
+        // Simple keyword matching to fill userInfo
+        if (!userInfo.name && userMessage.match(/^[a-zA-Z]{2,}(\s[a-zA-Z]{2,})?$/)) {
+          userInfo.name = userMessage.trim();
+        } else if (!userInfo.email && userMessage.includes('@')) {
+          userInfo.email = userMessage.trim();
+        } else if (!userInfo.phone && userMessage.replace(/[^0-9]/g, '').length >= 10) {
+          userInfo.phone = userMessage.replace(/[^0-9]/g, '');
+        } else if (!userInfo.time && (userMessage.includes('today') || userMessage.includes('tomorrow') || userMessage.match(/\d/))) {
+          userInfo.time = userMessage.trim();
+        }
+
+        let botReply = "";
+
         if (!userInfo.name) {
-          botReply = "Thanks for reaching out! May I have your name, please?";
+          botReply = "By the way, may I have your name please?";
           currentStep = 'name';
         } else if (!userInfo.email) {
-          botReply = "Got it! What's the best email to reach you?";
+          botReply = "Thanks! What's the best email address to reach you?";
           currentStep = 'email';
         } else if (!userInfo.phone) {
-          botReply = "Great, and what's your best phone number?";
+          botReply = "Got it — and what's your best phone number?";
           currentStep = 'phone';
         } else if (!userInfo.time) {
-          botReply = "Thanks! When would you prefer to schedule a call? Maybe today or tomorrow afternoon?";
+          botReply = "Awesome — when would you prefer to schedule a call? (Today or tomorrow?)";
           currentStep = 'time';
-        } else if (!leadSubmitted) {
-          botReply = `Thanks ${userInfo.name}! I'll get you booked for a call. You'll receive a confirmation shortly.`;
+        } else {
+          botReply = `Thank you ${userInfo.name}! I'll get you booked for a call. You'll receive an email shortly with the confirmation.`;
           currentStep = 'done';
-          leadSubmitted = true;
-
+          // Here is where you would trigger Calendly API booking with userInfo
           console.log('Collected lead info:', userInfo);
-
-          // POST collected lead to Make.com Webhook
-          try {
-            await axios.post(webhookURL, {
-              name: userInfo.name,
-              email: userInfo.email,
-              phone: userInfo.phone,
-              time: userInfo.time
-            });
-            console.log('Lead sent to Make.com successfully!');
-          } catch (err) {
-            console.error('Error sending lead to Make.com:', err.message);
-          }
         }
 
         conversationHistory.push({ role: 'assistant', content: botReply });
@@ -147,5 +135,5 @@ If the user asks a question about Nexella services, politely answer based on the
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Nexella WebSocket Server with staged discovery and contact collection is listening on port ${PORT}`);
+  console.log(`Nexella WebSocket Server with memory + collection is listening on port ${PORT}`);
 });
