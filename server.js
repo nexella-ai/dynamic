@@ -50,7 +50,9 @@ Your main goal is to make the user feel understood and excited to book a call wi
     }
   ];
 
-  // Dummy "connecting..." message first
+  let collectingContactInfo = false;
+  let contactInfo = { name: '', email: '', phone: '', sent: false };
+
   ws.send(JSON.stringify({
     content: "connecting...",
     content_complete: true,
@@ -58,7 +60,6 @@ Your main goal is to make the user feel understood and excited to book a call wi
     response_id: 0
   }));
 
-  // Real welcome greeting after 500ms
   setTimeout(() => {
     ws.send(JSON.stringify({
       content: "Hi there! Thank you for calling Nexella AI. How are you doing today?",
@@ -78,7 +79,38 @@ Your main goal is to make the user feel understood and excited to book a call wi
 
         console.log('User said:', userMessage);
 
-        // Save user's message to conversation history
+        if (collectingContactInfo && !contactInfo.sent) {
+          if (!contactInfo.name) {
+            contactInfo.name = userMessage;
+            ws.send(JSON.stringify({
+              content: "Thanks! What's the best email address to reach you?",
+              content_complete: true,
+              actions: []
+            }));
+            return;
+          } else if (!contactInfo.email && userMessage.includes('@')) {
+            contactInfo.email = userMessage;
+            ws.send(JSON.stringify({
+              content: "Got it, and what's your best phone number?",
+              content_complete: true,
+              actions: []
+            }));
+            return;
+          } else if (!contactInfo.phone && userMessage.match(/\d{3}[-\s]?\d{3}[-\s]?\d{4}/)) {
+            contactInfo.phone = userMessage;
+            contactInfo.sent = true;
+
+            await axios.post('https://hook.us2.make.com/6wsdtorhmrpxbical1czq09pmurffoei', contactInfo);
+
+            ws.send(JSON.stringify({
+              content: "Awesome, thanks! You'll receive a confirmation shortly. We look forward to working with you!",
+              content_complete: true,
+              actions: []
+            }));
+            return;
+          }
+        }
+
         conversationHistory.push({ role: 'user', content: userMessage });
 
         const openaiResponse = await axios.post(
@@ -99,15 +131,25 @@ Your main goal is to make the user feel understood and excited to book a call wi
 
         const botReply = openaiResponse.data.choices[0].message.content || "Could you tell me a little more about your business?";
 
-        // Save AI's reply to conversation history
         conversationHistory.push({ role: 'assistant', content: botReply });
 
         ws.send(JSON.stringify({
           content: botReply,
           content_complete: true,
           actions: [],
-          response_id: parsed.response_id // Echo back the correct response_id
+          response_id: parsed.response_id
         }));
+
+        if (!collectingContactInfo && botReply.toLowerCase().includes('what problems are you running into')) {
+          setTimeout(() => {
+            collectingContactInfo = true;
+            ws.send(JSON.stringify({
+              content: "Before we finish, may I have your full name to get you scheduled?",
+              content_complete: true,
+              actions: []
+            }));
+          }, 1000);
+        }
       }
 
     } catch (error) {
