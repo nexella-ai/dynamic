@@ -8,49 +8,16 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 app.get('/', (req, res) => {
-  res.send('Nexella WebSocket Server is live!');
+  res.send('Nexella WebSocket Server with memory is live!');
 });
 
 wss.on('connection', (ws) => {
   console.log('Retell connected via WebSocket.');
 
-  // Dummy "connecting..." message first
-  ws.send(JSON.stringify({
-    content: "connecting...",
-    content_complete: true,
-    actions: [],
-    response_id: 0
-  }));
-
-  // Real welcome greeting after 500ms
-  setTimeout(() => {
-    ws.send(JSON.stringify({
-      content: "Hi there! Thank you for calling Nexella AI. How are you doing today?",
-      content_complete: true,
-      actions: [],
-      response_id: 1
-    }));
-  }, 500);
-
-  ws.on('message', async (data) => {
-    try {
-      const parsed = JSON.parse(data);
-
-      if (parsed.interaction_type === 'response_required') {
-        const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
-        const userMessage = latestUserUtterance?.content || "";
-
-        console.log('User said:', userMessage);
-
-        const openaiResponse = await axios.post(
-          'https://api.openai.com/v1/chat/completions',
-          {
-            model: 'gpt-4o',
-            messages: [
-              {
-                role: 'system',
-                content: `You are a customer service/sales representative for Nexella.io. 
-
+  let conversationHistory = [
+    {
+      role: 'system',
+      content: `You are a customer service/sales representative for Nexella AI. 
 You must sound friendly, relatable, and build rapport naturally. Match their language style. Compliment them genuinely.
 
 IMPORTANT:
@@ -71,7 +38,7 @@ DISCOVERY QUESTIONS:
 When they mention a problem, reassure them that Nexella can help.
 
 Highlight Nexella's features casually throughout the conversation:
-- 24/7 AI agents
+- 24/7 SMS and voice AI agents
 - Immediate response
 - Calendar booking
 - CRM integrations
@@ -79,10 +46,46 @@ Highlight Nexella's features casually throughout the conversation:
 - Caller ID import
 - Sales and Customer Support automation
 
-Your main goal is to make the user feel understood and excited to book a call with Nexella.io.`
-              },
-              { role: 'user', content: userMessage }
-            ],
+Your main goal is to make the user feel understood and excited to book a call with Nexella AI.`
+    }
+  ];
+
+  // Dummy "connecting..." message first
+  ws.send(JSON.stringify({
+    content: "connecting...",
+    content_complete: true,
+    actions: [],
+    response_id: 0
+  }));
+
+  // Real welcome greeting after 500ms
+  setTimeout(() => {
+    ws.send(JSON.stringify({
+      content: "Hi there! Thank you for calling Nexella AI. How did you hear about us?",
+      content_complete: true,
+      actions: [],
+      response_id: 1
+    }));
+  }, 500);
+
+  ws.on('message', async (data) => {
+    try {
+      const parsed = JSON.parse(data);
+
+      if (parsed.interaction_type === 'response_required') {
+        const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
+        const userMessage = latestUserUtterance?.content || "";
+
+        console.log('User said:', userMessage);
+
+        // Save user's message to conversation history
+        conversationHistory.push({ role: 'user', content: userMessage });
+
+        const openaiResponse = await axios.post(
+          'https://api.openai.com/v1/chat/completions',
+          {
+            model: 'gpt-4o',
+            messages: conversationHistory,
             temperature: 0.5
           },
           {
@@ -96,11 +99,14 @@ Your main goal is to make the user feel understood and excited to book a call wi
 
         const botReply = openaiResponse.data.choices[0].message.content || "Could you tell me a little more about your business?";
 
+        // Save AI's reply to conversation history
+        conversationHistory.push({ role: 'assistant', content: botReply });
+
         ws.send(JSON.stringify({
           content: botReply,
           content_complete: true,
           actions: [],
-          response_id: parsed.response_id // Echo back the exact response_id
+          response_id: parsed.response_id // Echo back the correct response_id
         }));
       }
 
@@ -110,7 +116,7 @@ Your main goal is to make the user feel understood and excited to book a call wi
         content: "I'm sorry, could you say that again please?",
         content_complete: true,
         actions: [],
-        response_id: 9999 // fallback response id
+        response_id: 9999
       }));
     }
   });
@@ -122,5 +128,5 @@ Your main goal is to make the user feel understood and excited to book a call wi
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Nexella WebSocket Server is listening on port ${PORT}`);
+  console.log(`Nexella WebSocket Server with memory is listening on port ${PORT}`);
 });
