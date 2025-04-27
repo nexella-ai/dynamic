@@ -14,7 +14,7 @@ app.get('/', (req, res) => {
 wss.on('connection', (ws) => {
   console.log('Retell connected via WebSocket.');
 
-  // Dummy "connecting" message first
+  // Dummy "connecting..." message first
   ws.send(JSON.stringify({
     content: "connecting...",
     content_complete: true,
@@ -32,28 +32,24 @@ wss.on('connection', (ws) => {
     }));
   }, 500);
 
-  let responseCounter = 2; // Start next responses from 2
-
   ws.on('message', async (data) => {
     try {
       const parsed = JSON.parse(data);
-      const userMessage = parsed.text;
 
-      console.log('User said:', userMessage);
+      if (parsed.interaction_type === 'response_required') {
+        const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
+        const userMessage = latestUserUtterance?.content || "";
 
-      if (!userMessage || userMessage.trim() === '') {
-        console.log('Empty user message received, ignoring...');
-        return;
-      }
+        console.log('User said:', userMessage);
 
-      const openaiResponse = await axios.post(
-        'https://api.openai.com/v1/chat/completions',
-        {
-          model: 'gpt-4o',
-          messages: [
-            {
-              role: 'system',
-              content: `You are a customer service/sales representative for Nexella.io. 
+        const openaiResponse = await axios.post(
+          'https://api.openai.com/v1/chat/completions',
+          {
+            model: 'gpt-4o',
+            messages: [
+              {
+                role: 'system',
+                content: `You are a customer service/sales representative for Nexella.io. 
 You are to answer any questions the client has and persuade them to book a call with us. 
 You must sound friendly, relatable, and build rapport. Match their language style naturally. Compliment them genuinely.
 
@@ -86,28 +82,29 @@ If they ask FAQ questions:
 - Supports inbound and outbound calling natively.
 
 You must make the client feel excited and confident about working with Nexella.io. Your goal is to get them to book a call!`
-            },
-            { role: 'user', content: userMessage }
-          ],
-          temperature: 0.5
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-            'Content-Type': 'application/json'
+              },
+              { role: 'user', content: userMessage }
+            ],
+            temperature: 0.5
           },
-          timeout: 5000
-        }
-      );
+          {
+            headers: {
+              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+              'Content-Type': 'application/json'
+            },
+            timeout: 5000
+          }
+        );
 
-      const botReply = openaiResponse.data.choices[0].message.content || "Could you tell me a little more about your business?";
+        const botReply = openaiResponse.data.choices[0].message.content || "Could you tell me a little more about your business?";
 
-      ws.send(JSON.stringify({
-        content: botReply,
-        content_complete: true,
-        actions: [],
-        response_id: responseCounter++
-      }));
+        ws.send(JSON.stringify({
+          content: botReply,
+          content_complete: true,
+          actions: [],
+          response_id: parsed.response_id // Echo back the exact response_id
+        }));
+      }
 
     } catch (error) {
       console.error('Error handling message:', error.message);
@@ -115,7 +112,7 @@ You must make the client feel excited and confident about working with Nexella.i
         content: "I'm sorry, could you say that again please?",
         content_complete: true,
         actions: [],
-        response_id: responseCounter++
+        response_id: 9999 // fallback response id
       }));
     }
   });
