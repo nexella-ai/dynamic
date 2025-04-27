@@ -8,17 +8,27 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 app.get('/', (req, res) => {
-  res.send('Nexella WebSocket Server is up and running!');
+  res.send('Nexella WebSocket Server is live!');
 });
 
 wss.on('connection', (ws) => {
   console.log('Retell connected via WebSocket.');
 
+  // Dummy message to wake up Retell
   ws.send(JSON.stringify({
-    text: "Hi there! Thank you for calling Nexella AI. How are you doing today?",
+    content: "connecting...",
     content_complete: true,
     actions: []
   }));
+
+  // Real welcome message after 500ms
+  setTimeout(() => {
+    ws.send(JSON.stringify({
+      content: "Hi there! Thank you for calling Nexella AI. How are you doing today?",
+      content_complete: true,
+      actions: []
+    }));
+  }, 500);
 
   ws.on('message', async (data) => {
     try {
@@ -32,16 +42,6 @@ wss.on('connection', (ws) => {
         return;
       }
 
-      // 🔥 Immediately respond to keep Retell alive
-      setTimeout(() => {
-        ws.send(JSON.stringify({
-          text: "That's awesome! I'd love to hear more. Could you tell me what kind of business you run?",
-          content_complete: true,
-          actions: []
-        }));
-      }, 500);
-
-      // Then work on OpenAI full response
       const openaiResponse = await axios.post(
         'https://api.openai.com/v1/chat/completions',
         {
@@ -96,10 +96,10 @@ You must make the client feel excited and confident about working with Nexella.i
         }
       );
 
-      const botReply = openaiResponse.data.choices[0].message.content || "Could you tell me a little more about your goals?";
+      const botReply = openaiResponse.data.choices[0].message.content || "Could you tell me a little more about your business?";
 
       ws.send(JSON.stringify({
-        text: botReply,
+        content: botReply,
         content_complete: true,
         actions: []
       }));
@@ -107,7 +107,7 @@ You must make the client feel excited and confident about working with Nexella.i
     } catch (error) {
       console.error('Error handling message:', error.message);
       ws.send(JSON.stringify({
-        text: "I'm sorry, I didn't catch that. Could you say that again please?",
+        content: "I'm sorry, could you say that again please?",
         content_complete: true,
         actions: []
       }));
