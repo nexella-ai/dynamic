@@ -8,7 +8,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 app.get('/', (req, res) => {
-  res.send('Nexella WebSocket Server with smart FAQ + webhook integration is live!');
+  res.send('Nexella WebSocket Server with staged discovery and contact collection is live!');
 });
 
 wss.on('connection', (ws) => {
@@ -26,7 +26,8 @@ IMPORTANT:
 - Build a back-and-forth conversation, not a checklist.
 - Acknowledge and respond to user answers briefly to sound human.
 - Always lead the user towards booking a call with us.
-- If the user's name, email, phone number, or preferred call time are missing, politely collect them before ending the call.
+- First ask questions about their business, then ask for contact info.
+- After collecting contact info, confirm the booking.
 
 FAQ Knowledge:
 - Our AI Systems respond immediately or with a customizable delay.
@@ -65,7 +66,7 @@ If the user asks a question about Nexella services, politely answer based on the
   // Greeting after slight delay
   setTimeout(() => {
     ws.send(JSON.stringify({
-      content: "Hi there! Thank you for calling Nexella AI. How are you doing today?",
+      content: "Hi there! Thanks for calling Nexella. How’s your day going?",
       content_complete: true,
       actions: [],
       response_id: 1
@@ -84,29 +85,18 @@ If the user asks a question about Nexella services, politely answer based on the
 
         conversationHistory.push({ role: 'user', content: userMessage });
 
-        if (!userInfo.name && userMessage.match(/^[a-zA-Z]{2,}(\s[a-zA-Z]{2,})?$/)) {
-          userInfo.name = userMessage.trim();
-        } else if (!userInfo.email && userMessage.includes('@')) {
-          userInfo.email = userMessage.trim();
-        } else if (!userInfo.phone && userMessage.replace(/[^0-9]/g, '').length >= 10) {
-          userInfo.phone = userMessage.replace(/[^0-9]/g, '');
-        } else if (!userInfo.time && (userMessage.includes('today') || userMessage.includes('tomorrow') || userMessage.match(/\d/))) {
-          userInfo.time = userMessage.trim();
-        }
-
-        let botReply = "";
-
+        // Determine what information is missing and ask relevant questions
         if (!userInfo.name) {
-          botReply = "By the way, may I have your name please?";
+          botReply = "Thanks for reaching out! May I have your name, please?";
           currentStep = 'name';
         } else if (!userInfo.email) {
-          botReply = "Thanks! What's the best email address to reach you?";
+          botReply = "Got it! What's the best email to reach you?";
           currentStep = 'email';
         } else if (!userInfo.phone) {
-          botReply = "Got it — and what's your best phone number?";
+          botReply = "Great, and what's your best phone number?";
           currentStep = 'phone';
         } else if (!userInfo.time) {
-          botReply = "Awesome — when would you prefer to schedule a call? (Today or tomorrow?)";
+          botReply = "Thanks! When would you prefer to schedule a call? Maybe today or tomorrow afternoon?";
           currentStep = 'time';
         } else if (!leadSubmitted) {
           botReply = `Thanks ${userInfo.name}! I'll get you booked for a call. You'll receive a confirmation shortly.`;
@@ -157,5 +147,5 @@ If the user asks a question about Nexella services, politely answer based on the
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Nexella WebSocket Server with smart FAQ and webhook is listening on port ${PORT}`);
+  console.log(`Nexella WebSocket Server with staged discovery and contact collection is listening on port ${PORT}`);
 });
