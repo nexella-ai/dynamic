@@ -14,21 +14,25 @@ app.get('/', (req, res) => {
 wss.on('connection', (ws) => {
   console.log('Retell connected via WebSocket.');
 
-  // Dummy message to wake up Retell
+  // Dummy "connecting" message first
   ws.send(JSON.stringify({
     content: "connecting...",
     content_complete: true,
-    actions: []
+    actions: [],
+    response_id: 0
   }));
 
-  // Real welcome message after 500ms
+  // Real welcome greeting after 500ms
   setTimeout(() => {
     ws.send(JSON.stringify({
       content: "Hi there! Thank you for calling Nexella AI. How are you doing today?",
       content_complete: true,
-      actions: []
+      actions: [],
+      response_id: 1
     }));
   }, 500);
+
+  let responseCounter = 2; // Start next responses from 2
 
   ws.on('message', async (data) => {
     try {
@@ -101,7 +105,8 @@ You must make the client feel excited and confident about working with Nexella.i
       ws.send(JSON.stringify({
         content: botReply,
         content_complete: true,
-        actions: []
+        actions: [],
+        response_id: responseCounter++
       }));
 
     } catch (error) {
@@ -109,7 +114,8 @@ You must make the client feel excited and confident about working with Nexella.i
       ws.send(JSON.stringify({
         content: "I'm sorry, could you say that again please?",
         content_complete: true,
-        actions: []
+        actions: [],
+        response_id: responseCounter++
       }));
     }
   });
