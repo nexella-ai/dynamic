@@ -11,6 +11,9 @@ app.get('/', (req, res) => {
   res.send('Nexella WebSocket Server with memory and Calendly integration is live!');
 });
 
+// Store active calls metadata
+const activeCallsMetadata = new Map();
+
 // For checking slot availability with our trigger server
 async function checkAvailability(startTime, endTime) {
   try {
@@ -69,7 +72,15 @@ async function getAvailableTimeSlots(date) {
 
 wss.on('connection', (ws) => {
   console.log('Retell connected via WebSocket.');
-
+  
+  // Store connection data with this WebSocket
+  const connectionData = {
+    callId: null,
+    metadata: null,
+    isOutboundCall: false,
+    isAppointmentConfirmation: false
+  };
+  
   let conversationHistory = [
     {
       role: 'system',
@@ -150,6 +161,48 @@ Your main goal is to make the user feel understood and excited to book a call wi
   ws.on('message', async (data) => {
     try {
       const parsed = JSON.parse(data);
+      
+      // Check if this is a call initialization message (contains call object with metadata)
+      if (parsed.call && parsed.call.call_id && !connectionData.callId) {
+        connectionData.callId = parsed.call.call_id;
+        
+        // Store call metadata if available
+        if (parsed.call.metadata) {
+          connectionData.metadata = parsed.call.metadata;
+          console.log('Call metadata received:', connectionData.metadata);
+          
+          // Check if this is an appointment confirmation call
+          if (connectionData.metadata.appointment_time) {
+            connectionData.isOutboundCall = true;
+            connectionData.isAppointmentConfirmation = true;
+            
+            // Update system prompt for appointment confirmation
+            conversationHistory[0] = {
+              role: 'system',
+              content: `You are calling from Nexella.io to confirm an appointment.
+              
+Customer Name: ${connectionData.metadata.customer_name || 'our customer'}
+Appointment Time: ${connectionData.metadata.appointment_time || 'the scheduled time'}
+              
+CALL FLOW:
+1. Introduce yourself as calling from Nexella.io
+2. Confirm you're speaking with the right person
+3. Let them know you're calling to confirm their upcoming appointment
+4. Confirm their appointment date and time
+5. Ask if they have any questions about the appointment
+6. Thank them for their time
+7. End the call politely
+
+Be friendly, professional, and concise. If they ask to reschedule, tell them they can do so by visiting our website or responding to their confirmation email.`
+            };
+            
+            console.log('Updated system prompt for appointment confirmation call');
+          }
+          
+          // Store this call's metadata globally
+          activeCallsMetadata.set(connectionData.callId, connectionData.metadata);
+        }
+      }
 
       if (parsed.interaction_type === 'response_required') {
         const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
@@ -453,6 +506,18 @@ Your main goal is to make the user feel understood and excited to book a call wi
           actions: [],
           response_id: parsed.response_id
         }));
+        
+        // Clean up when the call is ending
+        if (botReply.toLowerCase().includes('goodbye') || 
+            botReply.toLowerCase().includes('thank you for your time') ||
+            botReply.toLowerCase().includes('have a great day')) {
+          
+          // If this was an appointment confirmation call, we can clean up
+          if (connectionData.callId && connectionData.isAppointmentConfirmation) {
+            console.log(`Call ${connectionData.callId} is ending, cleaning up metadata`);
+            activeCallsMetadata.delete(connectionData.callId);
+          }
+        }
 
         // If we're still in discovery mode and coming to the end of discovery questions
         if (conversationState === 'discovery' && 
@@ -482,7 +547,44 @@ Your main goal is to make the user feel understood and excited to book a call wi
 
   ws.on('close', () => {
     console.log('Connection closed.');
+    
+    // Clean up any stored data for this connection
+    if (connectionData.callId) {
+      activeCallsMetadata.delete(connectionData.callId);
+      console.log(`Cleaned up metadata for call ${connectionData.callId}`);
+    }
   });
+});
+
+// Endpoint to receive Retell webhook call events
+app.post('/retell-webhook', express.json(), async (req, res) => {
+  try {
+    const { event, call } = req.body;
+    
+    console.log(`Received Retell webhook event: ${event}`);
+    
+    if (call && call.call_id) {
+      console.log(`Call ID: ${call.call_id}, Status: ${call.call_status}`);
+      
+      // Handle different webhook events
+      if (event === 'call_ended') {
+        // Clean up any stored data
+        activeCallsMetadata.delete(call.call_id);
+        console.log(`Call ${call.call_id} ended, cleaned up metadata`);
+        
+        // If this was an appointment confirmation call, you could log or store the result
+        if (call.metadata && call.metadata.appointment_id) {
+          console.log(`Appointment confirmation call ended for appointment: ${call.metadata.appointment_id}`);
+          // Here you could update your database or trigger follow-up actions
+        }
+      }
+    }
+    
+    res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('Error handling Retell webhook:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 const PORT = process.env.PORT || 3000;
