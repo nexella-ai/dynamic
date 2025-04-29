@@ -1,7 +1,9 @@
+
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const http = require('http');
 const axios = require('axios');
+require('dotenv').config();
 
 const app = express();
 const server = http.createServer(app);
@@ -17,7 +19,7 @@ wss.on('connection', (ws) => {
   let conversationHistory = [
     {
       role: 'system',
-      content: `You are a customer service/sales representative for Nexella.io.
+      content: \`You are a customer service/sales representative for Nexella.io.
 You must sound friendly, relatable, and build rapport naturally. Match their language style. Compliment them genuinely.
 
 IMPORTANT:
@@ -65,11 +67,10 @@ AFTER finishing discovery questions:
 }
 - This will trigger the automatic booking.
 
-Goal: Make the user feel understood and excited to work with Nexella.io.`
+Goal: Make the user feel understood and excited to work with Nexella.io.\`
     }
   ];
 
-  // Dummy "connecting..." message first
   ws.send(JSON.stringify({
     content: "connecting...",
     content_complete: true,
@@ -77,7 +78,6 @@ Goal: Make the user feel understood and excited to work with Nexella.io.`
     response_id: 0
   }));
 
-  // Real welcome greeting after 500ms
   setTimeout(() => {
     ws.send(JSON.stringify({
       content: "Hi there! Thank you for calling Nexella AI. How are you doing today?",
@@ -97,7 +97,6 @@ Goal: Make the user feel understood and excited to work with Nexella.io.`
 
         console.log('User said:', userMessage);
 
-        // Save user's message to conversation history
         conversationHistory.push({ role: 'user', content: userMessage });
 
         const openaiResponse = await axios.post(
@@ -109,7 +108,7 @@ Goal: Make the user feel understood and excited to work with Nexella.io.`
           },
           {
             headers: {
-              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+              Authorization: \`Bearer \${process.env.OPENAI_API_KEY}\`,
               'Content-Type': 'application/json'
             },
             timeout: 5000
@@ -117,11 +116,8 @@ Goal: Make the user feel understood and excited to work with Nexella.io.`
         );
 
         const botReply = openaiResponse.data.choices[0].message.content || "Could you tell me a little more about your business?";
-
-        // Save AI's reply to conversation history
         conversationHistory.push({ role: 'assistant', content: botReply });
 
-        // Send normal bot reply back
         ws.send(JSON.stringify({
           content: botReply,
           content_complete: true,
@@ -129,12 +125,85 @@ Goal: Make the user feel understood and excited to work with Nexella.io.`
           response_id: parsed.response_id
         }));
 
-        // Check if AI generated a collected_slot JSON manually inside reply (advanced case)
         if (botReply.includes('"type": "collected_slot"')) {
           const match = botReply.match(/{[^}]+}/);
           if (match) {
             const collectedPayload = JSON.parse(match[0]);
-            console.log('Sending collected slot payload:', collectedPayload);
+            console.log('🧠 Collected Slot:', collectedPayload);
+
+            const slots = collectedPayload.slots;
+            const { date, time, name, email, phone } = slots;
+
+            if (date && time && name && email && phone) {
+              const startDateTime = \`\${date}T\${time}:00\`;
+              const endDateTime = \`\${date}T\${(parseInt(time.split(":")[0]) + 1).toString().padStart(2, '0')}:\${time.split(":")[1]}:00\`;
+
+              try {
+                const calendlyCheck = await axios.get(\`https://api.calendly.com/scheduled_events\`, {
+                  params: {
+                    user: process.env.CALENDLY_USER_URI,
+                    status: 'active',
+                    min_start_time: startDateTime,
+                    max_start_time: startDateTime
+                  },
+                  headers: {
+                    Authorization: \`Bearer \${process.env.CALENDLY_API_KEY}\`,
+                    'Content-Type': 'application/json'
+                  }
+                });
+
+                const events = calendlyCheck.data.collection;
+                const isSlotAvailable = events.length === 0;
+
+                if (!isSlotAvailable) {
+                  console.log('⚠️ Time slot already booked.');
+
+                  const availableTimes = await suggestAvailableTimes();
+
+                  ws.send(JSON.stringify({
+                    content: \`It looks like that time is already booked. Here are a few other options: \${availableTimes.join(", ")}. Which one works for you?\`,
+                    content_complete: true,
+                    actions: [],
+                    response_id: parsed.response_id
+                  }));
+
+                  return;
+                }
+
+                const calendlyResponse = await axios.post('https://api.calendly.com/scheduled_events', {
+                  event_type: process.env.DEFAULT_EVENT_TYPE_URI,
+                  invitee: { name, email },
+                  start_time: startDateTime,
+                  end_time: endDateTime,
+                  timezone: "America/Los_Angeles"
+                }, {
+                  headers: {
+                    Authorization: \`Bearer \${process.env.CALENDLY_API_KEY}\`,
+                    'Content-Type': 'application/json'
+                  }
+                });
+
+                console.log('✅ Calendly meeting booked:', calendlyResponse.data);
+
+                ws.send(JSON.stringify({
+                  content: \`Awesome! You're booked for \${date} at \${time}. You'll receive a confirmation email shortly.\`,
+                  content_complete: true,
+                  actions: [],
+                  response_id: parsed.response_id
+                }));
+
+              } catch (err) {
+                console.error('❌ Booking error:', err?.response?.data || err.message);
+
+                ws.send(JSON.stringify({
+                  content: "Sorry, there was a problem booking your meeting. Could you suggest a different time?",
+                  content_complete: true,
+                  actions: [],
+                  response_id: parsed.response_id
+                }));
+              }
+            }
+
             ws.send(JSON.stringify(collectedPayload));
           }
         }
@@ -156,7 +225,31 @@ Goal: Make the user feel understood and excited to work with Nexella.io.`
   });
 });
 
+const suggestAvailableTimes = async () => {
+  try {
+    const response = await axios.get(\`https://api.calendly.com/availability_schedules\`, {
+      headers: {
+        Authorization: \`Bearer \${process.env.CALENDLY_API_KEY}\`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const available = response.data.collection
+      .flatMap(schedule => schedule.rules)
+      .slice(0, 3)
+      .map(rule => {
+        const [date, time] = rule.start_time.split('T');
+        return \`\${date} at \${time.slice(0, 5)}\`;
+      });
+
+    return available.length > 0 ? available : ["Tomorrow at 2:00 PM", "Tomorrow at 4:00 PM"];
+  } catch (err) {
+    console.error('Error suggesting times:', err?.response?.data || err.message);
+    return ["Tomorrow at 2:00 PM", "Tomorrow at 4:00 PM"];
+  }
+};
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Nexella WebSocket Server with memory is listening on port ${PORT}`);
+  console.log(\`Nexella WebSocket Server with memory is listening on port \${PORT}\`);
 });
