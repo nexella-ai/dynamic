@@ -40,11 +40,17 @@ async function lockSlot(startTime, endTime, userId) {
   }
 }
 
-// For sending booking request to trigger server
+// ✅ Updated here: pass eventTypeUri from .env if not provided
 async function scheduleCall(name, email, phone, startTime, endTime, userId) {
   try {
     const response = await axios.post(`${process.env.TRIGGER_SERVER_URL}/trigger-call`, {
-      name, email, phone, startTime, endTime, userId
+      name,
+      email,
+      phone,
+      startTime,
+      endTime,
+      userId,
+      eventTypeUri: process.env.DEFAULT_EVENT_TYPE_URI
     });
     return { success: response.data.success, message: response.data.message };
   } catch (error) {
@@ -56,13 +62,10 @@ async function scheduleCall(name, email, phone, startTime, endTime, userId) {
 // For getting available time slots from Calendly (through your trigger server)
 async function getAvailableTimeSlots(date) {
   try {
-    // Format date as YYYY-MM-DD for the API
     const formattedDate = new Date(date).toISOString().split('T')[0];
-    
     const response = await axios.get(`${process.env.TRIGGER_SERVER_URL}/available-slots`, {
       params: { date: formattedDate }
     });
-    
     return response.data.availableSlots;
   } catch (error) {
     console.error('Error getting available slots:', error.message);
