@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const http = require('http');
@@ -40,7 +41,7 @@ async function lockSlot(startTime, endTime, userId) {
   }
 }
 
-// ✅ Updated here: pass eventTypeUri from .env if not provided
+// For scheduling a call with our trigger server
 async function scheduleCall(name, email, phone, startTime, endTime, userId) {
   try {
     const response = await axios.post(`${process.env.TRIGGER_SERVER_URL}/trigger-call`, {
@@ -50,7 +51,7 @@ async function scheduleCall(name, email, phone, startTime, endTime, userId) {
       startTime,
       endTime,
       userId,
-      eventTypeUri: process.env.DEFAULT_EVENT_TYPE_URI
+      eventTypeUri: process.env.CALENDLY_EVENT_TYPE_URI
     });
     return { success: response.data.success, message: response.data.message };
   } catch (error) {
@@ -66,7 +67,7 @@ async function getAvailableTimeSlots(date) {
     const response = await axios.get(`${process.env.TRIGGER_SERVER_URL}/available-slots`, {
       params: { date: formattedDate }
     });
-    return response.data.availableSlots;
+    return response.data.availableSlots || [];
   } catch (error) {
     console.error('Error getting available slots:', error.message);
     return [];
@@ -200,6 +201,17 @@ Be friendly, professional, and concise. If they ask to reschedule, tell them the
             };
             
             console.log('Updated system prompt for appointment confirmation call');
+          }
+          
+          // Extract customer info from metadata if available
+          if (connectionData.metadata.customer_name) {
+            bookingInfo.name = connectionData.metadata.customer_name;
+          }
+          if (connectionData.metadata.customer_email) {
+            bookingInfo.email = connectionData.metadata.customer_email;
+          }
+          if (connectionData.metadata.phone) {
+            bookingInfo.phone = connectionData.metadata.phone;
           }
           
           // Store this call's metadata globally
