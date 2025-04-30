@@ -41,16 +41,18 @@ async function lockSlot(startTime, endTime, userId) {
   }
 }
 
-// For scheduling a call with our trigger server
-async function scheduleCall(name, email, phone, startTime, endTime, userId) {
+// For scheduling a call with our trigger server - Updated to use schedule-calendly endpoint
+async function scheduleCall(name, email, phone, startTime, endTime, userId, callId) {
   try {
-    const response = await axios.post(`${process.env.TRIGGER_SERVER_URL}/trigger-call`, {
+    // Use the new schedule-calendly endpoint instead of trigger-call
+    const response = await axios.post(`${process.env.TRIGGER_SERVER_URL}/schedule-calendly`, {
       name,
       email,
       phone,
       startTime,
       endTime,
       userId,
+      call_id: callId, // Pass the call_id to associate the scheduling with the call
       eventTypeUri: process.env.CALENDLY_EVENT_TYPE_URI
     });
     return { success: response.data.success, message: response.data.message };
@@ -74,6 +76,22 @@ async function getAvailableTimeSlots(date) {
   }
 }
 
+// Update conversation state in trigger server to track discovery completion
+async function updateConversationState(callId, discoveryComplete, selectedSlot) {
+  try {
+    const response = await axios.post(`${process.env.TRIGGER_SERVER_URL}/update-conversation`, {
+      call_id: callId,
+      discoveryComplete,
+      selectedSlot
+    });
+    console.log(`Updated conversation state for call ${callId}:`, response.data);
+    return response.data.success;
+  } catch (error) {
+    console.error('Error updating conversation state:', error.message);
+    return false;
+  }
+}
+
 wss.on('connection', (ws) => {
   console.log('Retell connected via WebSocket.');
   
@@ -85,20 +103,34 @@ wss.on('connection', (ws) => {
     isAppointmentConfirmation: false
   };
   
+  // Define discovery questions as a trackable list
+  const discoveryQuestions = [
+    'How did you hear about us?',
+    'What line of business are you in? What\'s your business model?',
+    'What\'s your main product and typical price point?',
+    'Are you running ads (Meta, Google, TikTok)?',
+    'Are you using a CRM like GoHighLevel?',
+    'What problems are you running into?'
+  ];
+  
+  let discoveryProgress = {
+    currentQuestionIndex: 0,
+    questionsAsked: new Set(),
+    allQuestionsAsked: false
+  };
+  
   let conversationHistory = [
     {
       role: 'system',
       content: `You are a customer service/sales representative for Nexella.io. 
 You must sound friendly, relatable, and build rapport naturally. Match their language style. Compliment them genuinely.
 
-IMPORTANT:
-- Ask ONE question at a time.
-- Wait for the user's answer before asking the next question.
-- Build a back-and-forth conversation, not a checklist.
-- Acknowledge and respond to user answers briefly to sound human.
-- Always lead the user towards booking a call with us.
+IMPORTANT CONVERSATION FLOW:
+1. INTRODUCTION: Introduce yourself warmly and establish rapport
+2. DISCOVERY: You MUST complete ALL discovery questions before moving to scheduling
+3. SCHEDULING: Only after ALL discovery questions are complete, move to scheduling
 
-DISCOVERY QUESTIONS:
+DISCOVERY QUESTIONS (ask in this order):
 - How did you hear about us?
 - What line of business are you in? What's your business model?
 - What's your main product and typical price point?
@@ -106,9 +138,26 @@ DISCOVERY QUESTIONS:
 - Are you using a CRM like GoHighLevel?
 - What problems are you running into?
 
-When they mention a problem, reassure them that Nexella can help.
+RULES FOR DISCOVERY:
+- Ask ONE question at a time
+- Wait for the user's answer before asking the next question
+- Acknowledge each answer briefly before moving to the next question
+- Do NOT mention scheduling or booking until ALL discovery questions have been asked
+- Never skip any discovery questions
 
-Highlight Nexella's features casually throughout the conversation:
+When customers mention problems, reassure them that Nexella can help solve these issues.
+
+TRANSITION TO SCHEDULING:
+Only after you've asked ALL six discovery questions and received answers, you can transition by saying something like:
+"Based on what you've shared, I think our team would love to discuss how Nexella can help you with [mention their specific problems]. What day of the week would work best for a quick call?"
+
+SCHEDULING RULES:
+1. First ask what day of the week works best for them
+2. Then suggest available time slots for that day
+3. Allow them to pick a time or suggest another day
+4. Confirm the booking details before sending
+
+Highlight Nexella's features naturally throughout the conversation:
 - 24/7 SMS and voice AI agents
 - Immediate response
 - Calendar booking
@@ -117,14 +166,7 @@ Highlight Nexella's features casually throughout the conversation:
 - Caller ID import
 - Sales and Customer Support automation
 
-CALENDLY BOOKING:
-After going through the discovery questions, guide the user to book a call:
-1. First ask what day of the week works best for them
-2. Then suggest available time slots for that day (use the available slots API)
-3. Allow them to pick a time or suggest another day
-4. Confirm the booking details before sending
-
-Your main goal is to make the user feel understood and excited to book a call with Nexella.io.`
+Your main goal is to complete all discovery questions before scheduling, and make the user feel understood and excited to book a call with Nexella.io.`
     }
   ];
 
@@ -225,6 +267,47 @@ Be friendly, professional, and concise. If they ask to reschedule, tell them the
 
         console.log('User said:', userMessage);
         console.log('Current conversation state:', conversationState);
+
+        // Track which discovery questions have been asked
+        function checkForDiscoveryQuestionsInLastResponse() {
+          if (conversationHistory.length >= 2) {
+            const lastBotMessage = conversationHistory[conversationHistory.length - 2].content.toLowerCase();
+            
+            discoveryQuestions.forEach((question, index) => {
+              // Check if the question or a paraphrase of it appears in the bot's message
+              const questionLower = question.toLowerCase();
+              const keyPhrases = [
+                "how did you hear",
+                "business are you in",
+                "main product",
+                "price point",
+                "running ads",
+                "using a crm",
+                "problems are you"
+              ];
+              
+              if (lastBotMessage.includes(keyPhrases[index])) {
+                discoveryProgress.questionsAsked.add(index);
+              }
+            });
+            
+            // Check if all questions have been asked
+            discoveryProgress.allQuestionsAsked = discoveryProgress.questionsAsked.size >= discoveryQuestions.length;
+            
+            if (discoveryProgress.allQuestionsAsked && conversationState === 'discovery') {
+              console.log('✅ All discovery questions have been asked, transitioning to booking');
+              conversationState = 'booking';
+              
+              // Update conversation state in trigger server
+              if (connectionData.callId) {
+                updateConversationState(connectionData.callId, true, null);
+              }
+            }
+          }
+        }
+        
+        // Check if the last bot response contained a discovery question
+        checkForDiscoveryQuestionsInLastResponse();
 
         // Handle booking flow
         if (conversationState === 'booking') {
@@ -342,6 +425,14 @@ Be friendly, professional, and concise. If they ask to reschedule, tell them the
                   bookingInfo.endTime = selectedSlot.endTime;
                   bookingInfo.slotLocked = true;
                   
+                  // Update selected slot in trigger server
+                  if (connectionData.callId) {
+                    updateConversationState(connectionData.callId, true, {
+                      startTime: selectedSlot.startTime,
+                      endTime: selectedSlot.endTime
+                    });
+                  }
+                  
                   // Move to collecting contact info if not done already
                   if (!collectedContactInfo) {
                     conversationState = 'collecting_info';
@@ -360,7 +451,8 @@ Be friendly, professional, and concise. If they ask to reschedule, tell them the
                       bookingInfo.phone,
                       bookingInfo.startTime,
                       bookingInfo.endTime,
-                      bookingInfo.userId
+                      bookingInfo.userId,
+                      connectionData.callId // Pass the call ID to associate with scheduling
                     );
                     
                     if (result.success) {
@@ -429,31 +521,19 @@ Be friendly, professional, and concise. If they ask to reschedule, tell them the
             bookingInfo.phone = userMessage;
             collectedContactInfo = true;
             
-            // Schedule the call with our trigger server
+            // Schedule the call with our trigger server using the new endpoint
             const result = await scheduleCall(
               bookingInfo.name,
               bookingInfo.email,
               bookingInfo.phone,
               bookingInfo.startTime,
               bookingInfo.endTime,
-              bookingInfo.userId
+              bookingInfo.userId,
+              connectionData.callId // Pass the call ID for association
             );
             
             if (result.success) {
               bookingInfo.confirmed = true;
-              
-              // Also send to make.com
-              try {
-                await axios.post('https://hook.us2.make.com/6wsdtorhmrpxbical1czq09pmurffoei', {
-                  name: bookingInfo.name,
-                  email: bookingInfo.email,
-                  phone: bookingInfo.phone,
-                  appointmentDate: bookingInfo.preferredDay,
-                  appointmentTime: bookingInfo.preferredTime
-                });
-              } catch (makeError) {
-                console.error('Error sending to make.com:', makeError.message);
-              }
               
               ws.send(JSON.stringify({
                 content: `Perfect! I've scheduled your call for ${bookingInfo.preferredDay} at ${bookingInfo.preferredTime}. You'll receive a confirmation email shortly with all the details. Is there anything else I can help you with today?`,
@@ -505,12 +585,23 @@ Be friendly, professional, and concise. If they ask to reschedule, tell them the
         // Add bot reply to conversation history
         conversationHistory.push({ role: 'assistant', content: botReply });
 
-        // Check if it's time to transition to booking flow based on the content
-        if (conversationState === 'introduction' || conversationState === 'discovery') {
-          if (botReply.toLowerCase().includes('what problems are you running into') ||
-              botReply.toLowerCase().includes('what day works')) {
-            // Time to transition to booking flow
-            conversationState = 'booking';
+        // Analyze bot reply to track state transitions
+        const containsProblemQuestion = botReply.toLowerCase().includes('what problems are you') || 
+                                        botReply.toLowerCase().includes('what challenges do you face');
+        const containsSchedulingQuestion = botReply.toLowerCase().includes('what day works') || 
+                                         botReply.toLowerCase().includes('day of the week would');
+        
+        // Transition state based on content
+        if (conversationState === 'introduction') {
+          // Move to discovery after introduction
+          conversationState = 'discovery';
+        } else if (conversationState === 'discovery' && containsSchedulingQuestion) {
+          // Only transition to booking if explicitly talking about scheduling days
+          conversationState = 'booking';
+          
+          // Mark discovery as complete in the trigger server
+          if (connectionData.callId) {
+            updateConversationState(connectionData.callId, true, null);
           }
         }
 
@@ -534,18 +625,13 @@ Be friendly, professional, and concise. If they ask to reschedule, tell them the
           }
         }
 
-        // If we're still in discovery mode and coming to the end of discovery questions
-        if (conversationState === 'discovery' && 
-            botReply.toLowerCase().includes('what problems are you running into')) {
-          // Wait a bit before transitioning to booking
-          setTimeout(() => {
-            conversationState = 'booking';
-            ws.send(JSON.stringify({
-              content: "Based on what you've shared, I think our team would love to discuss how Nexella can help you. What day of the week would work best for a quick call?",
-              content_complete: true,
-              actions: []
-            }));
-          }, 5000);
+        // If we're in discovery mode and just asked the last discovery question
+        if (conversationState === 'discovery' && containsProblemQuestion) {
+          discoveryProgress.questionsAsked.add(discoveryQuestions.length - 1); // Mark the last question as asked
+          
+          // Let bot response complete, then transition only after user's next reply
+          // This ensures the user has a chance to answer the final discovery question
+          console.log('Last discovery question asked, will transition to booking after user response');
         }
       }
 
