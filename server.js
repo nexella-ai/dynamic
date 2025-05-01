@@ -92,6 +92,303 @@ async function updateConversationState(callId, discoveryComplete, selectedSlot) 
   }
 }
 
+// Function to handle scheduling preferences better
+function handleSchedulingPreference(userMessage) {
+  // Extract day of week with better handling for various formats
+  const dayMatch = userMessage.match(/monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today/i);
+  const nextWeekMatch = userMessage.match(/next week/i);
+  
+  if (nextWeekMatch) {
+    // Handle "next week" specifically
+    let targetDate = new Date();
+    // Add 7 days to get to next week, then adjust to Monday
+    targetDate.setDate(targetDate.getDate() + 7);
+    
+    // Get next Monday (if we're already past Monday this week)
+    const dayOfWeek = targetDate.getDay();
+    const daysUntilMonday = (dayOfWeek === 0) ? 1 : (8 - dayOfWeek);
+    targetDate.setDate(targetDate.getDate() + daysUntilMonday - 7);
+    
+    return {
+      dayName: 'Next week',
+      date: targetDate,
+      isSpecific: false
+    };
+  } else if (dayMatch) {
+    const preferredDay = dayMatch[0].toLowerCase();
+    
+    let targetDate = new Date();
+    
+    // Handle relative day references
+    if (preferredDay === 'tomorrow') {
+      targetDate.setDate(targetDate.getDate() + 1);
+      return {
+        dayName: 'Tomorrow',
+        date: targetDate,
+        isSpecific: true
+      };
+    } else if (preferredDay === 'today') {
+      return {
+        dayName: 'Today',
+        date: targetDate,
+        isSpecific: true
+      };
+    } else {
+      // Handle specific day of week
+      const daysOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+      const requestedDayIndex = daysOfWeek.findIndex(d => d === preferredDay);
+      
+      if (requestedDayIndex !== -1) {
+        const currentDay = targetDate.getDay();
+        let daysToAdd = requestedDayIndex - currentDay;
+        
+        // If the requested day is earlier in the week than today, go to next week
+        if (daysToAdd <= 0) {
+          daysToAdd += 7;
+        }
+        
+        targetDate.setDate(targetDate.getDate() + daysToAdd);
+        
+        return {
+          dayName: capitalizeFirstLetter(preferredDay),
+          date: targetDate,
+          isSpecific: true
+        };
+      }
+    }
+  }
+  
+  return null;
+}
+
+// Function to format a better response for available times
+function formatAvailableTimeResponse(preferredDay, slots) {
+  if (!slots || slots.length === 0) {
+    return `I'm sorry, it looks like we don't have any available slots for ${preferredDay}. Would you like to try another day?`;
+  }
+  
+  // Format slots for natural language (show max 3)
+  const slotsToShow = slots.slice(0, 3);
+  const formattedSlots = slotsToShow.map(slot => {
+    const date = new Date(slot.startTime);
+    return `${date.toLocaleTimeString('en-US', { 
+      hour: 'numeric', 
+      minute: '2-digit',
+      hour12: true 
+    })}`;
+  });
+  
+  if (formattedSlots.length === 1) {
+    return `Great! For ${preferredDay}, I have availability at ${formattedSlots[0]}. Would that work for you?`;
+  } else if (formattedSlots.length === 2) {
+    return `Great! For ${preferredDay}, I have availability at ${formattedSlots[0]} or ${formattedSlots[1]}. Would either of these times work for you?`;
+  } else {
+    return `Great! For ${preferredDay}, I have availability at ${formattedSlots[0]}, ${formattedSlots[1]}, or ${formattedSlots[2]}. Would any of these times work for you?`;
+  }
+}
+
+// Function to extract time from user message more accurately
+function extractTimeFromMessage(userMessage, availableSlots) {
+  // Check for explicit time mention
+  const timeRegex = /(\d{1,2})(:\d{2})?\s*(am|pm)?/i;
+  const timeMatch = userMessage.match(timeRegex);
+  
+  if (timeMatch) {
+    // Get the hour and convert to 24-hour format if needed
+    let hour = parseInt(timeMatch[1]);
+    const minute = timeMatch[2] ? parseInt(timeMatch[2].substring(1)) : 0;
+    const isPM = timeMatch[3]?.toLowerCase() === 'pm';
+    
+    // Convert to 24-hour format
+    if (isPM && hour < 12) hour += 12;
+    if (!isPM && hour === 12) hour = 0;
+    
+    // Find the closest slot
+    return availableSlots.find(slot => {
+      const slotTime = new Date(slot.startTime);
+      // Check if the hour matches and either minutes match or weren't specified
+      return slotTime.getHours() === hour && 
+             (minute === 0 || slotTime.getMinutes() === minute);
+    });
+  }
+  
+  // Check if user is agreeing to a suggested time
+  if (userMessage.toLowerCase().match(/\b(yes|sure|ok|okay|sounds good|that works|first one|second one|third one|earliest|latest)\b/)) {
+    // Return the first available slot as default
+    return availableSlots[0];
+  }
+  
+  // Check for time references in the message
+  for (const slot of availableSlots) {
+    const slotTime = new Date(slot.startTime);
+    const timeStr = slotTime.toLocaleTimeString('en-US', { 
+      hour: 'numeric', 
+      minute: '2-digit',
+      hour12: true 
+    }).toLowerCase();
+    
+    // Check if the time string appears in the user message
+    if (userMessage.toLowerCase().includes(timeStr) ||
+        // Also check without minutes if it's on the hour
+        (slotTime.getMinutes() === 0 && 
+         userMessage.toLowerCase().includes(slotTime.getHours() % 12 + ' ' + (slotTime.getHours() >= 12 ? 'pm' : 'am')))
+       ) {
+      return slot;
+    }
+  }
+  
+  // No match found
+  return null;
+}
+
+// Helper function to capitalize first letter
+function capitalizeFirstLetter(string) {
+  return string.charAt(0).toUpperCase() + string.slice(1);
+}
+
+// Handle the booking part of the conversation better
+async function handleBookingFlow(userMessage, bookingInfo, availableSlots, connectionData) {
+  let response = null;
+  
+  // If we don't have a preferred day yet
+  if (!bookingInfo.preferredDay) {
+    const dayInfo = handleSchedulingPreference(userMessage);
+    
+    if (dayInfo) {
+      bookingInfo.preferredDay = dayInfo.dayName;
+      
+      // Get available slots for this day
+      const availableSlotsForDay = await getAvailableTimeSlots(dayInfo.date);
+      availableSlots.length = 0; // Clear existing slots
+      availableSlots.push(...availableSlotsForDay); // Add new slots
+      
+      // Format response based on available slots
+      response = formatAvailableTimeResponse(bookingInfo.preferredDay, availableSlots);
+    }
+  }
+  // If we have a day but no time yet
+  else if (!bookingInfo.preferredTime) {
+    const selectedSlot = extractTimeFromMessage(userMessage, availableSlots);
+    
+    if (selectedSlot) {
+      // Try to lock the slot
+      const locked = await lockSlot(
+        selectedSlot.startTime, 
+        selectedSlot.endTime, 
+        bookingInfo.userId
+      );
+      
+      if (locked) {
+        // Update booking info
+        const slotTime = new Date(selectedSlot.startTime);
+        bookingInfo.preferredTime = slotTime.toLocaleTimeString('en-US', {
+          hour: 'numeric', 
+          minute: '2-digit',
+          hour12: true 
+        });
+        bookingInfo.startTime = selectedSlot.startTime;
+        bookingInfo.endTime = selectedSlot.endTime;
+        bookingInfo.slotLocked = true;
+        
+        // Update in trigger server
+        if (connectionData && connectionData.callId) {
+          await updateConversationState(connectionData.callId, true, {
+            startTime: selectedSlot.startTime,
+            endTime: selectedSlot.endTime
+          });
+        }
+        
+        if (bookingInfo.name && bookingInfo.email && bookingInfo.phone) {
+          // We already have all contact info
+          // Let the GPT handle the confirmation message
+          return null;
+        } else {
+          // Need contact info
+          response = `Perfect! I've reserved ${bookingInfo.preferredDay} at ${bookingInfo.preferredTime} for you. I already have your contact information from the form you submitted. Is there anything specific you'd like to discuss in this call?`;
+        }
+      } else {
+        response = "I'm sorry, that time slot is no longer available. Let me check what else we have available.";
+        bookingInfo.preferredTime = '';
+      }
+    }
+  }
+  
+  return response;
+}
+
+// Improved function to confirm and schedule the appointment
+async function confirmAndSchedule(bookingInfo, connectionData) {
+  try {
+    const result = await scheduleCall(
+      bookingInfo.name,
+      bookingInfo.email,
+      bookingInfo.phone,
+      bookingInfo.startTime,
+      bookingInfo.endTime,
+      bookingInfo.userId,
+      connectionData?.callId
+    );
+    
+    if (result.success) {
+      bookingInfo.confirmed = true;
+      return {
+        success: true,
+        message: `Perfect! I've scheduled your call for ${bookingInfo.preferredDay} at ${bookingInfo.preferredTime}. You'll receive a confirmation email at ${bookingInfo.email} shortly with all the details. Is there anything else I can help you with today?`
+      };
+    } else {
+      return {
+        success: false,
+        message: `I'm sorry, there was an issue scheduling your call. ${result.message} Would you like to try another time?`
+      };
+    }
+  } catch (error) {
+    console.error('Error confirming schedule:', error);
+    return {
+      success: false,
+      message: "I'm sorry, there was an error scheduling your call. Would you like to try again?"
+    };
+  }
+}
+
+// Improved function to detect when all discovery questions have been asked
+function trackDiscoveryQuestions(botMessage, discoveryProgress, discoveryQuestions) {
+  if (!botMessage) return false;
+  
+  const botMessageLower = botMessage.toLowerCase();
+  
+  // Key phrases to detect in the bot's message that indicate specific discovery questions
+  const keyPhrases = [
+    ["hear about us", "find us", "discover us"], // How did you hear about us
+    ["business", "company", "industry", "what do you do"], // What line of business are you in
+    ["product", "service", "offer", "price point"], // What's your main product
+    ["ads", "advertising", "marketing", "meta", "google", "tiktok"], // Are you running ads
+    ["crm", "gohighlevel", "management system", "customer relationship"], // Are you using a CRM
+    ["problems", "challenges", "issues", "pain points", "difficulties"] // What problems are you facing
+  ];
+  
+  // Check each question's key phrases
+  keyPhrases.forEach((phrases, index) => {
+    if (phrases.some(phrase => botMessageLower.includes(phrase))) {
+      discoveryProgress.questionsAsked.add(index);
+    }
+  });
+  
+  // Check if we've moved to scheduling questions
+  if (botMessageLower.includes("schedule") || 
+      botMessageLower.includes("book a call") || 
+      botMessageLower.includes("day of the week") ||
+      botMessageLower.includes("what day works")) {
+    discoveryProgress.allQuestionsAsked = true;
+    return true;
+  }
+  
+  // Check if all questions have been asked
+  const allAsked = discoveryProgress.questionsAsked.size >= discoveryQuestions.length;
+  discoveryProgress.allQuestionsAsked = allAsked;
+  
+  return allAsked;
+}
+
 wss.on('connection', (ws) => {
   console.log('Retell connected via WebSocket.');
   
@@ -194,8 +491,9 @@ Your main goal is to complete all discovery questions before scheduling, and mak
   };
   let availableSlots = [];
   let collectedContactInfo = false;
+  let userHasSpoken = false;
 
-  // Initial greeting
+  // Send connecting message
   ws.send(JSON.stringify({
     content: "connecting...",
     content_complete: true,
@@ -203,17 +501,24 @@ Your main goal is to complete all discovery questions before scheduling, and mak
     response_id: 0
   }));
 
-  setTimeout(() => {
-    ws.send(JSON.stringify({
-      content: "Hi there! This is Sarah from Nexella AI. How are you doing today?",
-      content_complete: true,
-      actions: [],
-      response_id: 1
-    }));
-  }, 500);
+  // Set a timer for auto-greeting if user doesn't speak first
+  const autoGreetingTimer = setTimeout(() => {
+    if (!userHasSpoken) {
+      ws.send(JSON.stringify({
+        content: "Hi there! This is Sarah from Nexella AI. How are you doing today?",
+        content_complete: true,
+        actions: [],
+        response_id: 1
+      }));
+    }
+  }, 5000); // 5 seconds delay
 
   ws.on('message', async (data) => {
     try {
+      // Clear auto-greeting timer if user speaks first
+      clearTimeout(autoGreetingTimer);
+      userHasSpoken = true;
+      
       const parsed = JSON.parse(data);
       
       // Check if this is a call initialization message (contains call object with metadata)
@@ -239,7 +544,7 @@ Customer Name: ${connectionData.metadata.customer_name || 'our customer'}
 Appointment Time: ${connectionData.metadata.appointment_time || 'the scheduled time'}
               
 CALL FLOW:
-1. Introduce yourself as calling from Nexella.io
+1. Introduce yourself as Sarah from Nexella.io
 2. Confirm you're speaking with the right person
 3. Let them know you're calling to confirm their upcoming appointment
 4. Confirm their appointment date and time
@@ -256,12 +561,15 @@ Be friendly, professional, and concise. If they ask to reschedule, tell them the
           // Extract customer info from metadata if available
           if (connectionData.metadata.customer_name) {
             bookingInfo.name = connectionData.metadata.customer_name;
+            collectedContactInfo = true;
           }
           if (connectionData.metadata.customer_email) {
             bookingInfo.email = connectionData.metadata.customer_email;
+            collectedContactInfo = true;
           }
           if (connectionData.metadata.phone) {
             bookingInfo.phone = connectionData.metadata.phone;
+            collectedContactInfo = true;
           }
           
           // Store this call's metadata globally
@@ -276,295 +584,34 @@ Be friendly, professional, and concise. If they ask to reschedule, tell them the
         console.log('User said:', userMessage);
         console.log('Current conversation state:', conversationState);
 
-        // Track which discovery questions have been asked
-        function checkForDiscoveryQuestionsInLastResponse() {
-          if (conversationHistory.length >= 2) {
-            const lastBotMessage = conversationHistory[conversationHistory.length - 2].content.toLowerCase();
-            
-            discoveryQuestions.forEach((question, index) => {
-              // Check if the question or a paraphrase of it appears in the bot's message
-              const questionLower = question.toLowerCase();
-              const keyPhrases = [
-                "how did you hear",
-                "business are you in",
-                "main product",
-                "price point",
-                "running ads",
-                "using a crm",
-                "problems are you"
-              ];
-              
-              if (lastBotMessage.includes(keyPhrases[index])) {
-                discoveryProgress.questionsAsked.add(index);
-              }
-            });
-            
-            // Check if all questions have been asked
-            discoveryProgress.allQuestionsAsked = discoveryProgress.questionsAsked.size >= discoveryQuestions.length;
-            
-            if (discoveryProgress.allQuestionsAsked && conversationState === 'discovery') {
-              console.log('✅ All discovery questions have been asked, transitioning to booking');
-              conversationState = 'booking';
-              
-              // Update conversation state in trigger server
-              if (connectionData.callId) {
-                updateConversationState(connectionData.callId, true, null);
-              }
-            }
+        // Try to handle booking directly if we're in that state
+        let directResponse = null;
+        
+        if (conversationState === 'booking') {
+          directResponse = await handleBookingFlow(userMessage, bookingInfo, availableSlots, connectionData);
+          
+          if (directResponse) {
+            ws.send(JSON.stringify({
+              content: directResponse,
+              content_complete: true,
+              actions: [],
+              response_id: parsed.response_id
+            }));
+            return;
           }
         }
         
-        // Check if the last bot response contained a discovery question
-        checkForDiscoveryQuestionsInLastResponse();
-
-        // Handle booking flow
-        if (conversationState === 'booking') {
-          // If we're collecting preferred day
-          if (!bookingInfo.preferredDay) {
-            // Extract day of week from user message
-            const dayMatch = userMessage.match(/monday|tuesday|wednesday|thursday|friday|saturday|sunday/i);
-            if (dayMatch) {
-              bookingInfo.preferredDay = dayMatch[0];
-              
-              // Get available slots for this day
-              const today = new Date();
-              let targetDate = new Date();
-              
-              // Find the next occurrence of the requested day
-              const daysOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-              const requestedDayIndex = daysOfWeek.findIndex(d => d === bookingInfo.preferredDay.toLowerCase());
-              
-              while (targetDate.getDay() !== requestedDayIndex) {
-                targetDate.setDate(targetDate.getDate() + 1);
-              }
-              
-              // Get available slots
-              availableSlots = await getAvailableTimeSlots(targetDate);
-              
-              let reply;
-              if (availableSlots.length > 0) {
-                // Format slots for natural language (show max 3)
-                const slotsToShow = availableSlots.slice(0, 3);
-                const formattedSlots = slotsToShow.map(slot => {
-                  const time = new Date(slot.startTime).toLocaleTimeString('en-US', { 
-                    hour: 'numeric', 
-                    minute: '2-digit',
-                    hour12: true 
-                  });
-                  return time;
-                }).join(', ');
-                
-                reply = `Great! For ${bookingInfo.preferredDay}, I have availability at ${formattedSlots}. Would any of these times work for you?`;
-              } else {
-                reply = `I'm sorry, it looks like we don't have any available slots for ${bookingInfo.preferredDay}. Would you like to try another day?`;
-                bookingInfo.preferredDay = '';
-              }
-              
-              ws.send(JSON.stringify({
-                content: reply,
-                content_complete: true,
-                actions: [],
-                response_id: parsed.response_id
-              }));
-              return;
-            }
-          }
-          // If we're collecting preferred time
-          else if (!bookingInfo.preferredTime) {
-            // Try to extract time from user message
-            const timeRegex = /(\d{1,2})(:\d{2})?\s*(am|pm)?/i;
-            const timeMatch = userMessage.match(timeRegex);
-            
-            if (timeMatch || userMessage.toLowerCase().includes('yes') || 
-                availableSlots.some(slot => {
-                  const time = new Date(slot.startTime).toLocaleTimeString('en-US', {
-                    hour: 'numeric', minute: '2-digit', hour12: true
-                  });
-                  return userMessage.toLowerCase().includes(time.toLowerCase());
-                })) {
-              
-              // Find the matching slot
-              let selectedSlot;
-              
-              if (timeMatch) {
-                // Convert user's time to 24-hour format for comparison
-                const hour = parseInt(timeMatch[1]);
-                const minute = timeMatch[2] ? parseInt(timeMatch[2].substring(1)) : 0;
-                const isPM = timeMatch[3]?.toLowerCase() === 'pm';
-                
-                // Convert to 24-hour format
-                const hour24 = isPM && hour < 12 ? hour + 12 : (!isPM && hour === 12 ? 0 : hour);
-                
-                // Find closest slot
-                selectedSlot = availableSlots.find(slot => {
-                  const slotTime = new Date(slot.startTime);
-                  return slotTime.getHours() === hour24 && 
-                         (minute === 0 || slotTime.getMinutes() === minute);
-                });
-              } else if (userMessage.toLowerCase().includes('yes')) {
-                // User said yes to one of our suggestions, so select the first slot
-                selectedSlot = availableSlots[0];
-              } else {
-                // Try to match one of our suggested slots
-                for (const slot of availableSlots) {
-                  const time = new Date(slot.startTime).toLocaleTimeString('en-US', {
-                    hour: 'numeric', minute: '2-digit', hour12: true
-                  });
-                  if (userMessage.toLowerCase().includes(time.toLowerCase())) {
-                    selectedSlot = slot;
-                    break;
-                  }
-                }
-              }
-              
-              if (selectedSlot) {
-                // Lock the slot temporarily
-                const locked = await lockSlot(
-                  selectedSlot.startTime, 
-                  selectedSlot.endTime, 
-                  bookingInfo.userId
-                );
-                
-                if (locked) {
-                  bookingInfo.preferredTime = new Date(selectedSlot.startTime).toLocaleTimeString('en-US', {
-                    hour: 'numeric', minute: '2-digit', hour12: true
-                  });
-                  bookingInfo.startTime = selectedSlot.startTime;
-                  bookingInfo.endTime = selectedSlot.endTime;
-                  bookingInfo.slotLocked = true;
-                  
-                  // Update selected slot in trigger server
-                  if (connectionData.callId) {
-                    updateConversationState(connectionData.callId, true, {
-                      startTime: selectedSlot.startTime,
-                      endTime: selectedSlot.endTime
-                    });
-                  }
-                  
-                  // Move to collecting contact info if not done already
-                  if (!collectedContactInfo) {
-                    conversationState = 'collecting_info';
-                    ws.send(JSON.stringify({
-                      content: `Perfect! I've reserved ${bookingInfo.preferredDay} at ${bookingInfo.preferredTime} for you. To confirm this booking, may I have your full name?`,
-                      content_complete: true,
-                      actions: [],
-                      response_id: parsed.response_id
-                    }));
-                    return;
-                  } else {
-                    // If we already have contact info, confirm booking
-                    const result = await scheduleCall(
-                      bookingInfo.name,
-                      bookingInfo.email,
-                      bookingInfo.phone,
-                      bookingInfo.startTime,
-                      bookingInfo.endTime,
-                      bookingInfo.userId,
-                      connectionData.callId // Pass the call ID to associate with scheduling
-                    );
-                    
-                    if (result.success) {
-                      bookingInfo.confirmed = true;
-                      ws.send(JSON.stringify({
-                        content: `Excellent! Your call has been scheduled for ${bookingInfo.preferredDay} at ${bookingInfo.preferredTime}. You'll receive a confirmation email shortly. Is there anything else I can help you with today?`,
-                        content_complete: true,
-                        actions: [],
-                        response_id: parsed.response_id
-                      }));
-                    } else {
-                      ws.send(JSON.stringify({
-                        content: `I'm sorry, there was an issue scheduling your call. ${result.message} Would you like to try another time?`,
-                        content_complete: true,
-                        actions: [],
-                        response_id: parsed.response_id
-                      }));
-                      bookingInfo.preferredTime = '';
-                      bookingInfo.slotLocked = false;
-                    }
-                    return;
-                  }
-                } else {
-                  ws.send(JSON.stringify({
-                    content: "I'm sorry, that time slot is no longer available. Let me check what else we have available.",
-                    content_complete: true,
-                    actions: [],
-                    response_id: parsed.response_id
-                  }));
-                  bookingInfo.preferredTime = '';
-                  return;
-                }
-              } else {
-                ws.send(JSON.stringify({
-                  content: "I'm sorry, I couldn't find that exact time in our availability. Could you pick one of the time slots I mentioned earlier?",
-                  content_complete: true,
-                  actions: [],
-                  response_id: parsed.response_id
-                }));
-                return;
-              }
-            }
-          }
-        }
-        // Handle collecting contact info state
-        else if (conversationState === 'collecting_info') {
-          if (!bookingInfo.name) {
-            bookingInfo.name = userMessage;
-            ws.send(JSON.stringify({
-              content: `Thanks ${bookingInfo.name}! What's the best email address to reach you?`,
-              content_complete: true,
-              actions: [],
-              response_id: parsed.response_id
-            }));
-            return;
-          } else if (!bookingInfo.email && userMessage.includes('@')) {
-            bookingInfo.email = userMessage;
-            ws.send(JSON.stringify({
-              content: "Got it, and what's your best phone number?",
-              content_complete: true,
-              actions: [],
-              response_id: parsed.response_id
-            }));
-            return;
-          } else if (!bookingInfo.phone && userMessage.match(/\d{3}[-\s]?\d{3}[-\s]?\d{4}/)) {
-            bookingInfo.phone = userMessage;
-            collectedContactInfo = true;
-            
-            // Schedule the call with our trigger server using the new endpoint
-            const result = await scheduleCall(
-              bookingInfo.name,
-              bookingInfo.email,
-              bookingInfo.phone,
-              bookingInfo.startTime,
-              bookingInfo.endTime,
-              bookingInfo.userId,
-              connectionData.callId // Pass the call ID for association
-            );
-            
-            if (result.success) {
-              bookingInfo.confirmed = true;
-              
-              ws.send(JSON.stringify({
-                content: `Perfect! I've scheduled your call for ${bookingInfo.preferredDay} at ${bookingInfo.preferredTime}. You'll receive a confirmation email shortly with all the details. Is there anything else I can help you with today?`,
-                content_complete: true,
-                actions: [],
-                response_id: parsed.response_id
-              }));
-              
-              // Reset to standard conversation
-              conversationState = 'post_booking';
-            } else {
-              ws.send(JSON.stringify({
-                content: `I'm sorry, there was an issue scheduling your call. ${result.message} Would you like to try another time?`,
-                content_complete: true,
-                actions: [],
-                response_id: parsed.response_id
-              }));
-              // Reset booking time
-              bookingInfo.preferredTime = '';
-              bookingInfo.slotLocked = false;
-              conversationState = 'booking';
-            }
-            return;
+        // If user indicated they're ready to schedule in any state, we can transition
+        if (conversationState === 'discovery' && 
+            userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss)\b/) &&
+            discoveryProgress.questionsAsked.size >= 3) { // At least ask 3 questions before allowing bypass
+          
+          console.log('User requested scheduling, transitioning to booking state');
+          conversationState = 'booking';
+          
+          // Update conversation state in trigger server
+          if (connectionData.callId) {
+            updateConversationState(connectionData.callId, true, null);
           }
         }
 
@@ -593,27 +640,54 @@ Be friendly, professional, and concise. If they ask to reschedule, tell them the
         // Add bot reply to conversation history
         conversationHistory.push({ role: 'assistant', content: botReply });
 
-        // Analyze bot reply to track state transitions
-        const containsProblemQuestion = botReply.toLowerCase().includes('what problems are you') || 
-                                        botReply.toLowerCase().includes('what challenges do you face');
-        const containsSchedulingQuestion = botReply.toLowerCase().includes('what day works') || 
-                                         botReply.toLowerCase().includes('day of the week would');
+        // Check if discovery is complete based on bot reply
+        const discoveryComplete = trackDiscoveryQuestions(botReply, discoveryProgress, discoveryQuestions);
         
-        // Transition state based on content
+        // Transition state based on content and tracking
         if (conversationState === 'introduction') {
           // Move to discovery after introduction
           conversationState = 'discovery';
-        } else if (conversationState === 'discovery' && containsSchedulingQuestion) {
-          // Only transition to booking if explicitly talking about scheduling days
+        } else if (conversationState === 'discovery' && discoveryComplete) {
+          // Transition to booking if all discovery questions are asked
           conversationState = 'booking';
           
-          // Mark discovery as complete in the trigger server
+          // Update conversation state in trigger server
           if (connectionData.callId) {
             updateConversationState(connectionData.callId, true, null);
           }
+          
+          console.log('Transitioning to booking state based on discovery completion');
+        }
+        
+        // If in collecting_info state and we already have contact info from the form
+        if (conversationState === 'collecting_info' && collectedContactInfo) {
+          // Schedule the call using existing info
+          const result = await confirmAndSchedule(bookingInfo, connectionData);
+          
+          if (result.success) {
+            conversationState = 'post_booking';
+            ws.send(JSON.stringify({
+              content: result.message,
+              content_complete: true,
+              actions: [],
+              response_id: parsed.response_id
+            }));
+            return;
+          } else {
+            bookingInfo.preferredTime = '';
+            bookingInfo.slotLocked = false;
+            conversationState = 'booking';
+            ws.send(JSON.stringify({
+              content: result.message,
+              content_complete: true,
+              actions: [],
+              response_id: parsed.response_id
+            }));
+            return;
+          }
         }
 
-        // Send the response
+        // Send the AI response
         ws.send(JSON.stringify({
           content: botReply,
           content_complete: true,
@@ -632,15 +706,6 @@ Be friendly, professional, and concise. If they ask to reschedule, tell them the
             activeCallsMetadata.delete(connectionData.callId);
           }
         }
-
-        // If we're in discovery mode and just asked the last discovery question
-        if (conversationState === 'discovery' && containsProblemQuestion) {
-          discoveryProgress.questionsAsked.add(discoveryQuestions.length - 1); // Mark the last question as asked
-          
-          // Let bot response complete, then transition only after user's next reply
-          // This ensures the user has a chance to answer the final discovery question
-          console.log('Last discovery question asked, will transition to booking after user response');
-        }
       }
 
     } catch (error) {
@@ -656,6 +721,7 @@ Be friendly, professional, and concise. If they ask to reschedule, tell them the
 
   ws.on('close', () => {
     console.log('Connection closed.');
+    clearTimeout(autoGreetingTimer); // Clear the timer when connection closes
     
     // Clean up any stored data for this connection
     if (connectionData.callId) {
