@@ -9,7 +9,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 app.get('/', (req, res) => {
-  res.send('Nexella WebSocket Server with memory and Calendly integration is live!');
+  res.send('Nexella WebSocket Server with Calendly scheduling link integration is live!');
 });
 
 // Store active calls metadata
@@ -25,40 +25,6 @@ async function checkAvailability(startTime, endTime) {
   } catch (error) {
     console.error('Error checking availability:', error.message);
     return false;
-  }
-}
-
-// For locking a slot temporarily
-async function lockSlot(startTime, endTime, userId) {
-  try {
-    const response = await axios.post(`${process.env.TRIGGER_SERVER_URL}/lock-slot`, {
-      startTime, endTime, userId
-    });
-    return response.data.success;
-  } catch (error) {
-    console.error('Error locking slot:', error.message);
-    return false;
-  }
-}
-
-// For scheduling a call with our trigger server - Updated to use schedule-calendly endpoint
-async function scheduleCall(name, email, phone, startTime, endTime, userId, callId) {
-  try {
-    // Use the new schedule-calendly endpoint instead of trigger-call
-    const response = await axios.post(`${process.env.TRIGGER_SERVER_URL}/schedule-calendly`, {
-      name,
-      email,
-      phone,
-      startTime,
-      endTime,
-      userId,
-      call_id: callId, // Pass the call_id to associate the scheduling with the call
-      eventTypeUri: process.env.CALENDLY_EVENT_TYPE_URI
-    });
-    return { success: response.data.success, message: response.data.message };
-  } catch (error) {
-    console.error('Error scheduling call:', error.response?.data || error.message);
-    return { success: false, message: 'Failed to schedule the call. Please try again.' };
   }
 }
 
@@ -89,6 +55,33 @@ async function updateConversationState(callId, discoveryComplete, selectedSlot) 
   } catch (error) {
     console.error('Error updating conversation state:', error.message);
     return false;
+  }
+}
+
+// UPDATED: Instead of scheduling directly, send scheduling preferences and link
+async function sendSchedulingLinkToEmail(name, email, phone, preferredDay, preferredTime, callId) {
+  try {
+    // Use the new process-scheduling-preference endpoint
+    const response = await axios.post(`${process.env.TRIGGER_SERVER_URL}/process-scheduling-preference`, {
+      name,
+      email,
+      phone,
+      preferredDay,
+      preferredTime,
+      call_id: callId
+    });
+    
+    return { 
+      success: response.data.success, 
+      message: response.data.message,
+      schedulingLink: response.data.schedulingLink
+    };
+  } catch (error) {
+    console.error('Error sending scheduling link:', error.response?.data || error.message);
+    return { 
+      success: false, 
+      message: 'Failed to send scheduling link. Please try again.'
+    };
   }
 }
 
@@ -179,11 +172,11 @@ function formatAvailableTimeResponse(preferredDay, slots) {
   });
   
   if (formattedSlots.length === 1) {
-    return `Great! For ${preferredDay}, I have availability at ${formattedSlots[0]}. Would that work for you?`;
+    return `Great! For ${preferredDay}, we typically have availability at ${formattedSlots[0]}. I'll send you a scheduling link where you can select the exact time that works best for you. What's your preferred time?`;
   } else if (formattedSlots.length === 2) {
-    return `Great! For ${preferredDay}, I have availability at ${formattedSlots[0]} or ${formattedSlots[1]}. Would either of these times work for you?`;
+    return `Great! For ${preferredDay}, we typically have availability at ${formattedSlots[0]} or ${formattedSlots[1]}. I'll send you a scheduling link where you can select the exact time that works best for you. Do you have a preference between these times?`;
   } else {
-    return `Great! For ${preferredDay}, I have availability at ${formattedSlots[0]}, ${formattedSlots[1]}, or ${formattedSlots[2]}. Would any of these times work for you?`;
+    return `Great! For ${preferredDay}, we typically have availability at ${formattedSlots[0]}, ${formattedSlots[1]}, or ${formattedSlots[2]}. I'll send you a scheduling link where you can select the exact time that works best for you. Do you have a preference among these times?`;
   }
 }
 
@@ -213,8 +206,31 @@ function extractTimeFromMessage(userMessage, availableSlots) {
   }
   
   // Check if user is agreeing to a suggested time
-  if (userMessage.toLowerCase().match(/\b(yes|sure|ok|okay|sounds good|that works|first one|second one|third one|earliest|latest)\b/)) {
-    // Return the first available slot as default
+  if (userMessage.toLowerCase().match(/\b(yes|sure|ok|okay|sounds good|that works|first one|second one|third one|earliest|latest|morning|afternoon|evening)\b/)) {
+    // Return the first available slot as default or look for specific period of day
+    if (userMessage.toLowerCase().includes('morning')) {
+      // Find a morning slot (9am-12pm)
+      const morningSlot = availableSlots.find(slot => {
+        const hour = new Date(slot.startTime).getHours();
+        return hour >= 9 && hour < 12;
+      });
+      return morningSlot || availableSlots[0];
+    } else if (userMessage.toLowerCase().includes('afternoon')) {
+      // Find an afternoon slot (12pm-5pm)
+      const afternoonSlot = availableSlots.find(slot => {
+        const hour = new Date(slot.startTime).getHours();
+        return hour >= 12 && hour < 17;
+      });
+      return afternoonSlot || availableSlots[0];
+    } else if (userMessage.toLowerCase().includes('evening')) {
+      // Find an evening slot (5pm+)
+      const eveningSlot = availableSlots.find(slot => {
+        const hour = new Date(slot.startTime).getHours();
+        return hour >= 17;
+      });
+      return eveningSlot || availableSlots[0];
+    }
+    
     return availableSlots[0];
   }
   
@@ -246,7 +262,7 @@ function capitalizeFirstLetter(string) {
   return string.charAt(0).toUpperCase() + string.slice(1);
 }
 
-// Handle the booking part of the conversation better
+// UPDATED: Modified to handle scheduling link flow instead of direct booking
 async function handleBookingFlow(userMessage, bookingInfo, availableSlots, connectionData) {
   let response = null;
   
@@ -271,81 +287,66 @@ async function handleBookingFlow(userMessage, bookingInfo, availableSlots, conne
     const selectedSlot = extractTimeFromMessage(userMessage, availableSlots);
     
     if (selectedSlot) {
-      // Try to lock the slot
-      const locked = await lockSlot(
-        selectedSlot.startTime, 
-        selectedSlot.endTime, 
-        bookingInfo.userId
-      );
+      // Update booking info
+      const slotTime = new Date(selectedSlot.startTime);
+      bookingInfo.preferredTime = slotTime.toLocaleTimeString('en-US', {
+        hour: 'numeric', 
+        minute: '2-digit',
+        hour12: true 
+      });
       
-      if (locked) {
-        // Update booking info
-        const slotTime = new Date(selectedSlot.startTime);
-        bookingInfo.preferredTime = slotTime.toLocaleTimeString('en-US', {
-          hour: 'numeric', 
-          minute: '2-digit',
-          hour12: true 
+      // Update in trigger server
+      if (connectionData && connectionData.callId) {
+        await updateConversationState(connectionData.callId, true, {
+          preferredDay: bookingInfo.preferredDay,
+          preferredTime: bookingInfo.preferredTime
         });
-        bookingInfo.startTime = selectedSlot.startTime;
-        bookingInfo.endTime = selectedSlot.endTime;
-        bookingInfo.slotLocked = true;
-        
-        // Update in trigger server
-        if (connectionData && connectionData.callId) {
-          await updateConversationState(connectionData.callId, true, {
-            startTime: selectedSlot.startTime,
-            endTime: selectedSlot.endTime
-          });
-        }
-        
-        if (bookingInfo.name && bookingInfo.email && bookingInfo.phone) {
-          // We already have all contact info
-          // Let the GPT handle the confirmation message
-          return null;
-        } else {
-          // Need contact info
-          response = `Perfect! I've reserved ${bookingInfo.preferredDay} at ${bookingInfo.preferredTime} for you. I already have your contact information from the form you submitted. Is there anything specific you'd like to discuss in this call?`;
-        }
-      } else {
-        response = "I'm sorry, that time slot is no longer available. Let me check what else we have available.";
-        bookingInfo.preferredTime = '';
       }
+      
+      response = `Perfect! I'll send you a scheduling link to book for ${bookingInfo.preferredDay} at around ${bookingInfo.preferredTime}. You'll receive this via email shortly, and you can select the exact time that works best for you. Is there anything specific you'd like to discuss during our call?`;
     }
   }
   
   return response;
 }
 
-// Improved function to confirm and schedule the appointment
-async function confirmAndSchedule(bookingInfo, connectionData) {
+// UPDATED: Modified to send scheduling link instead of confirming direct booking
+async function processSchedulingPreference(bookingInfo, connectionData) {
   try {
-    const result = await scheduleCall(
+    // Only proceed if we have enough information
+    if (!bookingInfo.email || (!bookingInfo.preferredDay && !bookingInfo.preferredTime)) {
+      return {
+        success: false,
+        message: "I need at least your email and preferred day or time to send you a scheduling link."
+      };
+    }
+    
+    const result = await sendSchedulingLinkToEmail(
       bookingInfo.name,
       bookingInfo.email,
       bookingInfo.phone,
-      bookingInfo.startTime,
-      bookingInfo.endTime,
-      bookingInfo.userId,
+      bookingInfo.preferredDay,
+      bookingInfo.preferredTime,
       connectionData?.callId
     );
     
     if (result.success) {
-      bookingInfo.confirmed = true;
+      bookingInfo.schedulingLinkSent = true;
       return {
         success: true,
-        message: `Perfect! I've scheduled your call for ${bookingInfo.preferredDay} at ${bookingInfo.preferredTime}. You'll receive a confirmation email at ${bookingInfo.email} shortly with all the details. Is there anything else I can help you with today?`
+        message: `Perfect! I've sent a scheduling link to your email at ${bookingInfo.email}. The link will allow you to select a time that works best for you on ${bookingInfo.preferredDay}${bookingInfo.preferredTime ? ` around ${bookingInfo.preferredTime}` : ''}. Is there anything else I can help you with today?`
       };
     } else {
       return {
         success: false,
-        message: `I'm sorry, there was an issue scheduling your call. ${result.message} Would you like to try another time?`
+        message: `I'm sorry, there was an issue sending the scheduling link. ${result.message} Would you like to try again?`
       };
     }
   } catch (error) {
-    console.error('Error confirming schedule:', error);
+    console.error('Error processing scheduling preference:', error);
     return {
       success: false,
-      message: "I'm sorry, there was an error scheduling your call. Would you like to try again?"
+      message: "I'm sorry, there was an error sending the scheduling link. Would you like to try again?"
     };
   }
 }
@@ -416,6 +417,7 @@ wss.on('connection', (ws) => {
     allQuestionsAsked: false
   };
   
+  // UPDATED: Modified system prompt to reflect scheduling link approach
   let conversationHistory = [
     {
       role: 'system',
@@ -446,19 +448,22 @@ CONVERSATION FLOW:
    - First ask what day of the week works best for them
    - When they give you a day or time frame, acknowledge their specific preference
    - For example: "Great! You mentioned next Tuesday afternoon works for you."
-   - Suggest real available time slots (avoid saying "insert time")
-   - If they're vague about timing, suggest specific options like "Would Monday at 2pm or Tuesday at 10am work better?"
+   - Be clear that you'll send them a scheduling link via email to pick the exact time
+   - Explain that they'll get an email with a Calendly link to choose the specific time slot that works for them
+   - DO NOT suggest that you will book the appointment directly
+   - Always clarify that they need to use the link to finalize the booking
 
 WHEN DISCUSSING SCHEDULING:
 - If user mentions "next week" or any specific timing, acknowledge exactly what they said
-- Example: "Perfect, next week on Tuesday would work great. Would you prefer morning or afternoon?"
+- Example: "Perfect, next week on Tuesday would work great. I'll send you a scheduling link to pick a time that works best for you."
 - Never use phrases like "insert time" or "insert date" - use the actual times/dates discussed
-- Remember we already have their email from their form submission, so just confirm we'll send the calendar invitation to that email
+- Remember we already have their email from their form submission, so just confirm we'll send the scheduling link to that email
+- Always make it clear that they need to use the link to select and finalize the exact time that works for them
 
 CALL WRAP-UP:
 - Thank them for their time
 - Confirm we have their contact details from their initial form
-- Tell them they'll receive a calendar invitation shortly
+- Tell them they'll receive a scheduling link via email shortly
 - No need to ask for email again
 
 Highlight Nexella's features casually throughout the conversation:
@@ -471,7 +476,7 @@ Highlight Nexella's features casually throughout the conversation:
 - Sales and Customer Support automation
 - If they ask if you are AI, tell them yes you are and they would have access to my exact model and other voices to choose from
 
-Your main goal is to complete all discovery questions before scheduling, and make the user feel understood and excited to book a call with Nexella.io.`
+Your main goal is to complete all discovery questions before scheduling, and make the user feel understood and excited to book a call with Nexella.io using the scheduling link you'll provide.`
     }
   ];
 
@@ -483,10 +488,7 @@ Your main goal is to complete all discovery questions before scheduling, and mak
     phone: '',
     preferredDay: '',
     preferredTime: '',
-    startTime: '',
-    endTime: '',
-    slotLocked: false,
-    confirmed: false,
+    schedulingLinkSent: false,
     userId: `user_${Date.now()}`
   };
   let availableSlots = [];
@@ -659,24 +661,20 @@ Be friendly, professional, and concise. If they ask to reschedule, tell them the
           console.log('Transitioning to booking state based on discovery completion');
         }
         
-        // If in collecting_info state and we already have contact info from the form
-        if (conversationState === 'collecting_info' && collectedContactInfo) {
-          // Schedule the call using existing info
-          const result = await confirmAndSchedule(bookingInfo, connectionData);
+        // Check if we need to send the scheduling link
+        if (conversationState === 'booking' && 
+            bookingInfo.preferredDay && 
+            bookingInfo.preferredTime && 
+            !bookingInfo.schedulingLinkSent && 
+            collectedContactInfo) {
+            
+          // If we have necessary info to send scheduling link
+          console.log('User has provided scheduling preferences, preparing to send link');
+          
+          const result = await processSchedulingPreference(bookingInfo, connectionData);
           
           if (result.success) {
             conversationState = 'post_booking';
-            ws.send(JSON.stringify({
-              content: result.message,
-              content_complete: true,
-              actions: [],
-              response_id: parsed.response_id
-            }));
-            return;
-          } else {
-            bookingInfo.preferredTime = '';
-            bookingInfo.slotLocked = false;
-            conversationState = 'booking';
             ws.send(JSON.stringify({
               content: result.message,
               content_complete: true,
@@ -694,6 +692,39 @@ Be friendly, professional, and concise. If they ask to reschedule, tell them the
           actions: [],
           response_id: parsed.response_id
         }));
+        
+        // Check if user has expressed scheduling preferences in their reply
+        if (conversationState === 'booking' && botReply.toLowerCase().includes('scheduling link')) {
+          // If the AI mentions sending a scheduling link, try to extract/process preferences
+          // This ensures we capture the intent even if the direct response handler didn't catch it
+          
+          // Check if we need to parse preferences from the conversation
+          if (!bookingInfo.schedulingLinkSent && collectedContactInfo) {
+            // Parse day/time if not already set
+            if (!bookingInfo.preferredDay) {
+              const dayInfo = handleSchedulingPreference(userMessage);
+              if (dayInfo) {
+                bookingInfo.preferredDay = dayInfo.dayName;
+                console.log('Extracted preferred day from user message:', bookingInfo.preferredDay);
+              }
+            }
+            
+            // Only send if we have at least some preference information
+            if (bookingInfo.preferredDay || bookingInfo.preferredTime) {
+              setTimeout(async () => {
+                const result = await processSchedulingPreference(bookingInfo, connectionData);
+                if (result.success) {
+                  ws.send(JSON.stringify({
+                    content: result.message,
+                    content_complete: true,
+                    actions: [],
+                    response_id: 9999 // Use a unique ID
+                  }));
+                }
+              }, 3000); // Wait 3 seconds before sending follow-up
+            }
+          }
+        }
         
         // Clean up when the call is ending
         if (botReply.toLowerCase().includes('goodbye') || 
@@ -764,5 +795,5 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Nexella WebSocket Server with Calendly integration is listening on port ${PORT}`);
+  console.log(`Nexella WebSocket Server with Calendly scheduling link integration is listening on port ${PORT}`);
 });
