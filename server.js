@@ -58,10 +58,10 @@ async function updateConversationState(callId, discoveryComplete, selectedSlot) 
   }
 }
 
-// UPDATED: Instead of scheduling directly, send scheduling preferences and link
+// UPDATED: Modified to work with n8n
 async function sendSchedulingLinkToEmail(name, email, phone, preferredDay, preferredTime, callId) {
   try {
-    // Use the new process-scheduling-preference endpoint
+    // Use the process-scheduling-preference endpoint
     const response = await axios.post(`${process.env.TRIGGER_SERVER_URL}/process-scheduling-preference`, {
       name,
       email,
