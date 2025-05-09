@@ -58,34 +58,53 @@ async function updateConversationState(callId, discoveryComplete, selectedSlot) 
   }
 }
 
-// UPDATED: Modified to work with n8n
-async function sendSchedulingLinkToEmail(name, email, phone, preferredDay, preferredTime, callId) {
+// UPDATED: Always send data to n8n, whether scheduling fully completed or not
+async function sendDataToN8n(name, email, phone, preferredDay, callId, discoveryData = {}) {
   try {
-    // Use the process-scheduling-preference endpoint
-    const response = await axios.post(`${process.env.TRIGGER_SERVER_URL}/process-scheduling-preference`, {
-      name,
-      email,
-      phone,
-      preferredDay,
-      preferredTime,
-      call_id: callId
+    // Send all collected data to n8n webhook
+    const webhookData = {
+      name: name || '',
+      email: email || '',
+      phone: phone || '',
+      preferredDay: preferredDay || '',
+      call_id: callId || '',
+      discovery_data: discoveryData,
+      timestamp: new Date().toISOString(),
+      call_completed: true // You could set this based on various criteria
+    };
+    
+    const response = await axios.post(process.env.N8N_WEBHOOK_URL, webhookData, {
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      timeout: 5000 // 5 second timeout
     });
     
-    return { 
-      success: response.data.success, 
-      message: response.data.message,
-      schedulingLink: response.data.schedulingLink
-    };
+    console.log('Successfully sent data to n8n:', response.data);
+    return { success: true, response: response.data };
   } catch (error) {
-    console.error('Error sending scheduling link:', error.response?.data || error.message);
-    return { 
-      success: false, 
-      message: 'Failed to send scheduling link. Please try again.'
-    };
+    console.error('Error sending data to n8n:', error.message);
+    
+    // Retry once if failed
+    try {
+      await axios.post(process.env.N8N_WEBHOOK_URL, webhookData, {
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        timeout: 5000
+      });
+      console.log('Retry successful - data sent to n8n');
+      return { success: true, message: 'Sent on retry' };
+    } catch (retryError) {
+      console.error('Retry failed:', retryError.message);
+      // Even if it fails, we'll return success to continue the conversation
+      // You can implement a queue system here if needed
+      return { success: false, error: retryError.message };
+    }
   }
 }
 
-// Function to handle scheduling preferences better
+// Function to handle scheduling preferences with simplified flow
 function handleSchedulingPreference(userMessage) {
   // Extract day of week with better handling for various formats
   const dayMatch = userMessage.match(/monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today/i);
@@ -103,7 +122,7 @@ function handleSchedulingPreference(userMessage) {
     targetDate.setDate(targetDate.getDate() + daysUntilMonday - 7);
     
     return {
-      dayName: 'Next week',
+      dayName: 'next week',
       date: targetDate,
       isSpecific: false
     };
@@ -116,13 +135,13 @@ function handleSchedulingPreference(userMessage) {
     if (preferredDay === 'tomorrow') {
       targetDate.setDate(targetDate.getDate() + 1);
       return {
-        dayName: 'Tomorrow',
+        dayName: 'tomorrow',
         date: targetDate,
         isSpecific: true
       };
     } else if (preferredDay === 'today') {
       return {
-        dayName: 'Today',
+        dayName: 'today',
         date: targetDate,
         isSpecific: true
       };
@@ -143,7 +162,7 @@ function handleSchedulingPreference(userMessage) {
         targetDate.setDate(targetDate.getDate() + daysToAdd);
         
         return {
-          dayName: capitalizeFirstLetter(preferredDay),
+          dayName: preferredDay,
           date: targetDate,
           isSpecific: true
         };
@@ -152,203 +171,6 @@ function handleSchedulingPreference(userMessage) {
   }
   
   return null;
-}
-
-// Function to format a better response for available times
-function formatAvailableTimeResponse(preferredDay, slots) {
-  if (!slots || slots.length === 0) {
-    return `I'm sorry, it looks like we don't have any available slots for ${preferredDay}. Would you like to try another day?`;
-  }
-  
-  // Format slots for natural language (show max 3)
-  const slotsToShow = slots.slice(0, 3);
-  const formattedSlots = slotsToShow.map(slot => {
-    const date = new Date(slot.startTime);
-    return `${date.toLocaleTimeString('en-US', { 
-      hour: 'numeric', 
-      minute: '2-digit',
-      hour12: true 
-    })}`;
-  });
-  
-  if (formattedSlots.length === 1) {
-    return `Great! For ${preferredDay}, we typically have availability at ${formattedSlots[0]}. I'll send you a scheduling link where you can select the exact time that works best for you. What's your preferred time?`;
-  } else if (formattedSlots.length === 2) {
-    return `Great! For ${preferredDay}, we typically have availability at ${formattedSlots[0]} or ${formattedSlots[1]}. I'll send you a scheduling link where you can select the exact time that works best for you. Do you have a preference between these times?`;
-  } else {
-    return `Great! For ${preferredDay}, we typically have availability at ${formattedSlots[0]}, ${formattedSlots[1]}, or ${formattedSlots[2]}. I'll send you a scheduling link where you can select the exact time that works best for you. Do you have a preference among these times?`;
-  }
-}
-
-// Function to extract time from user message more accurately
-function extractTimeFromMessage(userMessage, availableSlots) {
-  // Check for explicit time mention
-  const timeRegex = /(\d{1,2})(:\d{2})?\s*(am|pm)?/i;
-  const timeMatch = userMessage.match(timeRegex);
-  
-  if (timeMatch) {
-    // Get the hour and convert to 24-hour format if needed
-    let hour = parseInt(timeMatch[1]);
-    const minute = timeMatch[2] ? parseInt(timeMatch[2].substring(1)) : 0;
-    const isPM = timeMatch[3]?.toLowerCase() === 'pm';
-    
-    // Convert to 24-hour format
-    if (isPM && hour < 12) hour += 12;
-    if (!isPM && hour === 12) hour = 0;
-    
-    // Find the closest slot
-    return availableSlots.find(slot => {
-      const slotTime = new Date(slot.startTime);
-      // Check if the hour matches and either minutes match or weren't specified
-      return slotTime.getHours() === hour && 
-             (minute === 0 || slotTime.getMinutes() === minute);
-    });
-  }
-  
-  // Check if user is agreeing to a suggested time
-  if (userMessage.toLowerCase().match(/\b(yes|sure|ok|okay|sounds good|that works|first one|second one|third one|earliest|latest|morning|afternoon|evening)\b/)) {
-    // Return the first available slot as default or look for specific period of day
-    if (userMessage.toLowerCase().includes('morning')) {
-      // Find a morning slot (9am-12pm)
-      const morningSlot = availableSlots.find(slot => {
-        const hour = new Date(slot.startTime).getHours();
-        return hour >= 9 && hour < 12;
-      });
-      return morningSlot || availableSlots[0];
-    } else if (userMessage.toLowerCase().includes('afternoon')) {
-      // Find an afternoon slot (12pm-5pm)
-      const afternoonSlot = availableSlots.find(slot => {
-        const hour = new Date(slot.startTime).getHours();
-        return hour >= 12 && hour < 17;
-      });
-      return afternoonSlot || availableSlots[0];
-    } else if (userMessage.toLowerCase().includes('evening')) {
-      // Find an evening slot (5pm+)
-      const eveningSlot = availableSlots.find(slot => {
-        const hour = new Date(slot.startTime).getHours();
-        return hour >= 17;
-      });
-      return eveningSlot || availableSlots[0];
-    }
-    
-    return availableSlots[0];
-  }
-  
-  // Check for time references in the message
-  for (const slot of availableSlots) {
-    const slotTime = new Date(slot.startTime);
-    const timeStr = slotTime.toLocaleTimeString('en-US', { 
-      hour: 'numeric', 
-      minute: '2-digit',
-      hour12: true 
-    }).toLowerCase();
-    
-    // Check if the time string appears in the user message
-    if (userMessage.toLowerCase().includes(timeStr) ||
-        // Also check without minutes if it's on the hour
-        (slotTime.getMinutes() === 0 && 
-         userMessage.toLowerCase().includes(slotTime.getHours() % 12 + ' ' + (slotTime.getHours() >= 12 ? 'pm' : 'am')))
-       ) {
-      return slot;
-    }
-  }
-  
-  // No match found
-  return null;
-}
-
-// Helper function to capitalize first letter
-function capitalizeFirstLetter(string) {
-  return string.charAt(0).toUpperCase() + string.slice(1);
-}
-
-// UPDATED: Modified to handle scheduling link flow instead of direct booking
-async function handleBookingFlow(userMessage, bookingInfo, availableSlots, connectionData) {
-  let response = null;
-  
-  // If we don't have a preferred day yet
-  if (!bookingInfo.preferredDay) {
-    const dayInfo = handleSchedulingPreference(userMessage);
-    
-    if (dayInfo) {
-      bookingInfo.preferredDay = dayInfo.dayName;
-      
-      // Get available slots for this day
-      const availableSlotsForDay = await getAvailableTimeSlots(dayInfo.date);
-      availableSlots.length = 0; // Clear existing slots
-      availableSlots.push(...availableSlotsForDay); // Add new slots
-      
-      // Format response based on available slots
-      response = formatAvailableTimeResponse(bookingInfo.preferredDay, availableSlots);
-    }
-  }
-  // If we have a day but no time yet
-  else if (!bookingInfo.preferredTime) {
-    const selectedSlot = extractTimeFromMessage(userMessage, availableSlots);
-    
-    if (selectedSlot) {
-      // Update booking info
-      const slotTime = new Date(selectedSlot.startTime);
-      bookingInfo.preferredTime = slotTime.toLocaleTimeString('en-US', {
-        hour: 'numeric', 
-        minute: '2-digit',
-        hour12: true 
-      });
-      
-      // Update in trigger server
-      if (connectionData && connectionData.callId) {
-        await updateConversationState(connectionData.callId, true, {
-          preferredDay: bookingInfo.preferredDay,
-          preferredTime: bookingInfo.preferredTime
-        });
-      }
-      
-      response = `Perfect! I'll send you a scheduling link to book for ${bookingInfo.preferredDay} at around ${bookingInfo.preferredTime}. You'll receive this via email shortly, and you can select the exact time that works best for you. Is there anything specific you'd like to discuss during our call?`;
-    }
-  }
-  
-  return response;
-}
-
-// UPDATED: Modified to send scheduling link instead of confirming direct booking
-async function processSchedulingPreference(bookingInfo, connectionData) {
-  try {
-    // Only proceed if we have enough information
-    if (!bookingInfo.email || (!bookingInfo.preferredDay && !bookingInfo.preferredTime)) {
-      return {
-        success: false,
-        message: "I need at least your email and preferred day or time to send you a scheduling link."
-      };
-    }
-    
-    const result = await sendSchedulingLinkToEmail(
-      bookingInfo.name,
-      bookingInfo.email,
-      bookingInfo.phone,
-      bookingInfo.preferredDay,
-      bookingInfo.preferredTime,
-      connectionData?.callId
-    );
-    
-    if (result.success) {
-      bookingInfo.schedulingLinkSent = true;
-      return {
-        success: true,
-        message: `Perfect! I've sent a scheduling link to your email at ${bookingInfo.email}. The link will allow you to select a time that works best for you on ${bookingInfo.preferredDay}${bookingInfo.preferredTime ? ` around ${bookingInfo.preferredTime}` : ''}. Is there anything else I can help you with today?`
-      };
-    } else {
-      return {
-        success: false,
-        message: `I'm sorry, there was an issue sending the scheduling link. ${result.message} Would you like to try again?`
-      };
-    }
-  } catch (error) {
-    console.error('Error processing scheduling preference:', error);
-    return {
-      success: false,
-      message: "I'm sorry, there was an error sending the scheduling link. Would you like to try again?"
-    };
-  }
 }
 
 // Improved function to detect when all discovery questions have been asked
@@ -417,81 +239,69 @@ wss.on('connection', (ws) => {
     allQuestionsAsked: false
   };
   
-  // UPDATED: Modified system prompt to reflect scheduling link approach
+  // UPDATED: Improved system prompt with name awareness and natural conversation
   let conversationHistory = [
     {
       role: 'system',
-      content: `You are a customer service/sales representative for Nexella.io named "Sarah". Always introduce yourself as Sarah from Nexella. 
-You must sound friendly, relatable, and build rapport naturally. Match their language style. Compliment them genuinely.
+      content: `You are a customer service/sales representative for Nexella.io named "Sarah". Always introduce yourself as Sarah from Nexella.
 
-IMPORTANT RULES:
+PERSONALITY & TONE:
+- Be friendly, relatable, and casual - like talking to a friend
+- Use contractions and natural speech patterns
+- Laugh occasionally (use "haha" or "hehe" naturally)
+- Sound genuinely excited about helping them
+- Match their energy and speaking style
+- Sprinkle in casual phrases like "totally", "awesome", "for sure", "definitely"
+
+KEY REMINDERS:
+- We ALREADY have their name and email from their typeform submission
+- Address them by name early in the conversation
+- You don't need to ask for their email again
+- Be conversational, not checklist-like
 - Ask ONE question at a time
-- Wait for the user's answer before asking the next question
-- Build a back-and-forth conversation, not a checklist
-- Acknowledge and respond to user answers briefly to sound human
-- Always lead the user towards booking a call with us
-- NEVER say "insert name" or any other placeholder text
-- NEVER ask for the user's email since we already have it from their form submission
-- When discussing dates and times, be specific about actual days and times, not placeholders
-- If the user mentions a specific day or time preference, acknowledge it directly and specifically
+- Wait for answers before moving forward
+- Show genuine interest in their responses
 
 CONVERSATION FLOW:
-1. INTRODUCTION: "Hi, this is Sarah from Nexella. [warm greeting]"
-2. DISCOVERY QUESTIONS: Complete all of these before scheduling
-   - How did you hear about us?
-   - What line of business are you in? What's your business model?
-   - What's your main product and typical price point?
-   - Are you running ads (Meta, Google, TikTok)?
-   - Are you using a CRM like GoHighLevel?
-   - What problems are you running into?
-3. SCHEDULING: Only after ALL discovery questions are asked
-   - First ask what day of the week works best for them
-   - When they give you a day or time frame, acknowledge their specific preference
-   - For example: "Great! You mentioned next Tuesday afternoon works for you."
-   - Be clear that you'll send them a scheduling link via email to pick the exact time
-   - Explain that they'll get an email with a Calendly link to choose the specific time slot that works for them
-   - DO NOT suggest that you will book the appointment directly
-   - Always clarify that they need to use the link to finalize the booking
+1. INTRODUCTION: "Hi [Name]! This is Sarah from Nexella. [warm greeting with a laugh]"
+2. DISCOVERY (ask naturally, not like an interview):
+   - How did you discover us?
+   - What's your business all about?
+   - What's your main product/service?
+   - Are you running any ads right now?
+   - Using any CRM systems?
+   - What challenges are you facing?
+3. SCHEDULING: Only ask for what DAY works for them
+   - "So when would be a good day for us to hop on a call?"
+   - Once they mention ANY day, say you'll send a scheduling link
+   - Don't ask for specific times - the link handles that
 
-WHEN DISCUSSING SCHEDULING:
-- If user mentions "next week" or any specific timing, acknowledge exactly what they said
-- Example: "Perfect, next week on Tuesday would work great. I'll send you a scheduling link to pick a time that works best for you."
-- Never use phrases like "insert time" or "insert date" - use the actual times/dates discussed
-- Remember we already have their email from their form submission, so just confirm we'll send the scheduling link to that email
-- Always make it clear that they need to use the link to select and finalize the exact time that works for them
+SCHEDULING APPROACH:
+- When they mention ANY day (today, tomorrow, Monday, next week, etc.), immediately confirm
+- Say something like: "Perfect! I'll send you a scheduling link for [day] and you can pick whatever time works best"
+- Emphasize they already have an account/email with us
+- Make it super easy and casual
 
-CALL WRAP-UP:
-- Thank them for their time
-- Confirm we have their contact details from their initial form
-- Tell them they'll receive a scheduling link via email shortly
-- No need to ask for email again
+NATURAL RESPONSES:
+- If they say "Monday": "Monday works great! I'll shoot you a link for Monday and you can grab whatever time slot looks good to you."
+- If they say "next week": "Awesome, next week it is! I'll send you a scheduling link and you can pick any day/time that works."
+- If they're vague: "No worries! I'll send you our scheduling link and you can pick whatever day and time works best for you."
 
-Highlight Nexella's features casually throughout the conversation:
-- 24/7 SMS and voice AI agents
-- Immediate response
-- Calendar booking
-- CRM integrations
-- No Twilio needed
-- Caller ID import
-- Sales and Customer Support automation
-- If they ask if you are AI, tell them yes you are and they would have access to my exact model and other voices to choose from
-
-Your main goal is to complete all discovery questions before scheduling, and make the user feel understood and excited to book a call with Nexella.io using the scheduling link you'll provide.`
+Remember: Your goal is to have a natural, friendly conversation that leads to sending them a scheduling link. Keep it light, casual, and make them feel comfortable!`
     }
   ];
 
   // States for conversation flow
-  let conversationState = 'introduction';  // introduction -> discovery -> booking -> collecting_info
+  let conversationState = 'introduction';  // introduction -> discovery -> booking -> completed
   let bookingInfo = {
     name: '',
     email: '',
     phone: '',
     preferredDay: '',
-    preferredTime: '',
     schedulingLinkSent: false,
     userId: `user_${Date.now()}`
   };
-  let availableSlots = [];
+  let discoveryData = {}; // Store answers to discovery questions
   let collectedContactInfo = false;
   let userHasSpoken = false;
 
@@ -532,38 +342,13 @@ Your main goal is to complete all discovery questions before scheduling, and mak
           connectionData.metadata = parsed.call.metadata;
           console.log('Call metadata received:', connectionData.metadata);
           
-          // Check if this is an appointment confirmation call
-          if (connectionData.metadata.appointment_time) {
-            connectionData.isOutboundCall = true;
-            connectionData.isAppointmentConfirmation = true;
-            
-            // Update system prompt for appointment confirmation
-            conversationHistory[0] = {
-              role: 'system',
-              content: `You are calling from Nexella.io to confirm an appointment.
-              
-Customer Name: ${connectionData.metadata.customer_name || 'our customer'}
-Appointment Time: ${connectionData.metadata.appointment_time || 'the scheduled time'}
-              
-CALL FLOW:
-1. Introduce yourself as Sarah from Nexella.io
-2. Confirm you're speaking with the right person
-3. Let them know you're calling to confirm their upcoming appointment
-4. Confirm their appointment date and time
-5. Ask if they have any questions about the appointment
-6. Thank them for their time
-7. End the call politely
-
-Be friendly, professional, and concise. If they ask to reschedule, tell them they can do so by visiting our website or responding to their confirmation email.`
-            };
-            
-            console.log('Updated system prompt for appointment confirmation call');
-          }
-          
           // Extract customer info from metadata if available
           if (connectionData.metadata.customer_name) {
             bookingInfo.name = connectionData.metadata.customer_name;
             collectedContactInfo = true;
+            
+            // Update system prompt with the user's name
+            conversationHistory[0].content = conversationHistory[0].content.replace(/\[Name\]/g, bookingInfo.name);
           }
           if (connectionData.metadata.customer_email) {
             bookingInfo.email = connectionData.metadata.customer_email;
@@ -586,34 +371,59 @@ Be friendly, professional, and concise. If they ask to reschedule, tell them the
         console.log('User said:', userMessage);
         console.log('Current conversation state:', conversationState);
 
-        // Try to handle booking directly if we're in that state
-        let directResponse = null;
+        // Store discovery answers
+        if (conversationState === 'discovery') {
+          // Simple heuristic to match user answers to questions
+          // You could make this more sophisticated
+          const lastBotMessage = conversationHistory[conversationHistory.length - 1];
+          if (lastBotMessage && lastBotMessage.role === 'assistant') {
+            for (let i = 0; i < discoveryQuestions.length; i++) {
+              const question = discoveryQuestions[i];
+              if (lastBotMessage.content.toLowerCase().includes(question.toLowerCase().substring(0, 10))) {
+                discoveryData[`question_${i}`] = userMessage;
+                break;
+              }
+            }
+          }
+        }
         
+        // Check if user wants to schedule
+        if (userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss)\b/)) {
+          console.log('User requested scheduling');
+          conversationState = 'booking';
+        }
+        
+        // Handle day preference
         if (conversationState === 'booking') {
-          directResponse = await handleBookingFlow(userMessage, bookingInfo, availableSlots, connectionData);
+          const dayInfo = handleSchedulingPreference(userMessage);
           
-          if (directResponse) {
+          if (dayInfo) {
+            bookingInfo.preferredDay = dayInfo.dayName;
+            
+            // Immediately send data to n8n when we get a day preference
+            const result = await sendDataToN8n(
+              bookingInfo.name,
+              bookingInfo.email,
+              bookingInfo.phone,
+              bookingInfo.preferredDay,
+              connectionData.callId,
+              discoveryData
+            );
+            
+            // Mark as sent and continue conversation naturally
+            bookingInfo.schedulingLinkSent = true;
+            conversationState = 'completed';
+            
+            // Send a natural completion response
             ws.send(JSON.stringify({
-              content: directResponse,
+              content: `Perfect! I'll send you our scheduling link for ${bookingInfo.preferredDay} right after our call. You can pick any time that works for you. Is there anything else you'd like to know about Nexella before we wrap up?`,
               content_complete: true,
               actions: [],
               response_id: parsed.response_id
             }));
+            
+            console.log('Data sent to n8n and conversation marked as completed');
             return;
-          }
-        }
-        
-        // If user indicated they're ready to schedule in any state, we can transition
-        if (conversationState === 'discovery' && 
-            userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss)\b/) &&
-            discoveryProgress.questionsAsked.size >= 3) { // At least ask 3 questions before allowing bypass
-          
-          console.log('User requested scheduling, transitioning to booking state');
-          conversationState = 'booking';
-          
-          // Update conversation state in trigger server
-          if (connectionData.callId) {
-            updateConversationState(connectionData.callId, true, null);
           }
         }
 
@@ -626,7 +436,7 @@ Be friendly, professional, and concise. If they ask to reschedule, tell them the
           {
             model: 'gpt-4o',
             messages: conversationHistory,
-            temperature: 0.5
+            temperature: 0.7 // Increased for more natural responses
           },
           {
             headers: {
@@ -637,7 +447,7 @@ Be friendly, professional, and concise. If they ask to reschedule, tell them the
           }
         );
 
-        const botReply = openaiResponse.data.choices[0].message.content || "Could you tell me a little more about your business?";
+        const botReply = openaiResponse.data.choices[0].message.content || "Haha, could you tell me a bit more about that?";
 
         // Add bot reply to conversation history
         conversationHistory.push({ role: 'assistant', content: botReply });
@@ -660,30 +470,6 @@ Be friendly, professional, and concise. If they ask to reschedule, tell them the
           
           console.log('Transitioning to booking state based on discovery completion');
         }
-        
-        // Check if we need to send the scheduling link
-        if (conversationState === 'booking' && 
-            bookingInfo.preferredDay && 
-            bookingInfo.preferredTime && 
-            !bookingInfo.schedulingLinkSent && 
-            collectedContactInfo) {
-            
-          // If we have necessary info to send scheduling link
-          console.log('User has provided scheduling preferences, preparing to send link');
-          
-          const result = await processSchedulingPreference(bookingInfo, connectionData);
-          
-          if (result.success) {
-            conversationState = 'post_booking';
-            ws.send(JSON.stringify({
-              content: result.message,
-              content_complete: true,
-              actions: [],
-              response_id: parsed.response_id
-            }));
-            return;
-          }
-        }
 
         // Send the AI response
         ws.send(JSON.stringify({
@@ -692,57 +478,25 @@ Be friendly, professional, and concise. If they ask to reschedule, tell them the
           actions: [],
           response_id: parsed.response_id
         }));
-        
-        // Check if user has expressed scheduling preferences in their reply
-        if (conversationState === 'booking' && botReply.toLowerCase().includes('scheduling link')) {
-          // If the AI mentions sending a scheduling link, try to extract/process preferences
-          // This ensures we capture the intent even if the direct response handler didn't catch it
-          
-          // Check if we need to parse preferences from the conversation
-          if (!bookingInfo.schedulingLinkSent && collectedContactInfo) {
-            // Parse day/time if not already set
-            if (!bookingInfo.preferredDay) {
-              const dayInfo = handleSchedulingPreference(userMessage);
-              if (dayInfo) {
-                bookingInfo.preferredDay = dayInfo.dayName;
-                console.log('Extracted preferred day from user message:', bookingInfo.preferredDay);
-              }
-            }
-            
-            // Only send if we have at least some preference information
-            if (bookingInfo.preferredDay || bookingInfo.preferredTime) {
-              setTimeout(async () => {
-                const result = await processSchedulingPreference(bookingInfo, connectionData);
-                if (result.success) {
-                  ws.send(JSON.stringify({
-                    content: result.message,
-                    content_complete: true,
-                    actions: [],
-                    response_id: 9999 // Use a unique ID
-                  }));
-                }
-              }, 3000); // Wait 3 seconds before sending follow-up
-            }
-          }
-        }
-        
-        // Clean up when the call is ending
-        if (botReply.toLowerCase().includes('goodbye') || 
-            botReply.toLowerCase().includes('thank you for your time') ||
-            botReply.toLowerCase().includes('have a great day')) {
-          
-          // If this was an appointment confirmation call, we can clean up
-          if (connectionData.callId && connectionData.isAppointmentConfirmation) {
-            console.log(`Call ${connectionData.callId} is ending, cleaning up metadata`);
-            activeCallsMetadata.delete(connectionData.callId);
-          }
-        }
       }
 
     } catch (error) {
       console.error('Error handling message:', error.message);
+      
+      // Always try to send whatever data we have to n8n if an error occurs
+      if (connectionData.callId && bookingInfo.name) {
+        await sendDataToN8n(
+          bookingInfo.name,
+          bookingInfo.email,
+          bookingInfo.phone,
+          bookingInfo.preferredDay || 'Not specified',
+          connectionData.callId,
+          discoveryData
+        );
+      }
+      
       ws.send(JSON.stringify({
-        content: "I'm sorry, could you say that again please?",
+        content: "Haha oops, I missed that. Could you say it one more time?",
         content_complete: true,
         actions: [],
         response_id: 9999
@@ -750,12 +504,27 @@ Be friendly, professional, and concise. If they ask to reschedule, tell them the
     }
   });
 
-  ws.on('close', () => {
+  ws.on('close', async () => {
     console.log('Connection closed.');
     clearTimeout(autoGreetingTimer); // Clear the timer when connection closes
     
-    // Clean up any stored data for this connection
+    // ALWAYS send data to n8n when call ends, regardless of completion status
     if (connectionData.callId) {
+      try {
+        await sendDataToN8n(
+          bookingInfo.name,
+          bookingInfo.email,
+          bookingInfo.phone,
+          bookingInfo.preferredDay || 'Call ended early',
+          connectionData.callId,
+          discoveryData
+        );
+        console.log(`Final data sent to n8n for call ${connectionData.callId}`);
+      } catch (finalError) {
+        console.error('Error sending final data to n8n:', finalError.message);
+      }
+      
+      // Clean up
       activeCallsMetadata.delete(connectionData.callId);
       console.log(`Cleaned up metadata for call ${connectionData.callId}`);
     }
@@ -778,11 +547,8 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
         activeCallsMetadata.delete(call.call_id);
         console.log(`Call ${call.call_id} ended, cleaned up metadata`);
         
-        // If this was an appointment confirmation call, you could log or store the result
-        if (call.metadata && call.metadata.appointment_id) {
-          console.log(`Appointment confirmation call ended for appointment: ${call.metadata.appointment_id}`);
-          // Here you could update your database or trigger follow-up actions
-        }
+        // You could implement additional webhook handling here
+        // For example, final data verification or status updates
       }
     }
     
