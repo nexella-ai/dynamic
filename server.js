@@ -485,6 +485,16 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
       
       // Always try to send whatever data we have to n8n if an error occurs
       if (connectionData.callId && bookingInfo.name) {
+        if (!bookingInfo.name && connectionData?.metadata?.customer_name) {
+          bookingInfo.name = connectionData.metadata.customer_name;
+        }
+        if (!bookingInfo.email && connectionData?.metadata?.customer_email) {
+          bookingInfo.email = connectionData.metadata.customer_email;
+        }
+        if (!bookingInfo.phone && connectionData?.metadata?.phone) {
+          bookingInfo.phone = connectionData.metadata.phone;
+        }
+
         await sendDataToN8n(
           bookingInfo.name,
           bookingInfo.email,
@@ -511,6 +521,16 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
     // ALWAYS send data to n8n when call ends, regardless of completion status
     if (connectionData.callId) {
       try {
+        if (!bookingInfo.name && connectionData?.metadata?.customer_name) {
+          bookingInfo.name = connectionData.metadata.customer_name;
+        }
+        if (!bookingInfo.email && connectionData?.metadata?.customer_email) {
+          bookingInfo.email = connectionData.metadata.customer_email;
+        }
+        if (!bookingInfo.phone && connectionData?.metadata?.phone) {
+          bookingInfo.phone = connectionData.metadata.phone;
+        }
+
         await sendDataToN8n(
           bookingInfo.name,
           bookingInfo.email,
