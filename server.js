@@ -565,7 +565,8 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
               bookingInfo.email,
               bookingInfo.phone,
               bookingInfo.preferredDay || 'Not specified',
-              connectionData.callId
+              connectionData.callId,
+              discoveryData
             );
             webhookSent = true;
           }
@@ -584,7 +585,8 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
             bookingInfo.email,
             bookingInfo.phone,
             bookingInfo.preferredDay || 'Not specified',
-            connectionData.callId
+            connectionData.callId,
+            discoveryData
           );
           webhookSent = true;
         } catch (webhookError) {
@@ -626,30 +628,6 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
           bookingInfo.preferredDay || 'Call ended early',
           connectionData.callId,
           discoveryData
-        );
-        console.log(`Final data sent for call ${connectionData.callId}`);
-        webhookSent = true;
-      } catch (finalError) {
-        console.error('Error sending final webhook:', finalError.message);
-      if (!webhookSent && connectionData.callId) {
-      try {
-        if (!bookingInfo.name && connectionData?.metadata?.customer_name) {
-          bookingInfo.name = connectionData.metadata.customer_name;
-        }
-        if (!bookingInfo.email && connectionData?.metadata?.customer_email) {
-          bookingInfo.email = connectionData.metadata.customer_email;
-        }
-        if (!bookingInfo.phone && connectionData?.metadata?.phone) {
-          bookingInfo.phone = connectionData.metadata.phone;
-        }
-
-        console.log('Connection closed - sending final webhook data');
-        await sendSchedulingPreference(
-          bookingInfo.name,
-          bookingInfo.email,
-          bookingInfo.phone,
-          bookingInfo.preferredDay || 'Call ended early',
-          connectionData.callId
         );
         console.log(`Final data sent for call ${connectionData.callId}`);
         webhookSent = true;
