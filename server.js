@@ -631,7 +631,7 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
         webhookSent = true;
       } catch (finalError) {
         console.error('Error sending final webhook:', finalError.message);
-      }Sent && connectionData.callId) {
+      if (!webhookSent && connectionData.callId) {
       try {
         if (!bookingInfo.name && connectionData?.metadata?.customer_name) {
           bookingInfo.name = connectionData.metadata.customer_name;
