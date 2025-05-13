@@ -61,15 +61,45 @@ async function updateConversationState(callId, discoveryComplete, preferredDay) 
 }
 
 // Send scheduling data to trigger server webhook endpoint
-async function sendSchedulingPreference(name, email, phone, preferredDay, callId) {
+async function sendSchedulingPreference(name, email, phone, preferredDay, callId, discoveryData = {}) {
   try {
+    // Format discovery data to be more readable
+    const formattedDiscoveryData = {};
+    
+    // Map the discovery questions to the answers
+    const discoveryQuestions = [
+      'How did you hear about us?',
+      'What line of business are you in? What\'s your business model?',
+      'What\'s your main product and typical price point?',
+      'Are you running ads (Meta, Google, TikTok)?',
+      'Are you using a CRM like GoHighLevel?',
+      'What problems are you running into?'
+    ];
+    
+    // Add each question and answer to formatted data
+    Object.entries(discoveryData).forEach(([key, value]) => {
+      // Try to match question number to the actual question
+      if (key.startsWith('question_')) {
+        const questionIndex = parseInt(key.replace('question_', ''));
+        if (!isNaN(questionIndex) && questionIndex >= 0 && questionIndex < discoveryQuestions.length) {
+          // Use the actual question text as the key
+          formattedDiscoveryData[discoveryQuestions[questionIndex]] = value;
+        } else {
+          formattedDiscoveryData[key] = value;
+        }
+      } else {
+        formattedDiscoveryData[key] = value;
+      }
+    });
+    
     const webhookData = {
       name: name || '',
       email: email || '',
       phone: phone || '',
       preferredDay: preferredDay || '',
       call_id: callId || '',
-      schedulingComplete: true
+      schedulingComplete: true,
+      discovery_data: formattedDiscoveryData
     };
     
     console.log('Sending scheduling preference to trigger server:', webhookData);
@@ -244,7 +274,7 @@ wss.on('connection', (ws) => {
 PERSONALITY & TONE:
 - Be friendly, relatable, and casual - like talking to a friend
 - Use contractions and natural speech patterns
-- Sound genuinely enthusiastic about helping them, but not overly excited.
+- Sound genuinely excited about helping them
 - Match their energy and speaking style
 - Sprinkle in casual phrases like "totally", "awesome", "for sure", "definitely"
 
@@ -266,7 +296,6 @@ CONVERSATION FLOW:
    - Are you running any ads right now?
    - Using any CRM systems?
    - What challenges are you facing?
-   - What goals would you like us to help you achieve? (Follow up and qualify leads, answer calls, run ads)
 3. SCHEDULING: Only ask for what DAY works for them
    - "So when would be a good day for us to hop on a call?"
    - Once they mention ANY day, immediately confirm
@@ -370,13 +399,44 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
 
         // Store discovery answers
         if (conversationState === 'discovery') {
-          // Simple heuristic to match user answers to questions
+          // Improved method to match user answers to questions
           const lastBotMessage = conversationHistory[conversationHistory.length - 1];
           if (lastBotMessage && lastBotMessage.role === 'assistant') {
+            
+            // Check which discovery question was asked
             for (let i = 0; i < discoveryQuestions.length; i++) {
               const question = discoveryQuestions[i];
-              if (lastBotMessage.content.toLowerCase().includes(question.toLowerCase().substring(0, 10))) {
+              // Check if bot message contains the beginning of this question
+              if (lastBotMessage.content.toLowerCase().includes(question.toLowerCase().substring(0, 15))) {
+                // Store the answer with question index
                 discoveryData[`question_${i}`] = userMessage;
+                console.log(`Stored answer to question ${i}: ${question}`);
+                
+                // Try to set the variable for the Retell call as well
+                try {
+                  if (parsed.call && parsed.call.call_id) {
+                    const variableKey = `discovery_q${i}`;
+                    const variableData = {
+                      variables: {
+                        [variableKey]: userMessage
+                      }
+                    };
+                    
+                    // Set the variable on the Retell call
+                    axios.post(`https://api.retellai.com/v1/calls/${parsed.call.call_id}/variables`, 
+                      variableData, 
+                      {
+                        headers: {
+                          'Authorization': `Bearer ${process.env.RETELL_API_KEY}`,
+                          'Content-Type': 'application/json'
+                        }
+                      }
+                    ).catch(err => console.error(`Error setting discovery variable ${variableKey}:`, err));
+                  }
+                } catch (varError) {
+                  console.error('Error setting call variable:', varError);
+                }
+                
                 break;
               }
             }
@@ -401,8 +461,10 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
               if (parsed.call && parsed.call.call_id) {
                 await axios.post(`https://api.retellai.com/v1/calls/${parsed.call.call_id}/variables`, {
                   variables: {
-                    preferredDay: bookingInfo.dayName,
-                    schedulingComplete: true
+                    preferredDay: bookingInfo.preferredDay,
+                    schedulingComplete: true,
+                    // Include full discovery data
+                    discovery_data: JSON.stringify(discoveryData)
                   }
                 }, {
                   headers: {
@@ -410,7 +472,7 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
                     'Content-Type': 'application/json'
                   }
                 });
-                console.log('Set Retell call variables for scheduling');
+                console.log('Set Retell call variables for scheduling and discovery data');
               }
             } catch (variableError) {
               console.error('Error setting Retell variables:', variableError);
@@ -423,7 +485,8 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
               bookingInfo.email,
               bookingInfo.phone,
               bookingInfo.preferredDay,
-              connectionData.callId
+              connectionData.callId,
+              discoveryData
             );
             
             // Mark as sent and continue conversation naturally
@@ -555,6 +618,31 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
           bookingInfo.phone = connectionData.metadata.phone;
         }
 
+        console.log('Connection closed - sending final webhook data with discovery info:', discoveryData);
+        await sendSchedulingPreference(
+          bookingInfo.name,
+          bookingInfo.email,
+          bookingInfo.phone,
+          bookingInfo.preferredDay || 'Call ended early',
+          connectionData.callId,
+          discoveryData
+        );
+        console.log(`Final data sent for call ${connectionData.callId}`);
+        webhookSent = true;
+      } catch (finalError) {
+        console.error('Error sending final webhook:', finalError.message);
+      }Sent && connectionData.callId) {
+      try {
+        if (!bookingInfo.name && connectionData?.metadata?.customer_name) {
+          bookingInfo.name = connectionData.metadata.customer_name;
+        }
+        if (!bookingInfo.email && connectionData?.metadata?.customer_email) {
+          bookingInfo.email = connectionData.metadata.customer_email;
+        }
+        if (!bookingInfo.phone && connectionData?.metadata?.phone) {
+          bookingInfo.phone = connectionData.metadata.phone;
+        }
+
         console.log('Connection closed - sending final webhook data');
         await sendSchedulingPreference(
           bookingInfo.name,
@@ -591,6 +679,7 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
       const name = call.metadata?.customer_name || '';
       const phone = call.to_number || '';
       let preferredDay = '';
+      let discoveryData = {};
       
       // Look for preferred day in various locations
       if (call.variables && call.variables.preferredDay) {
@@ -611,9 +700,64 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
         }
       }
       
+      // Extract discovery data from variables, transcript, and custom data
+      if (call.variables) {
+        // Extract discovery-related variables
+        Object.entries(call.variables).forEach(([key, value]) => {
+          if (key.startsWith('discovery_') || key.includes('question_')) {
+            discoveryData[key] = value;
+          }
+        });
+      }
+      
+      // Extract from custom_data if any
+      if (call.custom_data && call.custom_data.discovery_data) {
+        try {
+          const parsedData = typeof call.custom_data.discovery_data === 'string' 
+            ? JSON.parse(call.custom_data.discovery_data)
+            : call.custom_data.discovery_data;
+            
+          discoveryData = { ...discoveryData, ...parsedData };
+        } catch (error) {
+          console.error('Error parsing discovery data from custom_data:', error);
+        }
+      }
+      
+      // If no discovery data found yet, try to extract from transcript
+      if (Object.keys(discoveryData).length === 0 && call.transcript && call.transcript.length > 0) {
+        // Use the discovery questions to match answers in the transcript
+        const discoveryQuestions = [
+          'How did you hear about us?',
+          'What line of business are you in? What\'s your business model?',
+          'What\'s your main product and typical price point?',
+          'Are you running ads (Meta, Google, TikTok)?',
+          'Are you using a CRM like GoHighLevel?',
+          'What problems are you running into?'
+        ];
+        
+        // Find questions and their answers in the transcript
+        call.transcript.forEach((item, index) => {
+          if (item.role === 'assistant') {
+            const botMessage = item.content.toLowerCase();
+            
+            // Try to match with our known discovery questions
+            discoveryQuestions.forEach((question, qIndex) => {
+              // If this bot message contains a discovery question
+              if (botMessage.includes(question.toLowerCase().substring(0, 15))) {
+                // Check if next message is from the user (the answer)
+                if (call.transcript[index + 1] && call.transcript[index + 1].role === 'user') {
+                  const answer = call.transcript[index + 1].content;
+                  discoveryData[`question_${qIndex}`] = answer;
+                }
+              }
+            });
+          }
+        });
+      }
+      
       // Send webhook for call ending events
       if ((event === 'call_ended' || event === 'call_analyzed') && email) {
-        console.log(`Sending webhook for ${event} event`);
+        console.log(`Sending webhook for ${event} event with discovery data:`, discoveryData);
         
         try {
           // Use the trigger server to route the webhook
@@ -624,6 +768,7 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
             preferredDay: preferredDay || 'Not specified',
             call_id: call.call_id,
             call_status: call.call_status,
+            discovery_data: discoveryData,
             schedulingComplete: true
           });
           
