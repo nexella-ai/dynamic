@@ -8,6 +8,8 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
+app.use(express.json());
+
 app.get('/', (req, res) => {
   res.send('Nexella WebSocket Server with Calendly scheduling link integration is live!');
 });
@@ -42,64 +44,58 @@ async function getAvailableTimeSlots(date) {
   }
 }
 
-// Update conversation state in trigger server to track discovery completion
-async function updateConversationState(callId, discoveryComplete, selectedSlot) {
+// Update conversation state in trigger server
+async function updateConversationState(callId, discoveryComplete, preferredDay) {
   try {
     const response = await axios.post(`${process.env.TRIGGER_SERVER_URL}/update-conversation`, {
       call_id: callId,
       discoveryComplete,
-      selectedSlot
+      preferredDay
     });
     console.log(`Updated conversation state for call ${callId}:`, response.data);
     return response.data.success;
   } catch (error) {
-    console.error('Error updating conversation state:', error.message);
+    console.error('Error updating conversation state:', error);
     return false;
   }
 }
 
-// UPDATED: Always send data to n8n, whether scheduling fully completed or not
-async function sendDataToN8n(name, email, phone, preferredDay, callId, discoveryData = {}) {
+// Send scheduling data to trigger server webhook endpoint
+async function sendSchedulingPreference(name, email, phone, preferredDay, callId) {
   try {
-    // Send all collected data to n8n webhook
     const webhookData = {
       name: name || '',
       email: email || '',
       phone: phone || '',
       preferredDay: preferredDay || '',
       call_id: callId || '',
-      discovery_data: discoveryData,
-      timestamp: new Date().toISOString(),
-      call_completed: true // You could set this based on various criteria
+      schedulingComplete: true
     };
     
-    const response = await axios.post(process.env.N8N_WEBHOOK_URL, webhookData, {
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      timeout: 5000 // 5 second timeout
+    console.log('Sending scheduling preference to trigger server:', webhookData);
+    
+    const response = await axios.post(`${process.env.TRIGGER_SERVER_URL}/process-scheduling-preference`, webhookData, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 10000
     });
     
-    console.log('Successfully sent data to n8n:', response.data);
-    return { success: true, response: response.data };
+    console.log('Scheduling preference sent successfully:', response.data);
+    return { success: true, data: response.data };
   } catch (error) {
-    console.error('Error sending data to n8n:', error.message);
+    console.error('Error sending scheduling preference:', error);
     
-    // Retry once if failed
+    // Even if there's an error, try to send directly to n8n webhook
     try {
-      await axios.post(process.env.N8N_WEBHOOK_URL, webhookData, {
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        timeout: 5000
+      console.log('Attempting to send directly to n8n webhook as fallback');
+      const n8nResponse = await axios.post(process.env.N8N_WEBHOOK_URL || 'https://n8n-clp2.onrender.com/webhook/retell-scheduling', webhookData, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 10000
       });
-      console.log('Retry successful - data sent to n8n');
-      return { success: true, message: 'Sent on retry' };
-    } catch (retryError) {
-      console.error('Retry failed:', retryError.message);
-      // Even if it fails, we'll return success to continue the conversation
-      // You can implement a queue system here if needed
-      return { success: false, error: retryError.message };
+      console.log('Successfully sent directly to n8n:', n8nResponse.data);
+      return { success: true, fallback: true };
+    } catch (n8nError) {
+      console.error('Error sending directly to n8n:', n8nError);
+      return { success: false, error: error.message };
     }
   }
 }
@@ -239,7 +235,7 @@ wss.on('connection', (ws) => {
     allQuestionsAsked: false
   };
   
-  // UPDATED: Improved system prompt with name awareness and natural conversation
+  // UPDATED: Improved system prompt with name awareness and simplified scheduling
   let conversationHistory = [
     {
       role: 'system',
@@ -248,8 +244,7 @@ wss.on('connection', (ws) => {
 PERSONALITY & TONE:
 - Be friendly, relatable, and casual - like talking to a friend
 - Use contractions and natural speech patterns
-- Laugh occasionally (use "haha" or "hehe" naturally)
-- Sound genuinely excited about helping them
+- Sound genuinely enthusiastic about helping them, but not overly excited.
 - Match their energy and speaking style
 - Sprinkle in casual phrases like "totally", "awesome", "for sure", "definitely"
 
@@ -271,10 +266,11 @@ CONVERSATION FLOW:
    - Are you running any ads right now?
    - Using any CRM systems?
    - What challenges are you facing?
+   - What goals would you like us to help you achieve? (Follow up and qualify leads, answer calls, run ads)
 3. SCHEDULING: Only ask for what DAY works for them
    - "So when would be a good day for us to hop on a call?"
-   - Once they mention ANY day, say you'll send a scheduling link
-   - Don't ask for specific times - the link handles that
+   - Once they mention ANY day, immediately confirm
+   - No need to ask for specific times - just get the day!
 
 SCHEDULING APPROACH:
 - When they mention ANY day (today, tomorrow, Monday, next week, etc.), immediately confirm
@@ -304,6 +300,7 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
   let discoveryData = {}; // Store answers to discovery questions
   let collectedContactInfo = false;
   let userHasSpoken = false;
+  let webhookSent = false; // Track if we've sent the webhook
 
   // Send connecting message
   ws.send(JSON.stringify({
@@ -374,7 +371,6 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
         // Store discovery answers
         if (conversationState === 'discovery') {
           // Simple heuristic to match user answers to questions
-          // You could make this more sophisticated
           const lastBotMessage = conversationHistory[conversationHistory.length - 1];
           if (lastBotMessage && lastBotMessage.role === 'assistant') {
             for (let i = 0; i < discoveryQuestions.length; i++) {
@@ -393,37 +389,54 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
           conversationState = 'booking';
         }
         
-        // Handle day preference
-        if (conversationState === 'booking') {
+        // IMPORTANT: Enhanced day preference detection
+        if (conversationState === 'booking' || conversationState === 'discovery') {
           const dayInfo = handleSchedulingPreference(userMessage);
           
-          if (dayInfo) {
+          if (dayInfo && !webhookSent) {
             bookingInfo.preferredDay = dayInfo.dayName;
             
-            // Immediately send data to n8n when we get a day preference
-            const result = await sendDataToN8n(
+            // Alert the Retell agent through custom variables
+            try {
+              if (parsed.call && parsed.call.call_id) {
+                await axios.post(`https://api.retellai.com/v1/calls/${parsed.call.call_id}/variables`, {
+                  variables: {
+                    preferredDay: bookingInfo.dayName,
+                    schedulingComplete: true
+                  }
+                }, {
+                  headers: {
+                    'Authorization': `Bearer ${process.env.RETELL_API_KEY}`,
+                    'Content-Type': 'application/json'
+                  }
+                });
+                console.log('Set Retell call variables for scheduling');
+              }
+            } catch (variableError) {
+              console.error('Error setting Retell variables:', variableError);
+            }
+            
+            // Immediately send data to trigger server when we get a day preference
+            console.log('Sending scheduling preference to trigger server');
+            const result = await sendSchedulingPreference(
               bookingInfo.name,
               bookingInfo.email,
               bookingInfo.phone,
               bookingInfo.preferredDay,
-              connectionData.callId,
-              discoveryData
+              connectionData.callId
             );
             
             // Mark as sent and continue conversation naturally
             bookingInfo.schedulingLinkSent = true;
             conversationState = 'completed';
+            webhookSent = true;
             
-            // Send a natural completion response
-            ws.send(JSON.stringify({
-              content: `Perfect! I'll send you our scheduling link for ${bookingInfo.preferredDay} right after our call. You can pick any time that works for you. Is there anything else you'd like to know about Nexella before we wrap up?`,
-              content_complete: true,
-              actions: [],
-              response_id: parsed.response_id
-            }));
+            // Update conversation state in trigger server
+            if (connectionData.callId) {
+              await updateConversationState(connectionData.callId, true, bookingInfo.preferredDay);
+            }
             
             console.log('Data sent to n8n and conversation marked as completed');
-            return;
           }
         }
 
@@ -478,31 +491,42 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
           actions: [],
           response_id: parsed.response_id
         }));
+        
+        // After sending the response, check if this should be our last message
+        if (conversationState === 'completed' && !webhookSent && botReply.toLowerCase().includes('scheduling')) {
+          // If we're in the completed state and talking about scheduling but haven't sent the webhook yet
+          if (bookingInfo.email) {
+            console.log('Sending final webhook before conversation end');
+            await sendSchedulingPreference(
+              bookingInfo.name,
+              bookingInfo.email,
+              bookingInfo.phone,
+              bookingInfo.preferredDay || 'Not specified',
+              connectionData.callId
+            );
+            webhookSent = true;
+          }
+        }
       }
 
     } catch (error) {
       console.error('Error handling message:', error.message);
       
-      // Always try to send whatever data we have to n8n if an error occurs
-      if (connectionData.callId && bookingInfo.name) {
-        if (!bookingInfo.name && connectionData?.metadata?.customer_name) {
-          bookingInfo.name = connectionData.metadata.customer_name;
+      // Always try to send whatever data we have if an error occurs
+      if (!webhookSent && connectionData.callId && bookingInfo.email) {
+        try {
+          console.log('Sending webhook due to error');
+          await sendSchedulingPreference(
+            bookingInfo.name,
+            bookingInfo.email,
+            bookingInfo.phone,
+            bookingInfo.preferredDay || 'Not specified',
+            connectionData.callId
+          );
+          webhookSent = true;
+        } catch (webhookError) {
+          console.error('Failed to send webhook after error:', webhookError);
         }
-        if (!bookingInfo.email && connectionData?.metadata?.customer_email) {
-          bookingInfo.email = connectionData.metadata.customer_email;
-        }
-        if (!bookingInfo.phone && connectionData?.metadata?.phone) {
-          bookingInfo.phone = connectionData.metadata.phone;
-        }
-
-        await sendDataToN8n(
-          bookingInfo.name,
-          bookingInfo.email,
-          bookingInfo.phone,
-          bookingInfo.preferredDay || 'Not specified',
-          connectionData.callId,
-          discoveryData
-        );
       }
       
       ws.send(JSON.stringify({
@@ -518,8 +542,8 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
     console.log('Connection closed.');
     clearTimeout(autoGreetingTimer); // Clear the timer when connection closes
     
-    // ALWAYS send data to n8n when call ends, regardless of completion status
-    if (connectionData.callId) {
+    // ALWAYS send data to trigger server when call ends, regardless of completion status
+    if (!webhookSent && connectionData.callId) {
       try {
         if (!bookingInfo.name && connectionData?.metadata?.customer_name) {
           bookingInfo.name = connectionData.metadata.customer_name;
@@ -531,17 +555,18 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
           bookingInfo.phone = connectionData.metadata.phone;
         }
 
-        await sendDataToN8n(
+        console.log('Connection closed - sending final webhook data');
+        await sendSchedulingPreference(
           bookingInfo.name,
           bookingInfo.email,
           bookingInfo.phone,
           bookingInfo.preferredDay || 'Call ended early',
-          connectionData.callId,
-          discoveryData
+          connectionData.callId
         );
-        console.log(`Final data sent to n8n for call ${connectionData.callId}`);
+        console.log(`Final data sent for call ${connectionData.callId}`);
+        webhookSent = true;
       } catch (finalError) {
-        console.error('Error sending final data to n8n:', finalError.message);
+        console.error('Error sending final webhook:', finalError.message);
       }
       
       // Clean up
@@ -561,15 +586,55 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
     if (call && call.call_id) {
       console.log(`Call ID: ${call.call_id}, Status: ${call.call_status}`);
       
-      // Handle different webhook events
-      if (event === 'call_ended') {
-        // Clean up any stored data
-        activeCallsMetadata.delete(call.call_id);
-        console.log(`Call ${call.call_id} ended, cleaned up metadata`);
-        
-        // You could implement additional webhook handling here
-        // For example, final data verification or status updates
+      // Extract important call information
+      const email = call.metadata?.customer_email || '';
+      const name = call.metadata?.customer_name || '';
+      const phone = call.to_number || '';
+      let preferredDay = '';
+      
+      // Look for preferred day in various locations
+      if (call.variables && call.variables.preferredDay) {
+        preferredDay = call.variables.preferredDay;
+      } else if (call.custom_data && call.custom_data.preferredDay) {
+        preferredDay = call.custom_data.preferredDay;
+      } else if (call.analysis && call.analysis.custom_data) {
+        try {
+          const customData = typeof call.analysis.custom_data === 'string'
+            ? JSON.parse(call.analysis.custom_data)
+            : call.analysis.custom_data;
+            
+          if (customData.preferredDay) {
+            preferredDay = customData.preferredDay;
+          }
+        } catch (error) {
+          console.error('Error parsing custom data:', error);
+        }
       }
+      
+      // Send webhook for call ending events
+      if ((event === 'call_ended' || event === 'call_analyzed') && email) {
+        console.log(`Sending webhook for ${event} event`);
+        
+        try {
+          // Use the trigger server to route the webhook
+          await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, {
+            name,
+            email,
+            phone,
+            preferredDay: preferredDay || 'Not specified',
+            call_id: call.call_id,
+            call_status: call.call_status,
+            schedulingComplete: true
+          });
+          
+          console.log(`Successfully sent webhook for ${event}`);
+        } catch (error) {
+          console.error(`Error sending webhook for ${event}:`, error);
+        }
+      }
+      
+      // Clean up any stored data
+      activeCallsMetadata.delete(call.call_id);
     }
     
     res.status(200).json({ success: true });
