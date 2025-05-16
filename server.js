@@ -60,7 +60,7 @@ async function updateConversationState(callId, discoveryComplete, preferredDay) 
   }
 }
 
-// Send scheduling data to trigger server webhook endpoint
+// IMPROVED: Send scheduling data to trigger server webhook endpoint with better error handling
 async function sendSchedulingPreference(name, email, phone, preferredDay, callId, discoveryData = {}) {
   try {
     // Format discovery data to be more readable
@@ -92,6 +92,30 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       }
     });
     
+    // IMPORTANT FIX: Ensure we have the metadata from call ID if available
+    if (callId && activeCallsMetadata.has(callId) && (!email || !name || !phone)) {
+      const callMetadata = activeCallsMetadata.get(callId);
+      if (callMetadata) {
+        if (!email && callMetadata.customer_email) email = callMetadata.customer_email;
+        if (!name && callMetadata.customer_name) name = callMetadata.customer_name;
+        if (!phone) {
+          phone = callMetadata.phone || callMetadata.to_number;
+        }
+      }
+      console.log(`Retrieved metadata from call ID ${callId}: ${email}, ${name}, ${phone}`);
+    }
+    
+    // Add fallback for missing email
+    if (!email || email.trim() === '') {
+      console.log('WARNING: Email is empty, using fallback email');
+      email = 'jadenlugoco@gmail.com'; // Fallback to ensure data gets processed
+    }
+    
+    // Ensure phone number is formatted properly with leading +
+    if (phone && !phone.startsWith('+')) {
+      phone = '+1' + phone.replace(/[^0-9]/g, '');
+    }
+    
     const webhookData = {
       name: name || '',
       email: email || '',
@@ -102,9 +126,9 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       discovery_data: formattedDiscoveryData
     };
     
-    console.log('Sending scheduling preference to trigger server:', webhookData);
+    console.log('Sending scheduling preference to trigger server:', JSON.stringify(webhookData, null, 2));
     
-    const response = await axios.post(`${process.env.TRIGGER_SERVER_URL}/process-scheduling-preference`, webhookData, {
+    const response = await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, webhookData, {
       headers: { 'Content-Type': 'application/json' },
       timeout: 10000
     });
@@ -117,6 +141,16 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     // Even if there's an error, try to send directly to n8n webhook
     try {
       console.log('Attempting to send directly to n8n webhook as fallback');
+      const webhookData = {
+        name: name || '',
+        email: email || 'jadenlugoco@gmail.com', // Ensure fallback email here too
+        phone: phone || '',
+        preferredDay: preferredDay || '',
+        call_id: callId || '',
+        schedulingComplete: true,
+        discovery_data: formattedDiscoveryData || {}
+      };
+      
       const n8nResponse = await axios.post(process.env.N8N_WEBHOOK_URL || 'https://n8n-clp2.onrender.com/webhook/retell-scheduling', webhookData, {
         headers: { 'Content-Type': 'application/json' },
         timeout: 10000
@@ -130,7 +164,54 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
   }
 }
 
-// Function to handle scheduling preferences with simplified flow
+// IMPROVED: Better detection of discovery questions being asked and answered
+function trackDiscoveryQuestions(botMessage, discoveryProgress, discoveryQuestions) {
+  if (!botMessage) return false;
+  
+  const botMessageLower = botMessage.toLowerCase();
+  
+  // Key phrases to detect in the bot's message that indicate specific discovery questions
+  const keyPhrases = [
+    ["hear about us", "find us", "discover us", "found us", "discovered nexella"], // How did you hear about us
+    ["business", "company", "industry", "what do you do", "line of business", "business model"], // What line of business are you in
+    ["product", "service", "offer", "price point", "main product", "typical price"], // What's your main product
+    ["ads", "advertising", "marketing", "meta", "google", "tiktok", "running ads"], // Are you running ads
+    ["crm", "gohighlevel", "management system", "customer relationship", "using any crm"], // Are you using a CRM
+    ["problems", "challenges", "issues", "pain points", "difficulties", "running into", "what problems"] // What problems are you facing
+  ];
+  
+  // Check each question's key phrases
+  keyPhrases.forEach((phrases, index) => {
+    if (phrases.some(phrase => botMessageLower.includes(phrase))) {
+      discoveryProgress.questionsAsked.add(index);
+      console.log(`Detected question ${index} was asked: ${discoveryQuestions[index]}`);
+    }
+  });
+  
+  // Only consider discovery complete if we have asked at least 5 questions AND 
+  // there's a scheduling-related phrase OR all 6 questions have been asked
+  const minimumQuestionsAsked = 5;
+  const schedulingPhrases = ["schedule", "book a call", "day of the week", "what day works", "good time", "availability"];
+  
+  const hasSchedulingPhrase = schedulingPhrases.some(phrase => botMessageLower.includes(phrase));
+  const hasEnoughQuestions = discoveryProgress.questionsAsked.size >= minimumQuestionsAsked;
+  const hasAllQuestions = discoveryProgress.questionsAsked.size >= discoveryQuestions.length;
+  
+  // Log the progress for debugging
+  console.log(`Question progress: ${discoveryProgress.questionsAsked.size}/${discoveryQuestions.length}, Scheduling phrase: ${hasSchedulingPhrase}`);
+  
+  // Consider discovery complete when we have enough questions OR all questions
+  const discoveryComplete = (hasEnoughQuestions && hasSchedulingPhrase) || hasAllQuestions;
+  
+  if (discoveryComplete) {
+    console.log('Discovery process considered complete!');
+  }
+  
+  discoveryProgress.allQuestionsAsked = discoveryComplete;
+  return discoveryComplete;
+}
+
+// IMPROVED: Better detection of scheduling preferences
 function handleSchedulingPreference(userMessage) {
   // Extract day of week with better handling for various formats
   const dayMatch = userMessage.match(/monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today/i);
@@ -199,45 +280,6 @@ function handleSchedulingPreference(userMessage) {
   return null;
 }
 
-// Improved function to detect when all discovery questions have been asked
-function trackDiscoveryQuestions(botMessage, discoveryProgress, discoveryQuestions) {
-  if (!botMessage) return false;
-  
-  const botMessageLower = botMessage.toLowerCase();
-  
-  // Key phrases to detect in the bot's message that indicate specific discovery questions
-  const keyPhrases = [
-    ["hear about us", "find us", "discover us"], // How did you hear about us
-    ["business", "company", "industry", "what do you do"], // What line of business are you in
-    ["product", "service", "offer", "price point"], // What's your main product
-    ["ads", "advertising", "marketing", "meta", "google", "tiktok"], // Are you running ads
-    ["crm", "gohighlevel", "management system", "customer relationship"], // Are you using a CRM
-    ["problems", "challenges", "issues", "pain points", "difficulties"] // What problems are you facing
-  ];
-  
-  // Check each question's key phrases
-  keyPhrases.forEach((phrases, index) => {
-    if (phrases.some(phrase => botMessageLower.includes(phrase))) {
-      discoveryProgress.questionsAsked.add(index);
-    }
-  });
-  
-  // Check if we've moved to scheduling questions
-  if (botMessageLower.includes("schedule") || 
-      botMessageLower.includes("book a call") || 
-      botMessageLower.includes("day of the week") ||
-      botMessageLower.includes("what day works")) {
-    discoveryProgress.allQuestionsAsked = true;
-    return true;
-  }
-  
-  // Check if all questions have been asked
-  const allAsked = discoveryProgress.questionsAsked.size >= discoveryQuestions.length;
-  discoveryProgress.allQuestionsAsked = allAsked;
-  
-  return allAsked;
-}
-
 wss.on('connection', (ws) => {
   console.log('Retell connected via WebSocket.');
   
@@ -280,28 +322,30 @@ PERSONALITY & TONE:
 
 KEY REMINDERS:
 - We ALREADY have their name and email from their typeform submission
-- Address them by name early in the conversation
+- Address them by name early in the conversation if you know it
 - You don't need to ask for their email again
 - Be conversational, not checklist-like
 - Ask ONE question at a time
 - Wait for answers before moving forward
 - Show genuine interest in their responses
 
-CONVERSATION FLOW:
-1. INTRODUCTION: "Hi [Name]! This is Sarah from Nexella."
-2. DISCOVERY (ask naturally, not like an interview):
-   - How did you discover us?
-   - What's your business all about?
-   - What's your main product/service?
-   - Are you running any ads right now?
-   - Using any CRM systems?
-   - What challenges are you facing?
-3. SCHEDULING: Only ask for what DAY works for them
-   - "So when would be a good day for us to hop on a call?"
-   - Once they mention ANY day, immediately confirm
-   - No need to ask for specific times - just get the day!
+IMPORTANT ABOUT DISCOVERY:
+- You MUST ask ALL SIX discovery questions in order before moving to scheduling
+- Do not skip any questions or move to scheduling until all 6 have been asked
+- Make the questions feel conversational, not like a survey
+- Be genuinely interested in their answers
+
+DISCOVERY QUESTIONS (ask ALL of these IN ORDER):
+1. "How did you hear about Nexella?" or "How did you find us?"
+2. "What line of business are you in? What's your business model like?"
+3. "What's your main product or service? What's a typical price point?"
+4. "Are you running any ads right now - like on Meta, Google, or TikTok?"
+5. "Are you using any CRM system like GoHighLevel?"
+6. "What specific problems are you running into that we might be able to help with?"
 
 SCHEDULING APPROACH:
+- ONLY after asking ALL discovery questions, ask for what DAY works for a call
+- Say something like: "Great! Let's schedule a call to discuss how we can help. What day would work best for you?"
 - When they mention ANY day (today, tomorrow, Monday, next week, etc.), immediately confirm
 - Say something like: "Perfect! I'll send you a scheduling link for [day] and you can pick whatever time works best"
 - Emphasize they already have an account/email with us
@@ -312,7 +356,7 @@ NATURAL RESPONSES:
 - If they say "next week": "Awesome, next week it is! I'll send you a scheduling link and you can pick any day/time that works."
 - If they're vague: "No worries! I'll send you our scheduling link and you can pick whatever day and time works best for you."
 
-Remember: Your goal is to have a natural, friendly conversation that leads to sending them a scheduling link. Keep it light, casual, and make them feel comfortable!`
+Remember: You MUST ask ALL SIX discovery questions before scheduling. Your goal is to have a natural, friendly conversation that leads to sending them a scheduling link. Keep it light, casual, and make them feel comfortable!`
     }
   ];
 
@@ -359,14 +403,14 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
       
       const parsed = JSON.parse(data);
       
-      // Check if this is a call initialization message (contains call object with metadata)
+      // IMPROVED: Better metadata handling for call information
       if (parsed.call && parsed.call.call_id && !connectionData.callId) {
         connectionData.callId = parsed.call.call_id;
         
         // Store call metadata if available
         if (parsed.call.metadata) {
           connectionData.metadata = parsed.call.metadata;
-          console.log('Call metadata received:', connectionData.metadata);
+          console.log('Call metadata received:', JSON.stringify(connectionData.metadata, null, 2));
           
           // Extract customer info from metadata if available
           if (connectionData.metadata.customer_name) {
@@ -374,19 +418,31 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
             collectedContactInfo = true;
             
             // Update system prompt with the user's name
-            conversationHistory[0].content = conversationHistory[0].content.replace(/\[Name\]/g, bookingInfo.name);
+            if (bookingInfo.name && bookingInfo.name.trim() !== '') {
+              conversationHistory[0].content = conversationHistory[0].content.replace(/\[Name\]/g, bookingInfo.name);
+            }
           }
           if (connectionData.metadata.customer_email) {
             bookingInfo.email = connectionData.metadata.customer_email;
             collectedContactInfo = true;
           }
-          if (connectionData.metadata.phone) {
-            bookingInfo.phone = connectionData.metadata.phone;
+          if (connectionData.metadata.to_number) {
+            bookingInfo.phone = connectionData.metadata.to_number;
+            collectedContactInfo = true;
+          } else if (parsed.call.to_number) {
+            bookingInfo.phone = parsed.call.to_number;
             collectedContactInfo = true;
           }
           
           // Store this call's metadata globally
-          activeCallsMetadata.set(connectionData.callId, connectionData.metadata);
+          activeCallsMetadata.set(connectionData.callId, parsed.call.metadata);
+          
+          // Log what we've captured
+          console.log(`Captured customer info for call ${connectionData.callId}:`, {
+            name: bookingInfo.name,
+            email: bookingInfo.email,
+            phone: bookingInfo.phone
+          });
         }
       }
 
@@ -397,17 +453,19 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
         console.log('User said:', userMessage);
         console.log('Current conversation state:', conversationState);
 
-        // Store discovery answers
+        // IMPROVED: Better discovery answer tracking
         if (conversationState === 'discovery') {
-          // Improved method to match user answers to questions
+          // Match user answers to questions
           const lastBotMessage = conversationHistory[conversationHistory.length - 1];
           if (lastBotMessage && lastBotMessage.role === 'assistant') {
             
             // Check which discovery question was asked
             for (let i = 0; i < discoveryQuestions.length; i++) {
               const question = discoveryQuestions[i];
-              // Check if bot message contains the beginning of this question
-              if (lastBotMessage.content.toLowerCase().includes(question.toLowerCase().substring(0, 15))) {
+              const shortQuestionStart = question.toLowerCase().substring(0, 15);
+              
+              // Check if bot message contains this question
+              if (lastBotMessage.content.toLowerCase().includes(shortQuestionStart)) {
                 // Store the answer with question index
                 discoveryData[`question_${i}`] = userMessage;
                 console.log(`Stored answer to question ${i}: ${question}`);
@@ -446,11 +504,15 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
         // Check if user wants to schedule
         if (userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss)\b/)) {
           console.log('User requested scheduling');
-          conversationState = 'booking';
+          // Only move to booking if we've completed discovery
+          if (discoveryProgress.allQuestionsAsked) {
+            conversationState = 'booking';
+          }
         }
         
-        // IMPORTANT: Enhanced day preference detection
-        if (conversationState === 'booking' || conversationState === 'discovery') {
+        // IMPROVED: Better day preference detection
+        if (conversationState === 'booking' || 
+           (conversationState === 'discovery' && discoveryProgress.allQuestionsAsked)) {
           const dayInfo = handleSchedulingPreference(userMessage);
           
           if (dayInfo && !webhookSent) {
@@ -479,7 +541,7 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
             }
             
             // Immediately send data to trigger server when we get a day preference
-            console.log('Sending scheduling preference to trigger server');
+            console.log('Sending scheduling preference to trigger server with all collected data');
             const result = await sendSchedulingPreference(
               bookingInfo.name,
               bookingInfo.email,
@@ -519,7 +581,7 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
               Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
               'Content-Type': 'application/json'
             },
-            timeout: 5000
+            timeout: 8000 // Increased timeout for more reliable responses
           }
         );
 
@@ -558,12 +620,12 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
         // After sending the response, check if this should be our last message
         if (conversationState === 'completed' && !webhookSent && botReply.toLowerCase().includes('scheduling')) {
           // If we're in the completed state and talking about scheduling but haven't sent the webhook yet
-          if (bookingInfo.email) {
+          if (bookingInfo.email || connectionData.metadata?.customer_email) {
             console.log('Sending final webhook before conversation end');
             await sendSchedulingPreference(
-              bookingInfo.name,
-              bookingInfo.email,
-              bookingInfo.phone,
+              bookingInfo.name || connectionData.metadata?.customer_name || '',
+              bookingInfo.email || connectionData.metadata?.customer_email || '',
+              bookingInfo.phone || connectionData.metadata?.to_number || '',
               bookingInfo.preferredDay || 'Not specified',
               connectionData.callId,
               discoveryData
@@ -577,13 +639,13 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
       console.error('Error handling message:', error.message);
       
       // Always try to send whatever data we have if an error occurs
-      if (!webhookSent && connectionData.callId && bookingInfo.email) {
+      if (!webhookSent && connectionData.callId && (bookingInfo.email || connectionData.metadata?.customer_email)) {
         try {
           console.log('Sending webhook due to error');
           await sendSchedulingPreference(
-            bookingInfo.name,
-            bookingInfo.email,
-            bookingInfo.phone,
+            bookingInfo.name || connectionData.metadata?.customer_name || '',
+            bookingInfo.email || connectionData.metadata?.customer_email || '',
+            bookingInfo.phone || connectionData.metadata?.to_number || '',
             bookingInfo.preferredDay || 'Not specified',
             connectionData.callId,
             discoveryData
@@ -594,6 +656,7 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
         }
       }
       
+      // Send a recovery message
       ws.send(JSON.stringify({
         content: "Haha oops, I missed that. Could you say it one more time?",
         content_complete: true,
@@ -610,21 +673,22 @@ Remember: Your goal is to have a natural, friendly conversation that leads to se
     // ALWAYS send data to trigger server when call ends, regardless of completion status
     if (!webhookSent && connectionData.callId) {
       try {
+        // Get any metadata we can find for this call
         if (!bookingInfo.name && connectionData?.metadata?.customer_name) {
           bookingInfo.name = connectionData.metadata.customer_name;
         }
         if (!bookingInfo.email && connectionData?.metadata?.customer_email) {
           bookingInfo.email = connectionData.metadata.customer_email;
         }
-        if (!bookingInfo.phone && connectionData?.metadata?.phone) {
-          bookingInfo.phone = connectionData.metadata.phone;
+        if (!bookingInfo.phone && connectionData?.metadata?.to_number) {
+          bookingInfo.phone = connectionData.metadata.to_number;
         }
 
         console.log('Connection closed - sending final webhook data with discovery info:', discoveryData);
         await sendSchedulingPreference(
-          bookingInfo.name,
-          bookingInfo.email,
-          bookingInfo.phone,
+          bookingInfo.name || '',
+          bookingInfo.email || '',
+          bookingInfo.phone || '',
           bookingInfo.preferredDay || 'Call ended early',
           connectionData.callId,
           discoveryData
