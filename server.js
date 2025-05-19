@@ -60,34 +60,46 @@ async function updateConversationState(callId, discoveryComplete, preferredDay) 
   }
 }
 
-// IMPROVED: Send scheduling data to trigger server webhook endpoint with better error handling
+// IMPROVED: Send scheduling data to trigger server webhook endpoint with better field mapping
 async function sendSchedulingPreference(name, email, phone, preferredDay, callId, discoveryData = {}) {
   try {
-    // Format discovery data to be more readable
+    // Format discovery data to exactly match Airtable field names
     const formattedDiscoveryData = {};
     
-    // Map the discovery questions to the answers
-    const discoveryQuestions = [
-      'How did you hear about us?',
-      'What line of business are you in? What\'s your business model?',
-      'What\'s your main product and typical price point?',
-      'Are you running ads (Meta, Google, TikTok)?',
-      'Are you using a CRM like GoHighLevel?',
-      'What problems are you running into?'
-    ];
+    // Map the discovery questions to the EXACT Airtable field names
+    const fieldMappings = {
+      'question_0': 'How did you hear about us',
+      'question_1': 'Business/Industry',
+      'question_2': 'Main product',
+      'question_3': 'Running ads',
+      'question_4': 'Using CRM',
+      'question_5': 'Pain points'
+    };
     
-    // Add each question and answer to formatted data
+    // Process all discovery data with exact field names
     Object.entries(discoveryData).forEach(([key, value]) => {
-      // Try to match question number to the actual question
       if (key.startsWith('question_')) {
-        const questionIndex = parseInt(key.replace('question_', ''));
-        if (!isNaN(questionIndex) && questionIndex >= 0 && questionIndex < discoveryQuestions.length) {
-          // Use the actual question text as the key
-          formattedDiscoveryData[discoveryQuestions[questionIndex]] = value;
+        // Map question_X to the exact Airtable field name
+        if (fieldMappings[key]) {
+          formattedDiscoveryData[fieldMappings[key]] = value;
         } else {
+          // Fallback if question key not found
           formattedDiscoveryData[key] = value;
         }
+      } else if (key.includes('hear about us')) {
+        formattedDiscoveryData['How did you hear about us'] = value;
+      } else if (key.includes('business') || key.includes('industry')) {
+        formattedDiscoveryData['Business/Industry'] = value;
+      } else if (key.includes('product')) {
+        formattedDiscoveryData['Main product'] = value;
+      } else if (key.includes('ads') || key.includes('advertising')) {
+        formattedDiscoveryData['Running ads'] = value;
+      } else if (key.includes('crm')) {
+        formattedDiscoveryData['Using CRM'] = value;
+      } else if (key.includes('pain') || key.includes('problem')) {
+        formattedDiscoveryData['Pain points'] = value;
       } else {
+        // Keep original keys for anything not matched
         formattedDiscoveryData[key] = value;
       }
     });
@@ -126,7 +138,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       discovery_data: formattedDiscoveryData
     };
     
-    console.log('Sending scheduling preference to trigger server:', JSON.stringify(webhookData, null, 2));
+    console.log('Sending scheduling preference to trigger server with EXACTLY MAPPED field names:', JSON.stringify(webhookData, null, 2));
     
     const response = await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, webhookData, {
       headers: { 'Content-Type': 'application/json' },
@@ -141,6 +153,9 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     // Even if there's an error, try to send directly to n8n webhook
     try {
       console.log('Attempting to send directly to n8n webhook as fallback');
+      const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL || 'https://n8n-clp2.onrender.com/webhook/retell-scheduling';
+      console.log(`Using n8n webhook URL: ${n8nWebhookUrl}`);
+      
       const webhookData = {
         name: name || '',
         email: email || 'jadenlugoco@gmail.com', // Ensure fallback email here too
@@ -151,7 +166,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
         discovery_data: formattedDiscoveryData || {}
       };
       
-      const n8nResponse = await axios.post(process.env.N8N_WEBHOOK_URL || 'https://n8n-clp2.onrender.com/webhook/retell-scheduling', webhookData, {
+      const n8nResponse = await axios.post(n8nWebhookUrl, webhookData, {
         headers: { 'Content-Type': 'application/json' },
         timeout: 10000
       });
@@ -291,14 +306,14 @@ wss.on('connection', (ws) => {
     isAppointmentConfirmation: false
   };
   
-  // Define discovery questions as a trackable list
+  // Define discovery questions as a trackable list - MODIFIED to match Airtable field names
   const discoveryQuestions = [
     'How did you hear about us?',
-    'What line of business are you in? What\'s your business model?',
-    'What\'s your main product and typical price point?',
-    'Are you running ads (Meta, Google, TikTok)?',
-    'Are you using a CRM like GoHighLevel?',
-    'What problems are you running into?'
+    'What industry or business are you in?',
+    'What\'s your main product?',
+    'Are you running ads right now?',
+    'Are you using a CRM system?',
+    'What pain points are you experiencing?'
   ];
   
   let discoveryProgress = {
@@ -307,7 +322,7 @@ wss.on('connection', (ws) => {
     allQuestionsAsked: false
   };
   
-  // UPDATED: Improved system prompt with name awareness and simplified scheduling
+  // UPDATED: Improved system prompt with exact question wording to match Airtable fields
   let conversationHistory = [
     {
       role: 'system',
@@ -335,13 +350,13 @@ IMPORTANT ABOUT DISCOVERY:
 - Make the questions feel conversational, not like a survey
 - Be genuinely interested in their answers
 
-DISCOVERY QUESTIONS (ask ALL of these IN ORDER):
-1. "How did you hear about Nexella?" or "How did you find us?"
-2. "So, tell me a little bit about your business, what's your business model like?"
-3. "What's your main product or service and what's your typical price point per client?"
-4. "Are you running any ads right now - like on Meta, Google, or TikTok?"
-5. "Are you using any CRM system like GoHighLevel, HubSpot, or SalesForce?"
-6. "What specific problems are you running into that we might be able to help with?"
+DISCOVERY QUESTIONS (ask ALL of these IN ORDER using EXACTLY these questions):
+1. "How did you hear about us?" (Maps to field: "How did you hear about us")
+2. "What industry or business are you in?" (Maps to field: "Business/Industry")
+3. "What's your main product?" (Maps to field: "Main product")
+4. "Are you running ads right now?" (Maps to field: "Running ads")
+5. "Are you using a CRM system?" (Maps to field: "Using CRM")
+6. "What pain points are you experiencing?" (Maps to field: "Pain points")
 
 SCHEDULING APPROACH:
 - ONLY after asking ALL discovery questions, ask for what DAY works for a call
@@ -356,7 +371,7 @@ NATURAL RESPONSES:
 - If they say "next week": "Awesome, next week it is! I'll send you a scheduling link and you can pick any day/time that works."
 - If they're vague: "No worries! I'll send you our scheduling link and you can pick whatever day and time works best for you."
 
-Remember: You MUST ask ALL SIX discovery questions before scheduling. Your goal is to have a natural, friendly conversation that leads to sending them a scheduling link. Keep it light, casual, and make them feel comfortable!`
+Remember: You MUST ask ALL SIX discovery questions before scheduling, using the EXACT wording indicated above. Your goal is to have a natural, friendly conversation that leads to sending them a scheduling link. Keep it light, casual, and make them feel comfortable!`
     }
   ];
 
@@ -728,7 +743,7 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
         preferredDay = call.variables.preferredDay;
       } else if (call.custom_data && call.custom_data.preferredDay) {
         preferredDay = call.custom_data.preferredDay;
-      } else if (call.analysis && call.analysis.custom_data) {
+        } else if (call.analysis && call.analysis.custom_data) {
         try {
           const customData = typeof call.analysis.custom_data === 'string'
             ? JSON.parse(call.analysis.custom_data)
@@ -770,11 +785,11 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
         // Use the discovery questions to match answers in the transcript
         const discoveryQuestions = [
           'How did you hear about us?',
-          'What line of business are you in? What\'s your business model?',
-          'What\'s your main product and typical price point?',
-          'Are you running ads (Meta, Google, TikTok)?',
-          'Are you using a CRM like GoHighLevel?',
-          'What problems are you running into?'
+          'What industry or business are you in?',
+          'What\'s your main product?',
+          'Are you running ads right now?',
+          'Are you using a CRM system?',
+          'What pain points are you experiencing?'
         ];
         
         // Find questions and their answers in the transcript
