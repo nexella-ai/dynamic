@@ -337,10 +337,10 @@ IMPORTANT ABOUT DISCOVERY:
 
 DISCOVERY QUESTIONS (ask ALL of these IN ORDER):
 1. "How did you hear about Nexella?" or "How did you find us?"
-2. "What line of business are you in? What's your business model like?"
-3. "What's your main product or service? What's a typical price point?"
+2. "So, tell me a little bit about your business, what's your business model like?"
+3. "What's your main product or service and what's your typical price point per client?"
 4. "Are you running any ads right now - like on Meta, Google, or TikTok?"
-5. "Are you using any CRM system like GoHighLevel?"
+5. "Are you using any CRM system like GoHighLevel, HubSpot, or SalesForce?"
 6. "What specific problems are you running into that we might be able to help with?"
 
 SCHEDULING APPROACH:
