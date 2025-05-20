@@ -355,7 +355,7 @@ IMPORTANT ABOUT DISCOVERY:
 - You must ask all six discovery questions in order before scheduling
 - Keep each question short and direct
 - Add a brief pause after each question by ending with a period (.)
-- Listen to their answers and acknowledge them with a brief response
+- Listen to their answers and acknowledge them with a response based on their answer
 
 DISCOVERY QUESTIONS (ask ALL of these IN ORDER):
 1. "How did you hear about us?" (Maps to field: "How did you hear about us")
@@ -408,7 +408,7 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
   const autoGreetingTimer = setTimeout(() => {
     if (!userHasSpoken) {
       ws.send(JSON.stringify({
-        content: "Hi there. This is Sarah from Nexella AI. How are you doing today?",
+        content: "Hi there! This is Sarah from Nexella AI. How are you doing today?",
         content_complete: true,
         actions: [],
         response_id: 1
@@ -595,8 +595,7 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
           {
             model: 'gpt-4o',
             messages: conversationHistory,
-            temperature: 0.5, // Lower temperature for more predictable pacing
-            max_tokens: 150   // Limit response length to avoid rapid delivery of long messages
+            temperature: 0.7 // Increased for more natural responses
           },
           {
             headers: {
@@ -607,16 +606,7 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
           }
         );
 
-        // Get and process the bot's reply
-        let botReply = openaiResponse.data.choices[0].message.content || "I missed that. Could you say that again?";
-        
-        // Add periods between sentences to help with pacing, if needed
-        botReply = botReply.replace(/([.!?])\s+/g, '$1 '); // Ensure proper spacing after punctuation
-        
-        // Replace commas with periods in certain contexts to create more pauses
-        if (botReply.length > 50) {
-          botReply = botReply.replace(/,\s+(and|but|so)\s+/g, '. $1 ');
-        }
+        const botReply = openaiResponse.data.choices[0].message.content || "Haha, could you tell me a bit more about that?";
 
         // Add bot reply to conversation history
         conversationHistory.push({ role: 'assistant', content: botReply });
@@ -689,7 +679,7 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
       
       // Send a recovery message
       ws.send(JSON.stringify({
-        content: "I'm sorry. I missed what you said. Could you please repeat that?",
+        content: "Haha oops, I missed that. Could you say it one more time?",
         content_complete: true,
         actions: [],
         response_id: 9999
