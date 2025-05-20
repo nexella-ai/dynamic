@@ -60,46 +60,34 @@ async function updateConversationState(callId, discoveryComplete, preferredDay) 
   }
 }
 
-// IMPROVED: Send scheduling data to trigger server webhook endpoint with better field mapping
+// IMPROVED: Send scheduling data to trigger server webhook endpoint with better error handling
 async function sendSchedulingPreference(name, email, phone, preferredDay, callId, discoveryData = {}) {
   try {
-    // Format discovery data to exactly match Airtable field names
+    // Format discovery data to be more readable
     const formattedDiscoveryData = {};
     
-    // Map the discovery questions to the EXACT Airtable field names
-    const fieldMappings = {
-      'question_0': 'How did you hear about us',
-      'question_1': 'Business/Industry',
-      'question_2': 'Main product',
-      'question_3': 'Running ads',
-      'question_4': 'Using CRM',
-      'question_5': 'Pain points'
-    };
+    // Map the discovery questions to the answers
+    const discoveryQuestions = [
+      'How did you hear about us?',
+      'What line of business are you in? What\'s your business model?',
+      'What\'s your main product and typical price point?',
+      'Are you running ads (Meta, Google, TikTok)?',
+      'Are you using a CRM like GoHighLevel?',
+      'What problems are you running into?'
+    ];
     
-    // Process all discovery data with exact field names
+    // Add each question and answer to formatted data
     Object.entries(discoveryData).forEach(([key, value]) => {
+      // Try to match question number to the actual question
       if (key.startsWith('question_')) {
-        // Map question_X to the exact Airtable field name
-        if (fieldMappings[key]) {
-          formattedDiscoveryData[fieldMappings[key]] = value;
+        const questionIndex = parseInt(key.replace('question_', ''));
+        if (!isNaN(questionIndex) && questionIndex >= 0 && questionIndex < discoveryQuestions.length) {
+          // Use the actual question text as the key
+          formattedDiscoveryData[discoveryQuestions[questionIndex]] = value;
         } else {
-          // Fallback if question key not found
           formattedDiscoveryData[key] = value;
         }
-      } else if (key.includes('hear about us')) {
-        formattedDiscoveryData['How did you hear about us'] = value;
-      } else if (key.includes('business') || key.includes('industry')) {
-        formattedDiscoveryData['Business/Industry'] = value;
-      } else if (key.includes('product')) {
-        formattedDiscoveryData['Main product'] = value;
-      } else if (key.includes('ads') || key.includes('advertising')) {
-        formattedDiscoveryData['Running ads'] = value;
-      } else if (key.includes('crm')) {
-        formattedDiscoveryData['Using CRM'] = value;
-      } else if (key.includes('pain') || key.includes('problem')) {
-        formattedDiscoveryData['Pain points'] = value;
       } else {
-        // Keep original keys for anything not matched
         formattedDiscoveryData[key] = value;
       }
     });
@@ -138,7 +126,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       discovery_data: formattedDiscoveryData
     };
     
-    console.log('Sending scheduling preference to trigger server with EXACTLY MAPPED field names:', JSON.stringify(webhookData, null, 2));
+    console.log('Sending scheduling preference to trigger server:', JSON.stringify(webhookData, null, 2));
     
     const response = await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, webhookData, {
       headers: { 'Content-Type': 'application/json' },
@@ -153,9 +141,6 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     // Even if there's an error, try to send directly to n8n webhook
     try {
       console.log('Attempting to send directly to n8n webhook as fallback');
-      const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL || 'https://n8n-clp2.onrender.com/webhook/retell-scheduling';
-      console.log(`Using n8n webhook URL: ${n8nWebhookUrl}`);
-      
       const webhookData = {
         name: name || '',
         email: email || 'jadenlugoco@gmail.com', // Ensure fallback email here too
@@ -166,7 +151,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
         discovery_data: formattedDiscoveryData || {}
       };
       
-      const n8nResponse = await axios.post(n8nWebhookUrl, webhookData, {
+      const n8nResponse = await axios.post(process.env.N8N_WEBHOOK_URL || 'https://n8n-clp2.onrender.com/webhook/retell-scheduling', webhookData, {
         headers: { 'Content-Type': 'application/json' },
         timeout: 10000
       });
@@ -295,6 +280,439 @@ function handleSchedulingPreference(userMessage) {
   return null;
 }
 
+// NEW: Speech patterns dictionary for natural conversational responses
+const speechPatternsDict = {
+  // Opening phrases
+  openings: [
+    "Hi there! This is Sarah from Nexella.",
+    "Hey! Sarah from Nexella here.",
+    "Hello! It's Sarah with Nexella."
+  ],
+  
+  // Transition phrases
+  transitions: [
+    "So, tell me a bit about",
+    "I'd love to hear more about",
+    "Let's talk about",
+    "Moving on to",
+    "Now I'm curious about"
+  ],
+  
+  // Acknowledgment phrases
+  acknowledgments: [
+    "That makes sense.",
+    "I understand.",
+    "Got it.",
+    "I see what you mean.",
+    "That's really helpful to know."
+  ],
+  
+  // Enthusiasm phrases
+  enthusiasm: [
+    "That's awesome!",
+    "That sounds great!",
+    "I'm excited to hear that!",
+    "That's fantastic!",
+    "Love that!"
+  ],
+  
+  // Scheduling phrases
+  scheduling: [
+    "Let's find a time to chat more about this.",
+    "We should definitely schedule a call to dive deeper.",
+    "I'd love to set up a call to discuss this further.",
+    "Let's get a call on the calendar to talk more."
+  ],
+  
+  // Terms with specific pronunciations (for reference and post-processing)
+  pronunciations: {
+    "Nexella": "Nex-EL-a",
+    "CRM": "C-R-M",
+    "API": "A-P-I",
+    "GoHighLevel": "Go-High-Level",
+    "SaaS": "sass"
+  },
+  
+  // Fallback responses for handling errors
+  fallbacks: [
+    "I'm sorry, I think I missed that. Could you repeat that one more time?",
+    "Sorry about that, I didn't quite catch what you said. Could you say that again?",
+    "Hmm, I think we had a bit of a connection issue. What were you saying?",
+    "I apologize, I think I missed part of that. Could you repeat it?",
+    "Sorry, I didn't catch that. Could you say it again?",
+    "I think there was a bit of interference. Could you repeat that please?"
+  ]
+};
+
+// NEW: Function to enhance speech patterns in the response
+function enhanceSpeechPatterns(responseText) {
+  let enhancedText = responseText;
+  
+  // Simple replacements for common awkward phrases
+  const replacements = {
+    "I would like to": "I'd like to",
+    "I am": "I'm",
+    "You are": "You're",
+    "We are": "We're",
+    "It is": "It's",
+    "Do not": "Don't",
+    "Cannot": "Can't",
+    "Will not": "Won't",
+    "That is": "That's",
+    "What is": "What's",
+    "Here is": "Here's",
+    "There is": "There's",
+    "How is": "How's",
+    "Who is": "Who's",
+    "When is": "When's",
+    "CRM system": "C-R-M system",
+    "Nexella.io": "Nexella",
+    "Meta ads": "Meta ads",
+    "TikTok ads": "TikTok ads",
+    "Nexella AI": "Nexella"
+  };
+  
+  // Apply simple replacements
+  Object.entries(replacements).forEach(([original, replacement]) => {
+    const regex = new RegExp(`\\b${original}\\b`, 'gi');
+    enhancedText = enhancedText.replace(regex, replacement);
+  });
+  
+  // Detect if this is an opening message
+  if (enhancedText.includes("Sarah") && enhancedText.includes("Nexella") && enhancedText.length < 150) {
+    // If it's a generic opening, replace with a more natural one
+    if (enhancedText.match(/\bHi\b|\bHello\b|\bHey\b/i)) {
+      // Pick a random opening
+      const randomOpening = speechPatternsDict.openings[Math.floor(Math.random() * speechPatternsDict.openings.length)];
+      // Replace just the opening part
+      enhancedText = enhancedText.replace(/^(Hi|Hello|Hey).*?(Nexella).{0,20}/i, randomOpening + " ");
+    }
+  }
+  
+  // Add natural transitions if they're missing
+  if (enhancedText.includes("?") && !enhancedText.match(/\bSo\b|\bNow\b|\bAnyway\b|\bBy the way\b/i)) {
+    // Add a natural transition before questions sometimes
+    if (Math.random() < 0.3) { // 30% chance to add transition
+      const questionPattern = /([.!]\s+)([A-Z][^?]*\?)/g;
+      const randomTransition = speechPatternsDict.transitions[Math.floor(Math.random() * speechPatternsDict.transitions.length)];
+      
+      enhancedText = enhancedText.replace(questionPattern, (match, punctuation, question) => {
+        if (question.length > 20) { // Only for substantial questions
+          return punctuation + randomTransition.split(' ').slice(0, 2).join(' ') + ", " + question.charAt(0).toLowerCase() + question.slice(1);
+        }
+        return match;
+      });
+    }
+  }
+  
+  // Improve Nexella pronunciation
+  enhancedText = enhancedText.replace(/\bNexella\b/g, "Nex-ella");
+  
+  // Improve specific technical terms pronunciation
+  enhancedText = enhancedText.replace(/\bCRM\b/g, "C-R-M");
+  enhancedText = enhancedText.replace(/\bGoHighLevel\b/g, "Go High Level");
+  
+  return enhancedText;
+}
+
+// NEW: Function to extract and maintain knowledge from the conversation
+function updateConversationMemory(userMessage, conversationHistory, conversationMemory) {
+  // Initialize memory if not present
+  if (!conversationMemory.entities) {
+    conversationMemory.entities = {
+      business_name: null,
+      product_type: null,
+      business_type: null,
+      price_point: null,
+      pain_points: [],
+      ad_platforms: [],
+      crm_system: null
+    };
+    conversationMemory.speech_patterns = {
+      preferred_name: null,
+      speaking_style: null
+    };
+  }
+  
+  // Extract business name using regex pattern
+  const businessNamePattern = /(?:my|our) (?:business|company|agency|firm)(?: is| called| named)? (?:is |called |named )?([A-Z][A-Za-z0-9\s&'-]+)(?:\.|\,|\s|$)/i;
+  const businessNameMatch = userMessage.match(businessNamePattern);
+  if (businessNameMatch && businessNameMatch[1]) {
+    conversationMemory.entities.business_name = businessNameMatch[1].trim();
+  }
+  
+  // Extract product type
+  const productTypePatterns = [
+    /(?:sell|offer|provide|make|produce) ([^\.]{3,50}?)(?:\.|\,|\s|$)/i,
+    /(?:our|my) (?:main |primary |)(?:product|service) is ([^\.]{3,50}?)(?:\.|\,|\s|$)/i
+  ];
+  
+  for (const pattern of productTypePatterns) {
+    const match = userMessage.match(pattern);
+    if (match && match[1]) {
+      conversationMemory.entities.product_type = match[1].trim();
+      break;
+    }
+  }
+  
+  // Extract business type
+  const businessTypePatterns = [
+    /(?:we are|I am|it's|we're|I'm) (?:a |an |)([^\.]{3,40}?)(?:business|company|agency|firm)/i,
+    /(?:we're|I'm) in the ([^\.]{3,40}?)(?:industry|business|space|market)/i
+  ];
+  
+  for (const pattern of businessTypePatterns) {
+    const match = userMessage.match(pattern);
+    if (match && match[1]) {
+      conversationMemory.entities.business_type = match[1].trim();
+      break;
+    }
+  }
+  
+  // Extract pain points
+  const painPointPatterns = [
+    /(?:problem|issue|challenge|struggle|difficulty) (?:is|with) ([^\.]{5,100}?)(?:\.|\,|\s|$)/i,
+    /(?:having|have) (?:a |an |)(?:problem|issue|challenge|struggle|difficulty) (?:with|regarding) ([^\.]{5,100}?)(?:\.|\,|\s|$)/i
+  ];
+  
+  for (const pattern of painPointPatterns) {
+    const match = userMessage.match(pattern);
+    if (match && match[1]) {
+      const painPoint = match[1].trim();
+      if (!conversationMemory.entities.pain_points.includes(painPoint)) {
+        conversationMemory.entities.pain_points.push(painPoint);
+      }
+      break;
+    }
+  }
+  
+  // Extract preferred name if user corrects or provides it
+  const namePatterns = [
+    /(?:call me|I'm|name is|it's) ([A-Z][a-z]{1,15})/i,
+    /(?:this is|speaking is|'s) ([A-Z][a-z]{1,15})/i
+  ];
+  
+  for (const pattern of namePatterns) {
+    const match = userMessage.match(pattern);
+    if (match && match[1]) {
+      conversationMemory.speech_patterns.preferred_name = match[1].trim();
+      break;
+    }
+  }
+  
+  return conversationMemory;
+}
+
+// NEW: Function to enhance response with memory
+function enhanceResponseWithMemory(responseText, conversationMemory) {
+  let enhancedText = responseText;
+  
+  // Replace generic references with specific memories when relevant
+  if (conversationMemory.entities.business_name) {
+    // Replace generic business references with the actual name occasionally
+    // Only do this for a percentage of occurrences to maintain natural speech
+    const businessReplaceChance = 0.7; // 70% chance to replace
+    
+    if (Math.random() < businessReplaceChance) {
+      const businessName = conversationMemory.entities.business_name;
+      enhancedText = enhancedText.replace(
+        /your business|your company/i, 
+        businessName
+      );
+    }
+  }
+  
+  // Use preferred name if available
+  if (conversationMemory.speech_patterns.preferred_name) {
+    const preferredName = conversationMemory.speech_patterns.preferred_name;
+    // Replace generic "you" with name occasionally for personalization
+    if (Math.random() < 0.3) { // 30% chance
+      enhancedText = enhancedText.replace(
+        /^(Thank you|Great|Awesome|Perfect)/i,
+        `$1, ${preferredName}`
+      );
+    }
+  }
+  
+  // Reference specific product type if available
+  if (conversationMemory.entities.product_type && 
+      enhancedText.includes("product") && 
+      Math.random() < 0.6) { // 60% chance
+    const productType = conversationMemory.entities.product_type;
+    enhancedText = enhancedText.replace(
+      /your product|your service/i,
+      `your ${productType}`
+    );
+  }
+  
+  return enhancedText;
+}
+
+// NEW: Unified AI response generator with consistency checks
+async function generateAIResponse(userMessage, conversationHistory, state) {
+  try {
+    // Add system prompt update based on conversation state
+    let systemPrompt = conversationHistory[0].content;
+    
+    // If we're in discovery, emphasize natural speech for that specific question
+    if (state.conversationState === 'discovery') {
+      const currentQuestionIndex = state.discoveryProgress.currentQuestionIndex || 0;
+      if (currentQuestionIndex < state.discoveryQuestions.length) {
+        const currentQuestion = state.discoveryQuestions[currentQuestionIndex];
+        systemPrompt += `\n\nFOCUS ON THIS QUESTION NOW: "${currentQuestion}"\n` +
+                        `Ask this in a very natural, conversational way. Wait for their answer before moving on.`;
+      }
+    }
+    
+    // If we're in booking, emphasize natural scheduling phrases
+    if (state.conversationState === 'booking') {
+      systemPrompt += `\n\nYou are now helping schedule a call. Use natural language to confirm their preferred day.` +
+                     `Say something like "Perfect! I'll send you a scheduling link for [day] and you can pick a time that works best for you."`;
+    }
+    
+    // Update the system prompt in the conversation history
+    conversationHistory[0].content = systemPrompt;
+    
+    // Generate standard response
+    const standardResponse = await axios.post(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        model: 'gpt-4o',
+        messages: conversationHistory,
+        temperature: 0.65,
+        presence_penalty: 0.2,
+        frequency_penalty: 0.3,
+        max_tokens: 300 // Setting a reasonable limit helps maintain focused responses
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 8000
+      }
+    );
+
+    let responseContent = standardResponse.data.choices[0].message.content;
+    
+    // Apply speech pattern enhancements
+    responseContent = enhanceSpeechPatterns(responseContent);
+    
+    // For critical conversation stages, use verification to ensure quality
+    const criticalStages = ['introduction', 'booking'];
+    if (criticalStages.includes(state.conversationState)) {
+      try {
+        // Verification for natural speech with specific instructions
+        const verificationPrompt = [
+          { 
+            role: 'system', 
+            content: `You are a speech naturalness expert for Sarah from Nexella. 
+                     Your task is to ensure this response sounds completely natural when spoken aloud.
+                     Fix any awkward phrases or words that would sound unnatural in conversation.
+                     Ensure consistent use of contractions (don't, I'm, you're, we're, etc.).
+                     Maintain Sarah's warm, friendly tone.
+                     Make minimal changes - just enough to ensure natural speech.
+                     IMPORTANT: Maintain all information about Nexella, scheduling, and the conversation purpose.`
+          },
+          { role: 'user', content: responseContent }
+        ];
+  
+        const verificationResponse = await axios.post(
+          'https://api.openai.com/v1/chat/completions',
+          {
+            model: 'gpt-4o',
+            messages: verificationPrompt,
+            temperature: 0.3,
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+              'Content-Type': 'application/json'
+            },
+            timeout: 5000
+          }
+        );
+  
+        responseContent = verificationResponse.data.choices[0].message.content;
+      } catch (verificationError) {
+        console.log('Verification step failed, using enhanced response instead:', verificationError.message);
+        // We already enhanced the response, so we can continue with that
+      }
+    }
+    
+    return responseContent;
+  } catch (error) {
+    console.error('Error generating AI response:', error);
+    // Fallback response in case of errors
+    return speechPatternsDict.fallbacks[Math.floor(Math.random() * speechPatternsDict.fallbacks.length)];
+  }
+}
+
+// NEW: Track hesitation indicators from users
+function trackHesitationIndicators(userMessage) {
+  const hesitationPhrases = [
+    "what do you mean",
+    "i don't understand",
+    "can you repeat",
+    "didn't catch that",
+    "say that again",
+    "you're breaking up",
+    "couldn't hear you",
+    "what was that",
+    "huh",
+    "pardon",
+    "sorry"
+  ];
+  
+  // Check if message contains hesitation indicators
+  const containsHesitation = hesitationPhrases.some(phrase => 
+    userMessage.toLowerCase().includes(phrase)
+  );
+  
+  if (containsHesitation) {
+    console.log('User hesitation detected:', userMessage);
+    return true;
+  }
+  
+  return false;
+}
+
+// NEW: Enhanced error handler with context awareness
+function handleConversationError(error, conversationState, retryCount = 0) {
+  console.error(`Error in ${conversationState} state:`, error.message);
+  
+  // If we've already retried too many times, escalate
+  if (retryCount >= 3) {
+    return {
+      message: "I seem to be having some technical difficulties. Let me make sure I have this right - you'd like to schedule a call with one of our specialists, right? If so, what day works best for you?",
+      shouldEscalate: true
+    };
+  }
+  
+  // Different fallbacks based on conversation state
+  if (conversationState === 'introduction') {
+    return {
+      message: "Hi there! This is Sarah from Nexella. I think we had a small connection issue. How are you doing today?",
+      shouldEscalate: false
+    };
+  } else if (conversationState === 'discovery') {
+    return {
+      message: "I'm sorry about that - I think I missed what you were saying. We were talking about your business needs. Could you tell me a bit more about what you're looking for?",
+      shouldEscalate: false
+    };
+  } else if (conversationState === 'booking') {
+    return {
+      message: "Sorry about that little glitch. We were just talking about scheduling a call. What day would work best for you?",
+      shouldEscalate: true // Prioritize getting to scheduling
+    };
+  } else {
+    return {
+      message: speechPatternsDict.fallbacks[Math.floor(Math.random() * speechPatternsDict.fallbacks.length)],
+      shouldEscalate: false
+    };
+  }
+}
+
 wss.on('connection', (ws) => {
   console.log('Retell connected via WebSocket.');
   
@@ -306,14 +724,14 @@ wss.on('connection', (ws) => {
     isAppointmentConfirmation: false
   };
   
-  // Define discovery questions as a trackable list - MODIFIED to match Airtable field names
+  // Define discovery questions as a trackable list
   const discoveryQuestions = [
     'How did you hear about us?',
-    'What industry or business are you in?',
-    'What\'s your main product?',
-    'Are you running ads right now?',
-    'Are you using a CRM system?',
-    'What pain points are you experiencing?'
+    'What line of business are you in? What\'s your business model?',
+    'What\'s your main product and typical price point?',
+    'Are you running ads (Meta, Google, TikTok)?',
+    'Are you using a CRM like GoHighLevel?',
+    'What problems are you running into?'
   ];
   
   let discoveryProgress = {
@@ -322,18 +740,48 @@ wss.on('connection', (ws) => {
     allQuestionsAsked: false
   };
   
-  // UPDATED: Improved system prompt with exact question wording to match Airtable fields
+  // Initialize conversation memory for consistent context
+  let conversationMemory = {
+    entities: {
+      business_name: null,
+      product_type: null,
+      business_type: null,
+      price_point: null,
+      pain_points: [],
+      ad_platforms: [],
+      crm_system: null
+    },
+    speech_patterns: {
+      preferred_name: null,
+      speaking_style: null
+    }
+  };
+  
+  // UPDATED: Improved system prompt with name awareness and simplified scheduling
   let conversationHistory = [
     {
       role: 'system',
       content: `You are a customer service/sales representative for Nexella.io named "Sarah". Always introduce yourself as Sarah from Nexella.
 
-PERSONALITY & TONE:
-- Be friendly, relatable, and casual - like talking to a friend
-- Use contractions and natural speech patterns
-- Sound genuinely excited about helping them
-- Match their energy and speaking style
-- Sprinkle in casual phrases like "totally", "awesome", "for sure", "definitely"
+VOICE & SPEECH PATTERNS:
+- Speak in a warm, friendly American English accent
+- Use a consistent speaking pace - not too fast, not too slow
+- Pronounce words clearly and naturally, especially tech terms
+- Use natural rhythm and intonation, with slight emphasis on important words
+- Avoid robotic or monotone delivery
+- Use contractions consistently (don't, can't, won't, I'm, you're, we're)
+- Add occasional brief pauses between thoughts for natural conversation flow
+- Maintain a consistent pitch and volume throughout the call
+
+CONVERSATIONAL STYLE:
+- Use natural transition phrases: "So tell me," "By the way," "Actually," "You know what"
+- Include occasional filler words in moderation: "um," "like," "you know" (sparingly!)
+- Use casual acknowledgments: "Got it," "I see," "Makes sense," "That's great"
+- Express excitement naturally: "That's awesome!" "I'm really excited about that"
+- Show empathy: "I understand," "That must be challenging"
+- Ask follow-up questions that build on what they've said
+- Use their exact words or phrases occasionally to show you're listening
+- Maintain consistent vocal personality throughout all interactions
 
 KEY REMINDERS:
 - We ALREADY have their name and email from their typeform submission
@@ -344,34 +792,30 @@ KEY REMINDERS:
 - Wait for answers before moving forward
 - Show genuine interest in their responses
 
-IMPORTANT ABOUT DISCOVERY:
-- You MUST ask ALL SIX discovery questions in order before moving to scheduling
-- Do not skip any questions or move to scheduling until all 6 have been asked
-- Make the questions feel conversational, not like a survey
-- Be genuinely interested in their answers
+DISCOVERY QUESTIONS (ask ALL in order):
+1. "How did you hear about Nexella?" (casual follow-up: "That's great to know!")
+2. "So, tell me a little bit about your business - what's your business model like?" (acknowledge their answer)
+3. "What's your main product or service and what's your typical price point per client?" (react naturally)
+4. "Are you running any ads right now - like on Meta, Google, or TikTok?" (show interest in response)
+5. "Are you using any CRM system like GoHighLevel, HubSpot, or SalesForce?" (acknowledge answer)
+6. "What specific problems are you running into that we might be able to help with?" (validate their challenges)
 
-DISCOVERY QUESTIONS (ask ALL of these IN ORDER using EXACTLY these questions):
-1. "How did you hear about us?" (Maps to field: "How did you hear about us")
-2. "What industry or business are you in?" (Maps to field: "Business/Industry")
-3. "What's your main product?" (Maps to field: "Main product")
-4. "Are you running ads right now?" (Maps to field: "Running ads")
-5. "Are you using a CRM system?" (Maps to field: "Using CRM")
-6. "What pain points are you experiencing?" (Maps to field: "Pain points")
-
-SCHEDULING APPROACH:
+SCHEDULING:
 - ONLY after asking ALL discovery questions, ask for what DAY works for a call
-- Say something like: "Great! Let's schedule a call to discuss how we can help. What day would work best for you?"
+- Say something like: "Based on what you've shared, I think we should definitely schedule a call to discuss solutions. What day works best for you?"
 - When they mention ANY day (today, tomorrow, Monday, next week, etc.), immediately confirm
 - Say something like: "Perfect! I'll send you a scheduling link for [day] and you can pick whatever time works best"
 - Emphasize they already have an account/email with us
 - Make it super easy and casual
 
-NATURAL RESPONSES:
-- If they say "Monday": "Monday works great! I'll shoot you a link for Monday and you can grab whatever time slot looks good to you."
-- If they say "next week": "Awesome, next week it is! I'll send you a scheduling link and you can pick any day/time that works."
-- If they're vague: "No worries! I'll send you our scheduling link and you can pick whatever day and time works best for you."
+CONSISTENT TECHNICAL TERMS:
+- Always pronounce "Nexella" as "Nex-EL-a" (not "Nex-ella")
+- Say "CRM" as individual letters C-R-M (not "crum")
+- Pronounce "GoHighLevel" with clear separation: "Go-High-Level"
+- Say "Meta" (not "Facebook")
+- Pronounce "API" as individual letters A-P-I
 
-Remember: You MUST ask ALL SIX discovery questions before scheduling, using the EXACT wording indicated above. Your goal is to have a natural, friendly conversation that leads to sending them a scheduling link. Keep it light, casual, and make them feel comfortable!`
+Remember: You MUST ask ALL SIX discovery questions before scheduling. Your goal is to have a natural, friendly conversation that leads to sending them a scheduling link. Keep it light, casual, and make them feel comfortable!`
     }
   ];
 
@@ -389,6 +833,7 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling, using the 
   let collectedContactInfo = false;
   let userHasSpoken = false;
   let webhookSent = false; // Track if we've sent the webhook
+  let retryCount = 0; // Track retry attempts for error handling
 
   // Send connecting message
   ws.send(JSON.stringify({
@@ -402,7 +847,7 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling, using the 
   const autoGreetingTimer = setTimeout(() => {
     if (!userHasSpoken) {
       ws.send(JSON.stringify({
-        content: "Hi there! This is Sarah from Nexella AI. How are you doing today?",
+        content: "Hi there! This is Sarah from Nexella. How are you doing today?",
         content_complete: true,
         actions: [],
         response_id: 1
@@ -431,6 +876,9 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling, using the 
           if (connectionData.metadata.customer_name) {
             bookingInfo.name = connectionData.metadata.customer_name;
             collectedContactInfo = true;
+            
+            // Store name in conversation memory
+            conversationMemory.speech_patterns.preferred_name = connectionData.metadata.customer_name.split(' ')[0];
             
             // Update system prompt with the user's name
             if (bookingInfo.name && bookingInfo.name.trim() !== '') {
@@ -464,9 +912,23 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling, using the 
       if (parsed.interaction_type === 'response_required') {
         const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
         const userMessage = latestUserUtterance?.content || "";
+        const previousBotMessage = conversationHistory.length >= 2 ? 
+            conversationHistory[conversationHistory.length - 1]?.content : "";
 
         console.log('User said:', userMessage);
         console.log('Current conversation state:', conversationState);
+        
+        // Check for user hesitation or confusion
+        const userHesitation = trackHesitationIndicators(userMessage);
+        if (userHesitation) {
+          // If user seems confused, we can adjust our approach
+          // For instance, we might use a more careful, clearly-articulated response
+          console.log('User hesitation detected, will use clearer speech patterns');
+          // Optionally, we could reduce temperature for more precise response
+        }
+        
+        // Update conversation memory with user's message
+        conversationMemory = updateConversationMemory(userMessage, conversationHistory, conversationMemory);
 
         // IMPROVED: Better discovery answer tracking
         if (conversationState === 'discovery') {
@@ -510,6 +972,8 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling, using the 
                   console.error('Error setting call variable:', varError);
                 }
                 
+                // Update the current question index for the next question
+                discoveryProgress.currentQuestionIndex = i + 1;
                 break;
               }
             }
@@ -583,70 +1047,101 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling, using the 
         // Add user message to conversation history
         conversationHistory.push({ role: 'user', content: userMessage });
 
-        // Process with GPT
-        const openaiResponse = await axios.post(
-          'https://api.openai.com/v1/chat/completions',
-          {
-            model: 'gpt-4o',
-            messages: conversationHistory,
-            temperature: 0.7 // Increased for more natural responses
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-              'Content-Type': 'application/json'
-            },
-            timeout: 8000 // Increased timeout for more reliable responses
-          }
-        );
-
-        const botReply = openaiResponse.data.choices[0].message.content || "Haha, could you tell me a bit more about that?";
-
-        // Add bot reply to conversation history
-        conversationHistory.push({ role: 'assistant', content: botReply });
-
-        // Check if discovery is complete based on bot reply
-        const discoveryComplete = trackDiscoveryQuestions(botReply, discoveryProgress, discoveryQuestions);
-        
-        // Transition state based on content and tracking
-        if (conversationState === 'introduction') {
-          // Move to discovery after introduction
-          conversationState = 'discovery';
-        } else if (conversationState === 'discovery' && discoveryComplete) {
-          // Transition to booking if all discovery questions are asked
-          conversationState = 'booking';
+        // Generate AI response with improved handler
+        try {
+          const botReply = await generateAIResponse(
+            userMessage,
+            conversationHistory,
+            {
+              conversationState,
+              discoveryProgress,
+              discoveryQuestions
+            }
+          );
           
-          // Update conversation state in trigger server
-          if (connectionData.callId) {
-            updateConversationState(connectionData.callId, true, null);
+          // Enhance response with conversation memory
+          const enhancedReply = enhanceResponseWithMemory(botReply, conversationMemory);
+          
+          // Final speech pattern enhancement
+          const naturalReply = enhanceSpeechPatterns(enhancedReply);
+          
+          // Add bot reply to conversation history
+          conversationHistory.push({ role: 'assistant', content: naturalReply });
+
+          // Check if discovery is complete based on bot reply
+          const discoveryComplete = trackDiscoveryQuestions(naturalReply, discoveryProgress, discoveryQuestions);
+          
+          // Transition state based on content and tracking
+          if (conversationState === 'introduction') {
+            // Move to discovery after introduction
+            conversationState = 'discovery';
+          } else if (conversationState === 'discovery' && discoveryComplete) {
+            // Transition to booking if all discovery questions are asked
+            conversationState = 'booking';
+            
+            // Update conversation state in trigger server
+            if (connectionData.callId) {
+              updateConversationState(connectionData.callId, true, null);
+            }
+            
+            console.log('Transitioning to booking state based on discovery completion');
+          }
+
+          // Reset retry count on successful response
+          retryCount = 0;
+          
+          // Send the AI response
+          ws.send(JSON.stringify({
+            content: naturalReply,
+            content_complete: true,
+            actions: [],
+            response_id: parsed.response_id
+          }));
+          
+          // After sending the response, check if this should be our last message
+          if (conversationState === 'completed' && !webhookSent && naturalReply.toLowerCase().includes('scheduling')) {
+            // If we're in the completed state and talking about scheduling but haven't sent the webhook yet
+            if (bookingInfo.email || connectionData.metadata?.customer_email) {
+              console.log('Sending final webhook before conversation end');
+              await sendSchedulingPreference(
+                bookingInfo.name || connectionData.metadata?.customer_name || '',
+                bookingInfo.email || connectionData.metadata?.customer_email || '',
+                bookingInfo.phone || connectionData.metadata?.to_number || '',
+                bookingInfo.preferredDay || 'Not specified',
+                connectionData.callId,
+                discoveryData
+              );
+              webhookSent = true;
+            }
+          }
+        } catch (error) {
+          console.error('Error generating AI response:', error);
+          
+          // Use enhanced error handler
+          const { message, shouldEscalate } = handleConversationError(
+            error, 
+            conversationState,
+            retryCount
+          );
+          
+          // Add fallback response to conversation history
+          conversationHistory.push({ role: 'assistant', content: message });
+          
+          // Send the fallback message
+          ws.send(JSON.stringify({
+            content: message,
+            content_complete: true,
+            actions: [],
+            response_id: parsed.response_id
+          }));
+          
+          // If we should escalate, try to move to booking
+          if (shouldEscalate) {
+            conversationState = 'booking';
           }
           
-          console.log('Transitioning to booking state based on discovery completion');
-        }
-
-        // Send the AI response
-        ws.send(JSON.stringify({
-          content: botReply,
-          content_complete: true,
-          actions: [],
-          response_id: parsed.response_id
-        }));
-        
-        // After sending the response, check if this should be our last message
-        if (conversationState === 'completed' && !webhookSent && botReply.toLowerCase().includes('scheduling')) {
-          // If we're in the completed state and talking about scheduling but haven't sent the webhook yet
-          if (bookingInfo.email || connectionData.metadata?.customer_email) {
-            console.log('Sending final webhook before conversation end');
-            await sendSchedulingPreference(
-              bookingInfo.name || connectionData.metadata?.customer_name || '',
-              bookingInfo.email || connectionData.metadata?.customer_email || '',
-              bookingInfo.phone || connectionData.metadata?.to_number || '',
-              bookingInfo.preferredDay || 'Not specified',
-              connectionData.callId,
-              discoveryData
-            );
-            webhookSent = true;
-          }
+          // Increment retry count
+          retryCount++;
         }
       }
 
@@ -671,12 +1166,15 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling, using the 
         }
       }
       
+      // Get a random fallback message
+      const fallbackMessage = speechPatternsDict.fallbacks[Math.floor(Math.random() * speechPatternsDict.fallbacks.length)];
+      
       // Send a recovery message
       ws.send(JSON.stringify({
-        content: "Haha oops, I missed that. Could you say it one more time?",
+        content: fallbackMessage,
         content_complete: true,
         actions: [],
-        response_id: 9999
+        response_id: parsed.response_id || 9999
       }));
     }
   });
@@ -743,7 +1241,7 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
         preferredDay = call.variables.preferredDay;
       } else if (call.custom_data && call.custom_data.preferredDay) {
         preferredDay = call.custom_data.preferredDay;
-        } else if (call.analysis && call.analysis.custom_data) {
+      } else if (call.analysis && call.analysis.custom_data) {
         try {
           const customData = typeof call.analysis.custom_data === 'string'
             ? JSON.parse(call.analysis.custom_data)
@@ -785,11 +1283,11 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
         // Use the discovery questions to match answers in the transcript
         const discoveryQuestions = [
           'How did you hear about us?',
-          'What industry or business are you in?',
-          'What\'s your main product?',
-          'Are you running ads right now?',
-          'Are you using a CRM system?',
-          'What pain points are you experiencing?'
+          'What line of business are you in? What\'s your business model?',
+          'What\'s your main product and typical price point?',
+          'Are you running ads (Meta, Google, TikTok)?',
+          'Are you using a CRM like GoHighLevel?',
+          'What problems are you running into?'
         ];
         
         // Find questions and their answers in the transcript
