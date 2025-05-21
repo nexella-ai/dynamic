@@ -10,6 +10,9 @@ const wss = new WebSocketServer({ server });
 
 app.use(express.json());
 
+// Store the latest Typeform submission for reference
+global.lastTypeformSubmission = null;
+
 app.get('/', (req, res) => {
   res.send('Nexella WebSocket Server with Calendly scheduling link integration is live!');
 });
@@ -104,33 +107,56 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       }
     });
     
+    // Add pain point from the last question if it's available but not yet mapped
+    // This ensures we always capture the pain points question answer
+    if (discoveryData['question_5'] && !formattedDiscoveryData['Pain points']) {
+      formattedDiscoveryData['Pain points'] = discoveryData['question_5'];
+      console.log('Added pain points from question_5:', discoveryData['question_5']);
+    }
+    
     // IMPORTANT FIX: Ensure we have the metadata from call ID if available
-    if (callId && activeCallsMetadata.has(callId) && (!email || !name || !phone)) {
+    if (callId && activeCallsMetadata.has(callId)) {
       const callMetadata = activeCallsMetadata.get(callId);
       if (callMetadata) {
-        if (!email && callMetadata.customer_email) email = callMetadata.customer_email;
-        if (!name && callMetadata.customer_name) name = callMetadata.customer_name;
-        if (!phone) {
+        if (!email && callMetadata.customer_email) {
+          email = callMetadata.customer_email;
+          console.log(`Using email from call metadata: ${email}`);
+        }
+        if (!name && callMetadata.customer_name) {
+          name = callMetadata.customer_name;
+        }
+        if (!phone && (callMetadata.phone || callMetadata.to_number)) {
           phone = callMetadata.phone || callMetadata.to_number;
         }
       }
-      console.log(`Retrieved metadata from call ID ${callId}: ${email}, ${name}, ${phone}`);
     }
     
-    // FIX: Don't use fallback email unless email is actually undefined or null
-    if (email === undefined || email === null) {
-      console.log('WARNING: Email is missing, using empty string');
-      email = ''; // Use empty string instead of hardcoded fallback
+    // Check if we have a valid email from the global Typeform submission
+    if ((!email || email.trim() === '') && global.lastTypeformSubmission && global.lastTypeformSubmission.email) {
+      email = global.lastTypeformSubmission.email;
+      console.log(`Using email from last Typeform submission: ${email}`);
+      
+      // Also get other info if needed
+      if (!name && global.lastTypeformSubmission.name) {
+        name = global.lastTypeformSubmission.name;
+      }
+      if (!phone && global.lastTypeformSubmission.phone) {
+        phone = global.lastTypeformSubmission.phone;
+      }
     }
+    
+    // Log what email we're going to use
+    console.log(`Email being used for webhook: "${email}"`);
     
     // Ensure phone number is formatted properly with leading +
     if (phone && !phone.startsWith('+')) {
       phone = '+1' + phone.replace(/[^0-9]/g, '');
     }
     
+    // Make the webhook data
     const webhookData = {
       name: name || '',
-      email: email || '',
+      email: email || '',  // No fallback email - if it's missing, the webhook might fail
       phone: phone || '',
       preferredDay: preferredDay || '',
       call_id: callId || '',
@@ -138,44 +164,71 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       discovery_data: formattedDiscoveryData
     };
     
-    console.log('Sending scheduling preference to trigger server with EXACTLY MAPPED field names:', JSON.stringify(webhookData, null, 2));
+    // Log the data we're about to send
+    console.log('Sending scheduling preference to trigger server:', JSON.stringify(webhookData, null, 2));
     
-    const response = await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, webhookData, {
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 10000
-    });
-    
-    console.log('Scheduling preference sent successfully:', response.data);
-    return { success: true, data: response.data };
-  } catch (error) {
-    console.error('Error sending scheduling preference:', error);
-    
-    // Even if there's an error, try to send directly to n8n webhook
     try {
-      console.log('Attempting to send directly to n8n webhook as fallback');
-      const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL || 'https://n8n-clp2.onrender.com/webhook/retell-scheduling';
-      console.log(`Using n8n webhook URL: ${n8nWebhookUrl}`);
-      
-      const webhookData = {
-        name: name || '',
-        email: email || '', // Remove the hardcoded fallback here too
-        phone: phone || '',
-        preferredDay: preferredDay || '',
-        call_id: callId || '',
-        schedulingComplete: true,
-        discovery_data: formattedDiscoveryData || {}
-      };
-      
-      const n8nResponse = await axios.post(n8nWebhookUrl, webhookData, {
+      // Try sending to primary endpoint
+      const response = await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, webhookData, {
         headers: { 'Content-Type': 'application/json' },
         timeout: 10000
       });
-      console.log('Successfully sent directly to n8n:', n8nResponse.data);
-      return { success: true, fallback: true };
-    } catch (n8nError) {
-      console.error('Error sending directly to n8n:', n8nError);
-      return { success: false, error: error.message };
+      
+      console.log('Scheduling preference sent successfully:', response.data);
+      return { success: true, data: response.data };
+    } catch (primaryError) {
+      console.error('Error sending scheduling preference:', primaryError);
+      
+      // If the error is about missing email, let's log additional debug info
+      if (primaryError.response && primaryError.response.data && primaryError.response.data.error === 'Missing email address') {
+        console.error('Critical error: Email is required but missing. Debug info:');
+        console.error(`- Webhook data: ${JSON.stringify(webhookData)}`);
+        console.error(`- Original email value: "${email}"`);
+        console.error(`- Call ID: ${callId}`);
+        console.error(`- Last Typeform submission:`, global.lastTypeformSubmission);
+        
+        // Attempt to fix by using direct API call - you might need to adjust this
+        if (callId) {
+          try {
+            const retellResponse = await axios.get(`https://api.retellai.com/v1/calls/${callId}`, {
+              headers: {
+                'Authorization': `Bearer ${process.env.RETELL_API_KEY}`,
+                'Content-Type': 'application/json'
+              }
+            });
+            
+            if (retellResponse.data && retellResponse.data.metadata && retellResponse.data.metadata.customer_email) {
+              webhookData.email = retellResponse.data.metadata.customer_email;
+              console.log(`Recovered email from Retell API: ${webhookData.email}`);
+            }
+          } catch (retellError) {
+            console.error('Failed to get email from Retell API:', retellError.message);
+          }
+        }
+      }
+      
+      // Even if there's an error, try to send directly to n8n webhook
+      try {
+        console.log('Attempting to send directly to n8n webhook as fallback');
+        const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL || 'https://n8n-clp2.onrender.com/webhook/retell-scheduling';
+        console.log(`Using n8n webhook URL: ${n8nWebhookUrl}`);
+        
+        // Using the same webhookData for n8n
+        const n8nResponse = await axios.post(n8nWebhookUrl, webhookData, {
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 10000
+        });
+        
+        console.log('Successfully sent directly to n8n:', n8nResponse.data);
+        return { success: true, fallback: true };
+      } catch (n8nError) {
+        console.error('Error sending directly to n8n:', n8nError);
+        return { success: false, error: primaryError.message };
+      }
     }
+  } catch (error) {
+    console.error('Fatal error in sendSchedulingPreference:', error);
+    return { success: false, error: error.message };
   }
 }
 
@@ -312,6 +365,18 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
     
     // Log the incoming request data
     console.log('Call request data:', { name, email, phone, userIdentifier });
+    
+    // Store the data globally for later use
+    if (email) {
+      global.lastTypeformSubmission = {
+        timestamp: new Date().toISOString(),
+        email: email,
+        name: name || '',
+        phone: phone || '',
+        source: 'API Call'
+      };
+      console.log('Saved API call contact info globally:', global.lastTypeformSubmission);
+    }
     
     // Set up metadata for the Retell call
     // This is how we'll pass customer information to the voice agent
@@ -522,6 +587,19 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
           
           if (connectionData.metadata.customer_email) {
             bookingInfo.email = connectionData.metadata.customer_email;
+            
+            // Also store this globally
+            if (!global.lastTypeformSubmission || !global.lastTypeformSubmission.email) {
+              global.lastTypeformSubmission = {
+                timestamp: new Date().toISOString(),
+                email: bookingInfo.email,
+                name: bookingInfo.name || '',
+                phone: bookingInfo.phone || '',
+                source: 'Call Metadata'
+              };
+              console.log('Stored email from call metadata globally:', global.lastTypeformSubmission);
+            }
+            
             collectedContactInfo = true;
           }
           
@@ -620,44 +698,7 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
             // Alert the Retell agent through custom variables
             try {
               if (parsed.call && parsed.call.call_id) {
-                await axios.post(`https://api.retellai.com/v1/calls/${parsed.call.call_id}/variables`, {
-                  variables: {
-                    preferredDay: bookingInfo.preferredDay,
-                    schedulingComplete: true,
-                    // Include full discovery data
-                    discovery_data: JSON.stringify(discoveryData)
-                  }
-                }, {
-                  headers: {
-                    'Authorization': `Bearer ${process.env.RETELL_API_KEY}`,
-                    'Content-Type': 'application/json'
-                  }
-                });
-                console.log('Set Retell call variables for scheduling and discovery data');
-              }
-            } catch (variableError) {
-              console.error('Error setting Retell variables:', variableError);
-            }
-            
-            // Immediately send data to trigger server when we get a day preference
-            console.log('Sending scheduling preference to trigger server with all collected data');
-            const result = await sendSchedulingPreference(
-              bookingInfo.name,
-              bookingInfo.email,
-              bookingInfo.phone,
-              bookingInfo.preferredDay,
-              connectionData.callId,
-              discoveryData
-            );
-            
-            // Mark as sent and continue conversation naturally
-            bookingInfo.schedulingLinkSent = true;
-            conversationState = 'completed';
-            webhookSent = true;
-            
-            // Update conversation state in trigger server
-            if (connectionData.callId) {
-              await updateConversationState(connectionData.callId, true, bookingInfo.preferredDay);
+                await updateConversationState(connectionData.callId, true, bookingInfo.preferredDay);
             }
             
             console.log('Data sent to n8n and conversation marked as completed');
@@ -804,6 +845,152 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
   });
 });
 
+// Update Typeform data handler - this is the modified function to capture email reliably
+app.post('/typeform-webhook', express.json(), (req, res) => {
+  try {
+    console.log('Received Typeform submission:', JSON.stringify(req.body, null, 2));
+    
+    // Extract data from the Typeform submission
+    let email = '';
+    let name = '';
+    let firstName = '';
+    let lastName = '';
+    let phone = '';
+    
+    // Process form data based on different potential structures
+    const data = req.body;
+    
+    // Option 1: Direct properties at root level
+    if (data.Email) email = data.Email;
+    if (data['Email']) email = data['Email'];
+    if (data.email) email = data.email;
+    
+    if (data['First name'] && data['Last name']) {
+      firstName = data['First name'];
+      lastName = data['Last name'];
+      name = `${firstName} ${lastName}`.trim();
+    } else if (data.Name) {
+      name = data.Name;
+    } else if (data.name) {
+      name = data.name;
+    }
+    
+    if (data['Phone number']) phone = data['Phone number'];
+    if (data.Phone) phone = data.Phone;
+    if (data.phone) phone = data.phone;
+    
+    // Option 2: Typeform format with form_response
+    if (data.form_response) {
+      const formResponse = data.form_response;
+      
+      // Check for answers array
+      if (formResponse.answers && Array.isArray(formResponse.answers)) {
+        formResponse.answers.forEach(answer => {
+          // Look for email fields
+          if (answer.type === 'email' && answer.email) {
+            email = answer.email;
+          }
+          
+          // Look for name fields
+          if (answer.type === 'text') {
+            if (answer.field && answer.field.ref) {
+              const ref = answer.field.ref.toLowerCase();
+              if (ref.includes('email')) {
+                email = answer.text;
+              } else if (ref.includes('first') && ref.includes('name')) {
+                firstName = answer.text;
+              } else if (ref.includes('last') && ref.includes('name')) {
+                lastName = answer.text;
+              } else if (ref.includes('name')) {
+                name = answer.text;
+              } else if (ref.includes('phone')) {
+                phone = answer.text;
+              }
+            }
+          }
+          
+          // Check for phone fields
+          if (answer.type === 'phone_number' && answer.phone_number) {
+            phone = answer.phone_number;
+          }
+        });
+      }
+      
+      // Check hidden fields
+      if (formResponse.hidden) {
+        if (formResponse.hidden.email) email = formResponse.hidden.email;
+        if (formResponse.hidden.name) name = formResponse.hidden.name;
+        if (formResponse.hidden.phone) phone = formResponse.hidden.phone;
+      }
+    }
+    
+    // Combine first and last name if needed
+    if (!name && (firstName || lastName)) {
+      name = `${firstName} ${lastName}`.trim();
+    }
+    
+    // Store this submission globally
+    global.lastTypeformSubmission = {
+      timestamp: new Date().toISOString(),
+      email: email,
+      name: name,
+      phone: phone,
+      source: 'Typeform Webhook'
+    };
+    
+    console.log('Stored Typeform submission data globally:', global.lastTypeformSubmission);
+    
+    // Format for your original handler
+    const formattedData = {
+      name,
+      email,
+      phone,
+      source: 'Typeform'
+    };
+    
+    // Continue with your normal processing
+    res.status(200).json({ success: true, message: 'Typeform webhook processed successfully' });
+  } catch (error) {
+    console.error('Error processing Typeform webhook:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Updated format lead data function to store typeform data globally
+function formatLeadData(input) {
+  const raw = input.json || input;
+
+  // Extract fields directly
+  const firstName = raw["First name"] || '';
+  const lastName = raw["Last name"] || '';
+  const name = `${firstName} ${lastName}`.trim();
+  const email = raw["Email"] || '';
+  let phone = raw["Phone number"] || '';
+
+  // Normalize phone
+  if (phone && !phone.startsWith('+')) {
+    phone = '+1' + phone.replace(/[^\\d]/g, '');
+  }
+
+  // Store this submission globally so it can be accessed later
+  global.lastTypeformSubmission = {
+    timestamp: new Date().toISOString(),
+    email: email,
+    name: name,
+    phone: phone,
+    source: 'Typeform Function'
+  };
+
+  console.log('Stored Typeform submission data globally:', global.lastTypeformSubmission);
+
+  return {
+    name,
+    email,
+    phone,
+    source: 'Typeform'
+  };
+}
+
 // Endpoint to receive Retell webhook call events
 app.post('/retell-webhook', express.json(), async (req, res) => {
   try {
@@ -820,6 +1007,18 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
       const phone = call.to_number || '';
       let preferredDay = '';
       let discoveryData = {};
+      
+      // Store this info globally as well
+      if (email) {
+        global.lastTypeformSubmission = {
+          timestamp: new Date().toISOString(),
+          email: email,
+          name: name || '',
+          phone: phone || '',
+          source: 'Retell Webhook'
+        };
+        console.log('Stored Retell webhook email globally:', global.lastTypeformSubmission);
+      }
       
       // Look for preferred day in various locations
       if (call.variables && call.variables.preferredDay) {
@@ -932,4 +1131,41 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Nexella WebSocket Server with Calendly scheduling link integration is listening on port ${PORT}`);
-});
+}); axios.post(`https://api.retellai.com/v1/calls/${parsed.call.call_id}/variables`, {
+                  variables: {
+                    preferredDay: bookingInfo.preferredDay,
+                    schedulingComplete: true,
+                    // Include full discovery data
+                    discovery_data: JSON.stringify(discoveryData)
+                  }
+                }, {
+                  headers: {
+                    'Authorization': `Bearer ${process.env.RETELL_API_KEY}`,
+                    'Content-Type': 'application/json'
+                  }
+                });
+                console.log('Set Retell call variables for scheduling and discovery data');
+              }
+            } catch (variableError) {
+              console.error('Error setting Retell variables:', variableError);
+            }
+            
+            // Immediately send data to trigger server when we get a day preference
+            console.log('Sending scheduling preference to trigger server with all collected data');
+            const result = await sendSchedulingPreference(
+              bookingInfo.name,
+              bookingInfo.email,
+              bookingInfo.phone,
+              bookingInfo.preferredDay,
+              connectionData.callId,
+              discoveryData
+            );
+            
+            // Mark as sent and continue conversation naturally
+            bookingInfo.schedulingLinkSent = true;
+            conversationState = 'completed';
+            webhookSent = true;
+            
+            // Update conversation state in trigger server
+            if (connectionData.callId) {
+              await
