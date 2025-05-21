@@ -411,13 +411,13 @@ PERSONALITY & TONE:
 - Use a consistent, even speaking tone throughout the conversation
 - Use contractions and everyday language that sounds natural
 - Only use exclamation points when truly appropriate
-- Maintain a calm, professional, friendly demeanor at all times
+- Maintain a calm, professional demeanor at all times
 
 KEY REMINDERS:
 - We already have the customer's name and email from their form submission
 - Address the customer by their actual name (NOT a placeholder name like Monica)
 - DO NOT refer to the customer as Monica - use their actual name from metadata
-- If you know the customer's name is Alex, use "Alex" throughout the conversation
+- If you know the customer's name is Jaden, use "Jaden" throughout the conversation
 - You don't need to ask for their email
 - Ask one question at a time and pause for answers
 - Acknowledge their answers before moving to the next question
@@ -640,7 +640,106 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
             }
             
             // Immediately send data to trigger server when we get a day preference
-            console.log('Sending webhook due to error');
+            console.log('Sending scheduling preference to trigger server with all collected data');
+            const result = await sendSchedulingPreference(
+              bookingInfo.name,
+              bookingInfo.email,
+              bookingInfo.phone,
+              bookingInfo.preferredDay,
+              connectionData.callId,
+              discoveryData
+            );
+            
+            // Mark as sent and continue conversation naturally
+            bookingInfo.schedulingLinkSent = true;
+            conversationState = 'completed';
+            webhookSent = true;
+            
+            // Update conversation state in trigger server
+            if (connectionData.callId) {
+              await updateConversationState(connectionData.callId, true, bookingInfo.preferredDay);
+            }
+            
+            console.log('Data sent to n8n and conversation marked as completed');
+          }
+        }
+
+        // Add user message to conversation history
+        conversationHistory.push({ role: 'user', content: userMessage });
+
+        // Process with GPT
+        const openaiResponse = await axios.post(
+          'https://api.openai.com/v1/chat/completions',
+          {
+            model: 'gpt-4o',
+            messages: conversationHistory,
+            temperature: 0.7 // Increased for more natural responses
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+              'Content-Type': 'application/json'
+            },
+            timeout: 8000 // Increased timeout for more reliable responses
+          }
+        );
+
+        const botReply = openaiResponse.data.choices[0].message.content || "Haha, could you tell me a bit more about that?";
+
+        // Add bot reply to conversation history
+        conversationHistory.push({ role: 'assistant', content: botReply });
+
+        // Check if discovery is complete based on bot reply
+        const discoveryComplete = trackDiscoveryQuestions(botReply, discoveryProgress, discoveryQuestions);
+        
+        // Transition state based on content and tracking
+        if (conversationState === 'introduction') {
+          // Move to discovery after introduction
+          conversationState = 'discovery';
+        } else if (conversationState === 'discovery' && discoveryComplete) {
+          // Transition to booking if all discovery questions are asked
+          conversationState = 'booking';
+          
+          // Update conversation state in trigger server
+          if (connectionData.callId) {
+            updateConversationState(connectionData.callId, true, null);
+          }
+          
+          console.log('Transitioning to booking state based on discovery completion');
+        }
+
+        // Send the AI response
+        ws.send(JSON.stringify({
+          content: botReply,
+          content_complete: true,
+          actions: [],
+          response_id: parsed.response_id
+        }));
+        
+        // After sending the response, check if this should be our last message
+        if (conversationState === 'completed' && !webhookSent && botReply.toLowerCase().includes('scheduling')) {
+          // If we're in the completed state and talking about scheduling but haven't sent the webhook yet
+          if (bookingInfo.email || connectionData.metadata?.customer_email) {
+            console.log('Sending final webhook before conversation end');
+            await sendSchedulingPreference(
+              bookingInfo.name || connectionData.metadata?.customer_name || '',
+              bookingInfo.email || connectionData.metadata?.customer_email || '',
+              bookingInfo.phone || connectionData.metadata?.to_number || '',
+              bookingInfo.preferredDay || 'Not specified',
+              connectionData.callId,
+              discoveryData
+            );
+            webhookSent = true;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error handling message:', error.message);
+      
+      // Always try to send whatever data we have if an error occurs
+      if (!webhookSent && connectionData.callId && (bookingInfo.email || connectionData.metadata?.customer_email)) {
+        try {
+          console.log('Sending webhook due to error');
           await sendSchedulingPreference(
             bookingInfo.name || connectionData.metadata?.customer_name || '',
             bookingInfo.email || connectionData.metadata?.customer_email || '',
@@ -727,7 +826,7 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
         preferredDay = call.variables.preferredDay;
       } else if (call.custom_data && call.custom_data.preferredDay) {
         preferredDay = call.custom_data.preferredDay;
-        } else if (call.analysis && call.analysis.custom_data) {
+      } else if (call.analysis && call.analysis.custom_data) {
         try {
           const customData = typeof call.analysis.custom_data === 'string'
             ? JSON.parse(call.analysis.custom_data)
@@ -833,104 +932,4 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Nexella WebSocket Server with Calendly scheduling link integration is listening on port ${PORT}`);
-}); scheduling preference to trigger server with all collected data');
-            const result = await sendSchedulingPreference(
-              bookingInfo.name,
-              bookingInfo.email,
-              bookingInfo.phone,
-              bookingInfo.preferredDay,
-              connectionData.callId,
-              discoveryData
-            );
-            
-            // Mark as sent and continue conversation naturally
-            bookingInfo.schedulingLinkSent = true;
-            conversationState = 'completed';
-            webhookSent = true;
-            
-            // Update conversation state in trigger server
-            if (connectionData.callId) {
-              await updateConversationState(connectionData.callId, true, bookingInfo.preferredDay);
-            }
-            
-            console.log('Data sent to n8n and conversation marked as completed');
-          }
-        }
-
-        // Add user message to conversation history
-        conversationHistory.push({ role: 'user', content: userMessage });
-
-        // Process with GPT
-        const openaiResponse = await axios.post(
-          'https://api.openai.com/v1/chat/completions',
-          {
-            model: 'gpt-4o',
-            messages: conversationHistory,
-            temperature: 0.7 // Increased for more natural responses
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-              'Content-Type': 'application/json'
-            },
-            timeout: 8000 // Increased timeout for more reliable responses
-          }
-        );
-
-        const botReply = openaiResponse.data.choices[0].message.content || "Haha, could you tell me a bit more about that?";
-
-        // Add bot reply to conversation history
-        conversationHistory.push({ role: 'assistant', content: botReply });
-
-        // Check if discovery is complete based on bot reply
-        const discoveryComplete = trackDiscoveryQuestions(botReply, discoveryProgress, discoveryQuestions);
-        
-        // Transition state based on content and tracking
-        if (conversationState === 'introduction') {
-          // Move to discovery after introduction
-          conversationState = 'discovery';
-        } else if (conversationState === 'discovery' && discoveryComplete) {
-          // Transition to booking if all discovery questions are asked
-          conversationState = 'booking';
-          
-          // Update conversation state in trigger server
-          if (connectionData.callId) {
-            updateConversationState(connectionData.callId, true, null);
-          }
-          
-          console.log('Transitioning to booking state based on discovery completion');
-        }
-
-        // Send the AI response
-        ws.send(JSON.stringify({
-          content: botReply,
-          content_complete: true,
-          actions: [],
-          response_id: parsed.response_id
-        }));
-        
-        // After sending the response, check if this should be our last message
-        if (conversationState === 'completed' && !webhookSent && botReply.toLowerCase().includes('scheduling')) {
-          // If we're in the completed state and talking about scheduling but haven't sent the webhook yet
-          if (bookingInfo.email || connectionData.metadata?.customer_email) {
-            console.log('Sending final webhook before conversation end');
-            await sendSchedulingPreference(
-              bookingInfo.name || connectionData.metadata?.customer_name || '',
-              bookingInfo.email || connectionData.metadata?.customer_email || '',
-              bookingInfo.phone || connectionData.metadata?.to_number || '',
-              bookingInfo.preferredDay || 'Not specified',
-              connectionData.callId,
-              discoveryData
-            );
-            webhookSent = true;
-          }
-        }
-      }
-
-    } catch (error) {
-      console.error('Error handling message:', error.message);
-      
-      // Always try to send whatever data we have if an error occurs
-      if (!webhookSent && connectionData.callId && (bookingInfo.email || connectionData.metadata?.customer_email)) {
-        try {
-          console.log('Sending
+});
