@@ -96,7 +96,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
         formattedDiscoveryData['Running ads'] = value;
       } else if (key.includes('crm')) {
         formattedDiscoveryData['Using CRM'] = value;
-      } else if (key.includes('pain') || key.includes('problem')) {
+      } else if (key.includes('pain') || key.includes('problem') || key.includes('points')) {
         formattedDiscoveryData['Pain points'] = value;
       } else {
         // Keep original keys for anything not matched
@@ -117,10 +117,10 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       console.log(`Retrieved metadata from call ID ${callId}: ${email}, ${name}, ${phone}`);
     }
     
-    // Add fallback for missing email
-    if (!email || email.trim() === '') {
-      console.log('WARNING: Email is empty, using fallback email');
-      email = 'jadenlugoco@gmail.com'; // Fallback to ensure data gets processed
+    // FIX: Don't use fallback email unless email is actually undefined or null
+    if (email === undefined || email === null) {
+      console.log('WARNING: Email is missing, using empty string');
+      email = ''; // Use empty string instead of hardcoded fallback
     }
     
     // Ensure phone number is formatted properly with leading +
@@ -158,7 +158,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       
       const webhookData = {
         name: name || '',
-        email: email || 'jadenlugoco@gmail.com', // Ensure fallback email here too
+        email: email || '', // Remove the hardcoded fallback here too
         phone: phone || '',
         preferredDay: preferredDay || '',
         call_id: callId || '',
