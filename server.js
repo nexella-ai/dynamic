@@ -12,6 +12,8 @@ app.use(express.json());
 
 // Store the latest Typeform submission for reference
 global.lastTypeformSubmission = null;
+// Store submissions by phone number for better lookup
+global.submissionsByPhone = new Map();
 
 app.get('/', (req, res) => {
   res.send('Nexella WebSocket Server with Calendly scheduling link integration is live!');
@@ -63,6 +65,41 @@ async function updateConversationState(callId, discoveryComplete, preferredDay) 
   }
 }
 
+// Helper function to find contact info by phone number
+function findContactByPhone(phone) {
+  if (!phone) return null;
+  
+  // Normalize phone number for lookup
+  const normalizedPhone = phone.replace(/[^0-9]/g, '');
+  
+  console.log(`Looking for contact with phone: ${phone} (normalized: ${normalizedPhone})`);
+  
+  // Check the phone-based storage first
+  for (const [storedPhone, contact] of global.submissionsByPhone.entries()) {
+    const normalizedStoredPhone = storedPhone.replace(/[^0-9]/g, '');
+    if (normalizedStoredPhone === normalizedPhone || 
+        normalizedStoredPhone.endsWith(normalizedPhone) || 
+        normalizedPhone.endsWith(normalizedStoredPhone)) {
+      console.log(`Found contact by phone: ${JSON.stringify(contact)}`);
+      return contact;
+    }
+  }
+  
+  // Check the global last submission as fallback
+  if (global.lastTypeformSubmission && global.lastTypeformSubmission.phone) {
+    const globalPhone = global.lastTypeformSubmission.phone.replace(/[^0-9]/g, '');
+    if (globalPhone === normalizedPhone || 
+        globalPhone.endsWith(normalizedPhone) || 
+        normalizedPhone.endsWith(globalPhone)) {
+      console.log(`Found contact from global submission: ${JSON.stringify(global.lastTypeformSubmission)}`);
+      return global.lastTypeformSubmission;
+    }
+  }
+  
+  console.log('No contact found for phone number');
+  return null;
+}
+
 // IMPROVED: Send scheduling data to trigger server webhook endpoint with better field mapping
 async function sendSchedulingPreference(name, email, phone, preferredDay, callId, discoveryData = {}) {
   try {
@@ -108,45 +145,63 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     });
     
     // Add pain point from the last question if it's available but not yet mapped
-    // This ensures we always capture the pain points question answer
     if (discoveryData['question_5'] && !formattedDiscoveryData['Pain points']) {
       formattedDiscoveryData['Pain points'] = discoveryData['question_5'];
       console.log('Added pain points from question_5:', discoveryData['question_5']);
     }
     
-    // IMPORTANT FIX: Ensure we have the metadata from call ID if available
+    // IMPORTANT FIX: Try multiple sources to get email and name
+    console.log('Starting email/name resolution...');
+    console.log('Initial values - name:', name, 'email:', email, 'phone:', phone);
+    
+    // 1. Try call metadata first
     if (callId && activeCallsMetadata.has(callId)) {
       const callMetadata = activeCallsMetadata.get(callId);
       if (callMetadata) {
         if (!email && callMetadata.customer_email) {
           email = callMetadata.customer_email;
-          console.log(`Using email from call metadata: ${email}`);
+          console.log(`Got email from call metadata: ${email}`);
         }
         if (!name && callMetadata.customer_name) {
           name = callMetadata.customer_name;
+          console.log(`Got name from call metadata: ${name}`);
         }
-        if (!phone && (callMetadata.phone || callMetadata.to_number)) {
-          phone = callMetadata.phone || callMetadata.to_number;
+        if (!phone && (callMetadata.phone || callMetadata.to_number || callMetadata.customer_phone)) {
+          phone = callMetadata.phone || callMetadata.to_number || callMetadata.customer_phone;
+          console.log(`Got phone from call metadata: ${phone}`);
         }
       }
     }
     
-    // Check if we have a valid email from the global Typeform submission
-    if ((!email || email.trim() === '') && global.lastTypeformSubmission && global.lastTypeformSubmission.email) {
-      email = global.lastTypeformSubmission.email;
-      console.log(`Using email from last Typeform submission: ${email}`);
-      
-      // Also get other info if needed
+    // 2. Try to find contact by phone number
+    if (phone && (!email || !name)) {
+      const contactInfo = findContactByPhone(phone);
+      if (contactInfo) {
+        if (!email && contactInfo.email) {
+          email = contactInfo.email;
+          console.log(`Got email from phone lookup: ${email}`);
+        }
+        if (!name && contactInfo.name) {
+          name = contactInfo.name;
+          console.log(`Got name from phone lookup: ${name}`);
+        }
+      }
+    }
+    
+    // 3. Try global Typeform submission
+    if ((!email || !name) && global.lastTypeformSubmission) {
+      if (!email && global.lastTypeformSubmission.email) {
+        email = global.lastTypeformSubmission.email;
+        console.log(`Got email from global submission: ${email}`);
+      }
       if (!name && global.lastTypeformSubmission.name) {
         name = global.lastTypeformSubmission.name;
-      }
-      if (!phone && global.lastTypeformSubmission.phone) {
-        phone = global.lastTypeformSubmission.phone;
+        console.log(`Got name from global submission: ${name}`);
       }
     }
     
-    // Log what email we're going to use
-    console.log(`Email being used for webhook: "${email}"`);
+    // Log final resolution
+    console.log('Final resolved values - name:', name, 'email:', email, 'phone:', phone);
     
     // Ensure phone number is formatted properly with leading +
     if (phone && !phone.startsWith('+')) {
@@ -156,7 +211,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     // Make the webhook data
     const webhookData = {
       name: name || '',
-      email: email || '',  // No fallback email - if it's missing, the webhook might fail
+      email: email || '',
       phone: phone || '',
       preferredDay: preferredDay || '',
       call_id: callId || '',
@@ -164,7 +219,6 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       discovery_data: formattedDiscoveryData
     };
     
-    // Log the data we're about to send
     console.log('Sending scheduling preference to trigger server:', JSON.stringify(webhookData, null, 2));
     
     const response = await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, webhookData, {
@@ -364,50 +418,49 @@ function handleSchedulingPreference(userMessage) {
 }
 
 // HTTP Request - Trigger Retell Call
-// This endpoint initiates the call with Retell
+// This endpoint initiates the call with Retell and stores contact info
 app.post('/trigger-retell-call', express.json(), async (req, res) => {
   try {
     const { name, email, phone, userId } = req.body;
     console.log(`Received request to trigger Retell call for ${name} (${email})`);
     
-    // Check if we have all required fields
-    if (!email) {
-      return res.status(400).json({ success: false, error: 'Email is required' });
+    // Store the contact info immediately when we receive it
+    if (email || name || phone) {
+      const contactInfo = {
+        timestamp: new Date().toISOString(),
+        email: email || '',
+        name: name || '',
+        phone: phone || '',
+        source: 'API Call'
+      };
+      
+      global.lastTypeformSubmission = contactInfo;
+      
+      // Also store by phone for easier lookup
+      if (phone) {
+        global.submissionsByPhone.set(phone, contactInfo);
+        console.log(`Stored contact info by phone ${phone}:`, contactInfo);
+      }
+      
+      console.log('Saved API call contact info globally:', contactInfo);
     }
     
     // Ensure we have a unique user ID
     const userIdentifier = userId || `user_${phone || Date.now()}`;
     
-    // Log the incoming request data
-    console.log('Call request data:', { name, email, phone, userIdentifier });
-    
-    // Store the data globally for later use
-    if (email) {
-      global.lastTypeformSubmission = {
-        timestamp: new Date().toISOString(),
-        email: email,
-        name: name || '',
-        phone: phone || '',
-        source: 'API Call'
-      };
-      console.log('Saved API call contact info globally:', global.lastTypeformSubmission);
-    }
-    
     // Set up metadata for the Retell call
-    // This is how we'll pass customer information to the voice agent
     const metadata = {
-      customer_name: name || '',  // Ensure name is passed to agent
-      customer_email: email,      // Always include email
-      customer_phone: phone || '' // Include phone if available
+      customer_name: name || '',
+      customer_email: email || '',
+      customer_phone: phone || ''
     };
     
-    // Log the metadata we're sending to Retell
     console.log('Setting up call with metadata:', metadata);
     
     // Prevent fallback to "Monica" by setting a variable directly in the agent
     const initialVariables = {
       customer_name: name || '',
-      customer_email: email
+      customer_email: email || ''
     };
     
     // Make call to Retell API
@@ -415,9 +468,7 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
       {
         agent_id: process.env.RETELL_AGENT_ID,
         customer_number: phone,
-        // Set LLM variables to pass customer info (may need Retell update to use)
         variables: initialVariables,
-        // Pass metadata which will be available in WebSocket connection
         metadata
       },
       {
@@ -441,6 +492,43 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
       success: false, 
       error: error.message || 'Unknown error triggering call' 
     });
+  }
+});
+
+// NEW: Endpoint to handle direct contact info storage (for your n8n workflow)
+app.post('/store-contact', express.json(), (req, res) => {
+  try {
+    const { name, email, phone } = req.body;
+    console.log('Storing contact info:', { name, email, phone });
+    
+    if (email || name || phone) {
+      const contactInfo = {
+        timestamp: new Date().toISOString(),
+        email: email || '',
+        name: name || '',
+        phone: phone || '',
+        source: 'Direct Storage'
+      };
+      
+      global.lastTypeformSubmission = contactInfo;
+      
+      // Also store by phone for easier lookup
+      if (phone) {
+        global.submissionsByPhone.set(phone, contactInfo);
+        console.log(`Stored contact info by phone ${phone}:`, contactInfo);
+      }
+      
+      console.log('Successfully stored contact info:', contactInfo);
+    }
+    
+    res.status(200).json({ 
+      success: true, 
+      message: 'Contact info stored successfully',
+      stored: global.lastTypeformSubmission
+    });
+  } catch (error) {
+    console.error('Error storing contact info:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -586,11 +674,9 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
           
           // Extract customer info from metadata if available
           if (connectionData.metadata.customer_name) {
-            // Ensure we use the name from the form submission, not a hardcoded name
             bookingInfo.name = connectionData.metadata.customer_name;
             
-            // Remove any name placeholder that might exist like "Monica"
-            // And replace with the actual customer name from Typeform
+            // Update system prompt with the actual customer name
             const systemPrompt = conversationHistory[0].content;
             conversationHistory[0].content = systemPrompt
               .replace(/\[Name\]/g, bookingInfo.name)
@@ -602,35 +688,33 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
           
           if (connectionData.metadata.customer_email) {
             bookingInfo.email = connectionData.metadata.customer_email;
-            
-            // Also store this globally
-            if (!global.lastTypeformSubmission || !global.lastTypeformSubmission.email) {
-              global.lastTypeformSubmission = {
-                timestamp: new Date().toISOString(),
-                email: bookingInfo.email,
-                name: bookingInfo.name || '',
-                phone: bookingInfo.phone || '',
-                source: 'Call Metadata'
-              };
-              console.log('Stored email from call metadata globally:', global.lastTypeformSubmission);
-            }
-            
             collectedContactInfo = true;
           }
           
-          if (connectionData.metadata.to_number) {
-            bookingInfo.phone = connectionData.metadata.to_number;
-            collectedContactInfo = true;
-          } else if (parsed.call.to_number) {
-            bookingInfo.phone = parsed.call.to_number;
+          if (connectionData.metadata.customer_phone || connectionData.metadata.to_number || parsed.call.to_number) {
+            bookingInfo.phone = connectionData.metadata.customer_phone || connectionData.metadata.to_number || parsed.call.to_number;
             collectedContactInfo = true;
           }
           
           // Store this call's metadata globally
           activeCallsMetadata.set(connectionData.callId, parsed.call.metadata);
           
-          // Log what we've captured
-          console.log(`Captured customer info for call ${connectionData.callId}:`, {
+          // Try to find additional contact info by phone
+          if (bookingInfo.phone) {
+            const contactInfo = findContactByPhone(bookingInfo.phone);
+            if (contactInfo) {
+              if (!bookingInfo.email && contactInfo.email) {
+                bookingInfo.email = contactInfo.email;
+                console.log(`Found email via phone lookup: ${bookingInfo.email}`);
+              }
+              if (!bookingInfo.name && contactInfo.name) {
+                bookingInfo.name = contactInfo.name;
+                console.log(`Found name via phone lookup: ${bookingInfo.name}`);
+              }
+            }
+          }
+          
+          console.log(`Final captured customer info for call ${connectionData.callId}:`, {
             name: bookingInfo.name,
             email: bookingInfo.email,
             phone: bookingInfo.phone
@@ -915,15 +999,22 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
       let discoveryData = {};
       
       // Store this info globally as well
-      if (email) {
-        global.lastTypeformSubmission = {
+      if (email || name || phone) {
+        const contactInfo = {
           timestamp: new Date().toISOString(),
-          email: email,
+          email: email || '',
           name: name || '',
           phone: phone || '',
           source: 'Retell Webhook'
         };
-        console.log('Stored Retell webhook email globally:', global.lastTypeformSubmission);
+        
+        global.lastTypeformSubmission = contactInfo;
+        
+        if (phone) {
+          global.submissionsByPhone.set(phone, contactInfo);
+        }
+        
+        console.log('Stored Retell webhook contact info globally:', contactInfo);
       }
       
       // Look for preferred day in various locations
