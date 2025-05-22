@@ -66,6 +66,48 @@ async function updateConversationState(callId, discoveryComplete, preferredDay) 
 // FIXED: Send scheduling data with proper email handling - NO FALLBACK EMAIL
 async function sendSchedulingPreference(name, email, phone, preferredDay, callId, discoveryData = {}) {
   try {
+    console.log('=== WEBHOOK SENDING DEBUG ===');
+    console.log('Input parameters:', { name, email, phone, preferredDay, callId });
+    console.log('Global Typeform submission:', global.lastTypeformSubmission);
+    
+    // FIRST: Always try to get data from global Typeform submission
+    if (global.lastTypeformSubmission && global.lastTypeformSubmission.email) {
+      if (!email || email.trim() === '') {
+        email = global.lastTypeformSubmission.email;
+        console.log(`Using email from Typeform: ${email}`);
+      }
+      if (!name || name.trim() === '') {
+        name = global.lastTypeformSubmission.name;
+        console.log(`Using name from Typeform: ${name}`);
+      }
+      if (!phone || phone.trim() === '') {
+        phone = global.lastTypeformSubmission.phone;
+        console.log(`Using phone from Typeform: ${phone}`);
+      }
+    }
+    
+    // SECOND: Get customer data from call metadata if still missing
+    if (callId && activeCallsMetadata.has(callId)) {
+      const callMetadata = activeCallsMetadata.get(callId);
+      if (callMetadata) {
+        if (!email && callMetadata.customer_email) {
+          email = callMetadata.customer_email;
+          console.log(`Using email from call metadata: ${email}`);
+        }
+        if (!name && callMetadata.customer_name) {
+          name = callMetadata.customer_name;
+          console.log(`Using name from call metadata: ${name}`);
+        }
+        if (!phone && (callMetadata.phone || callMetadata.to_number)) {
+          phone = callMetadata.phone || callMetadata.to_number;
+          console.log(`Using phone from call metadata: ${phone}`);
+        }
+      }
+    }
+    
+    // Log what email we're going to use
+    console.log(`Final email being used for webhook: "${email}"`);
+    
     // Format discovery data to exactly match Airtable field names
     const formattedDiscoveryData = {};
     
@@ -114,57 +156,15 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       console.log('Added pain points from question_5:', discoveryData['question_5']);
     }
     
-    // FIXED: Get customer data from call metadata if missing
-    if (callId && activeCallsMetadata.has(callId)) {
-      const callMetadata = activeCallsMetadata.get(callId);
-      if (callMetadata) {
-        if (!email && callMetadata.customer_email) {
-          email = callMetadata.customer_email;
-          console.log(`Using email from call metadata: ${email}`);
-        }
-        if (!name && callMetadata.customer_name) {
-          name = callMetadata.customer_name;
-          console.log(`Using name from call metadata: ${name}`);
-        }
-        if (!phone && (callMetadata.phone || callMetadata.to_number)) {
-          phone = callMetadata.phone || callMetadata.to_number;
-          console.log(`Using phone from call metadata: ${phone}`);
-        }
-      }
-    }
-    
-    // Check if we have a valid email from the global Typeform submission
-    if ((!email || email.trim() === '') && global.lastTypeformSubmission && global.lastTypeformSubmission.email) {
-      email = global.lastTypeformSubmission.email;
-      console.log(`Using email from last Typeform submission: ${email}`);
-      
-      // Also get other info if needed
-      if (!name && global.lastTypeformSubmission.name) {
-        name = global.lastTypeformSubmission.name;
-      }
-      if (!phone && global.lastTypeformSubmission.phone) {
-        phone = global.lastTypeformSubmission.phone;
-      }
-    }
-    
-    // Log what email we're going to use
-    console.log(`Final email being used for webhook: "${email}"`);
-    
-    // IMPORTANT: Don't send webhook if no email found
-    if (!email || email.trim() === '') {
-      console.error('ERROR: No email found - cannot send webhook');
-      return { success: false, error: 'Email is required but not found' };
-    }
-    
     // Ensure phone number is formatted properly with leading +
     if (phone && !phone.startsWith('+')) {
       phone = '+1' + phone.replace(/[^0-9]/g, '');
     }
     
-    // Make the webhook data
+    // Make the webhook data - SEND EVEN IF EMAIL IS MISSING (let trigger server handle it)
     const webhookData = {
       name: name || '',
-      email: email,  // This will now always have a value or we won't reach this point
+      email: email || '',  // Send whatever email we have, even if empty
       phone: phone || '',
       preferredDay: preferredDay || '',
       call_id: callId || '',
@@ -634,12 +634,8 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
             collectedContactInfo = true;
           }
           
-          // Store this call's metadata globally including ALL metadata fields
-          activeCallsMetadata.set(connectionData.callId, {
-            ...parsed.call.metadata,  // Store all metadata fields
-            to_number: parsed.call.to_number,  // Also store to_number
-            phone: bookingInfo.phone
-          });
+          // Store this call's metadata globally
+          activeCallsMetadata.set(connectionData.callId, parsed.call.metadata);
           
           // Log what we've captured
           console.log(`Captured customer info for call ${connectionData.callId}:`, {
@@ -676,67 +672,6 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
                 
                 // Try to set the variable for the Retell call as well
                 try {
-                  if (parsed.call && parsed.call.call_id) {
-                    const variableKey = `discovery_q${i}`;
-                    const variableData = {
-                      variables: {
-                        [variableKey]: userMessage
-                      }
-                    };
-                    
-                    // Set the variable on the Retell call
-                    axios.post(`https://api.retellai.com/v1/calls/${parsed.call.call_id}/variables`, 
-                      variableData, 
-                      {
-                        headers: {
-                          'Authorization': `Bearer ${process.env.RETELL_API_KEY}`,
-                          'Content-Type': 'application/json'
-                        }
-                      }
-                    ).catch(err => console.error(`Error setting discovery variable ${variableKey}:`, err));
-                  }
-                } catch (varError) {
-                  console.error('Error setting call variable:', varError);
-                }
-                
-                break;
-              }
-            }
-          }
-        }
-        
-        // Check if user wants to schedule
-        if (userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss)\b/)) {
-          console.log('User requested scheduling');
-          // Only move to booking if we've completed discovery
-          if (discoveryProgress.allQuestionsAsked) {
-            conversationState = 'booking';
-          }
-        }
-        
-        // IMPROVED: Better day preference detection
-        if (conversationState === 'booking' || 
-           (conversationState === 'discovery' && discoveryProgress.allQuestionsAsked)) {
-          const dayInfo = handleSchedulingPreference(userMessage);
-          
-          if (dayInfo && !webhookSent) {
-            bookingInfo.preferredDay = dayInfo.dayName;
-            
-            // Alert the Retell agent through custom variables
-            try {
-              if (parsed.call && parsed.call.call_id) {
-                await axios.post(`https://api.retellai.com/v1/calls/${parsed.call.call_id}/variables`, {
-                  variables: {
-                    preferredDay: bookingInfo.preferredDay,
-                    schedulingComplete: true,
-                    // Include full discovery data
-                    discovery_data: JSON.stringify(discoveryData)
-                  }
-                }, {
-                  headers: {
-                    'Authorization': `Bearer ${process.env.RETELL_API_KEY}`,
-                    'Content-Type': 'application/json'
-                  }
                 });
                 console.log('Set Retell call variables for scheduling and discovery data');
               }
@@ -1049,4 +984,63 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Nexella WebSocket Server with Calendly scheduling link integration is listening on port ${PORT}`);
-});
+});if (parsed.call && parsed.call.call_id) {
+                    const variableKey = `discovery_q${i}`;
+                    const variableData = {
+                      variables: {
+                        [variableKey]: userMessage
+                      }
+                    };
+                    
+                    // Set the variable on the Retell call
+                    axios.post(`https://api.retellai.com/v1/calls/${parsed.call.call_id}/variables`, 
+                      variableData, 
+                      {
+                        headers: {
+                          'Authorization': `Bearer ${process.env.RETELL_API_KEY}`,
+                          'Content-Type': 'application/json'
+                        }
+                      }
+                    ).catch(err => console.error(`Error setting discovery variable ${variableKey}:`, err));
+                  }
+                } catch (varError) {
+                  console.error('Error setting call variable:', varError);
+                }
+                
+                break;
+              }
+            }
+          }
+        }
+        
+        // Check if user wants to schedule
+        if (userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss)\b/)) {
+          console.log('User requested scheduling');
+          // Only move to booking if we've completed discovery
+          if (discoveryProgress.allQuestionsAsked) {
+            conversationState = 'booking';
+          }
+        }
+        
+        // IMPROVED: Better day preference detection
+        if (conversationState === 'booking' || 
+           (conversationState === 'discovery' && discoveryProgress.allQuestionsAsked)) {
+          const dayInfo = handleSchedulingPreference(userMessage);
+          
+          if (dayInfo && !webhookSent) {
+            bookingInfo.preferredDay = dayInfo.dayName;
+            
+            // Alert the Retell agent through custom variables
+            try {
+              if (parsed.call && parsed.call.call_id) {
+                await axios.post(`https://api.retellai.com/v1/calls/${parsed.call.call_id}/variables`, {
+                  variables: {
+                    preferredDay: bookingInfo.preferredDay,
+                    schedulingComplete: true,
+                    // Include full discovery data
+                    discovery_data: JSON.stringify(discoveryData)
+                  }
+                }, {
+                  headers: {
+                    'Authorization': `Bearer ${process.env.RETELL_API_KEY}`,
+                    'Content-Type': 'application/json'
