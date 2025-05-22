@@ -84,7 +84,7 @@ async function updateConversationState(callId, discoveryComplete, preferredDay) 
   }
 }
 
-// FIXED: Send scheduling data with proper email handling - ENHANCED VERSION
+// ENHANCED: Send scheduling data with proper email handling - MULTIPLE SOURCES
 async function sendSchedulingPreference(name, email, phone, preferredDay, callId, discoveryData = {}) {
   try {
     console.log('=== WEBHOOK SENDING DEBUG ===');
@@ -157,7 +157,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     // Map the discovery questions to the EXACT Airtable field names
     const fieldMappings = {
       'question_0': 'How did you hear about us',
-      'question_1': 'Business/Industry', 
+      'question_1': 'Business/Industry',
       'question_2': 'Main product',
       'question_3': 'Running ads',
       'question_4': 'Using CRM',
@@ -643,63 +643,60 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
         console.log('Call data structure:', JSON.stringify(parsed.call, null, 2));
       }
       
-      // ENHANCED: Better metadata handling for call information
+      // KEEP SIMPLE: Basic metadata handling like the old version
       if (parsed.call && parsed.call.call_id && !connectionData.callId) {
         connectionData.callId = parsed.call.call_id;
         
         // Store call metadata if available
         if (parsed.call.metadata) {
           connectionData.metadata = parsed.call.metadata;
-          console.log('📞 Call metadata received:', JSON.stringify(connectionData.metadata, null, 2));
+          console.log('Call metadata received:', JSON.stringify(connectionData.metadata, null, 2));
           
-          // Extract and validate customer info from metadata
-          let metadataEmail = connectionData.metadata.customer_email;
-          let metadataName = connectionData.metadata.customer_name;  
-          let metadataPhone = connectionData.metadata.to_number || parsed.call.to_number;
+          // Extract customer info from metadata if available
+          if (connectionData.metadata.customer_name) {
+            bookingInfo.name = connectionData.metadata.customer_name;
+            
+            // Update system prompt with the actual customer name
+            const systemPrompt = conversationHistory[0].content;
+            conversationHistory[0].content = systemPrompt
+              .replace(/\[Name\]/g, bookingInfo.name)
+              .replace(/Monica/g, bookingInfo.name);
+              
+            console.log(`Updated system prompt with customer name: ${bookingInfo.name}`);
+            collectedContactInfo = true;
+          }
           
-          // ENHANCED: Update booking info and store globally if we have valid data
-          if (metadataEmail && metadataEmail.trim() !== '') {
-            bookingInfo.email = metadataEmail.trim();
-            bookingInfo.name = (metadataName || '').trim();
-            bookingInfo.phone = (metadataPhone || '').trim();
+          if (connectionData.metadata.customer_email) {
+            bookingInfo.email = connectionData.metadata.customer_email;
             
             // Store this globally as well with higher priority
             storeContactInfoGlobally(bookingInfo.name, bookingInfo.email, bookingInfo.phone, 'Call Metadata');
             
             collectedContactInfo = true;
-            console.log(`✅ Updated contact info from call metadata: ${bookingInfo.email}`);
+          }
+          
+          if (connectionData.metadata.to_number) {
+            bookingInfo.phone = connectionData.metadata.to_number;
+            collectedContactInfo = true;
+          } else if (parsed.call.to_number) {
+            bookingInfo.phone = parsed.call.to_number;
+            collectedContactInfo = true;
           }
           
           // Store this call's metadata in the active calls map
           activeCallsMetadata.set(connectionData.callId, {
-            customer_email: metadataEmail,
-            customer_name: metadataName,
-            phone: metadataPhone,
-            to_number: metadataPhone,
+            customer_email: connectionData.metadata.customer_email,
+            customer_name: connectionData.metadata.customer_name,
+            phone: connectionData.metadata.to_number || parsed.call.to_number,
+            to_number: connectionData.metadata.to_number || parsed.call.to_number,
             ...parsed.call.metadata
           });
           
-          console.log(`📝 Stored metadata for call ${connectionData.callId}:`, {
-            email: metadataEmail,
-            name: metadataName, 
-            phone: metadataPhone
-          });
-        }
-        
-        // FALLBACK: If no metadata, try to get info from global storage
-        if (!bookingInfo.email && global.lastTypeformSubmission && global.lastTypeformSubmission.email) {
-          console.log('🔄 Using global Typeform data as fallback for call metadata');
-          bookingInfo.email = global.lastTypeformSubmission.email;
-          bookingInfo.name = global.lastTypeformSubmission.name || '';
-          bookingInfo.phone = global.lastTypeformSubmission.phone || '';
-          collectedContactInfo = true;
-          
-          // Also store in activeCallsMetadata for consistency
-          activeCallsMetadata.set(connectionData.callId, {
-            customer_email: bookingInfo.email,
-            customer_name: bookingInfo.name,
-            phone: bookingInfo.phone,
-            to_number: bookingInfo.phone
+          // Log what we've captured
+          console.log(`Captured customer info for call ${connectionData.callId}:`, {
+            name: bookingInfo.name,
+            email: bookingInfo.email,
+            phone: bookingInfo.phone
           });
         }
       }
