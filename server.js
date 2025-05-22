@@ -285,7 +285,7 @@ function handleSchedulingPreference(userMessage) {
   return null;
 }
 
-// FIXED: Better data extraction from Retell call request
+// HTTP Request - Trigger Retell Call
 app.post('/trigger-retell-call', express.json(), async (req, res) => {
   try {
     const { name, email, phone, userId } = req.body;
@@ -305,7 +305,7 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
       customer_name: name || '',
       customer_email: email.trim(),
       customer_phone: phone || '',
-      typeform_source: true  // Flag to indicate this came from Typeform
+      typeform_source: true
     };
     
     console.log('Metadata being sent to Retell:', metadata);
@@ -351,7 +351,6 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
   }
 });
 
-// FIXED: WebSocket connection with proper data handling
 wss.on('connection', (ws) => {
   console.log('Retell connected via WebSocket.');
   
@@ -464,6 +463,7 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
       userHasSpoken = true;
       
       const parsed = JSON.parse(data);
+      console.log('Received WebSocket message:', JSON.stringify(parsed, null, 2));
       
       // FIXED: Better call metadata extraction and storage
       if (parsed.call && parsed.call.call_id && !connectionData.callId) {
@@ -480,6 +480,9 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
           if (connectionData.metadata.customer_name) {
             bookingInfo.name = connectionData.metadata.customer_name;
             console.log(`Set customer name: ${bookingInfo.name}`);
+            
+            // Update system prompt with actual customer name
+            conversationHistory[0].content = conversationHistory[0].content.replace(/\[customer_name\]/g, bookingInfo.name);
           }
           
           if (connectionData.metadata.customer_email) {
@@ -517,7 +520,10 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
         }
       }
 
+      // Handle response required messages
       if (parsed.interaction_type === 'response_required') {
+        console.log('=== PROCESSING USER MESSAGE ===');
+        
         const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
         const userMessage = latestUserUtterance?.content || "";
 
@@ -564,84 +570,102 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
         // Add user message to conversation history
         conversationHistory.push({ role: 'user', content: userMessage });
 
+        console.log('=== CALLING OPENAI ===');
         // Process with GPT
-        const openaiResponse = await axios.post(
-          'https://api.openai.com/v1/chat/completions',
-          {
-            model: 'gpt-4o',
-            messages: conversationHistory,
-            temperature: 0.7
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-              'Content-Type': 'application/json'
+        try {
+          const openaiResponse = await axios.post(
+            'https://api.openai.com/v1/chat/completions',
+            {
+              model: 'gpt-4o',
+              messages: conversationHistory,
+              temperature: 0.7
             },
-            timeout: 8000
-          }
-        );
-
-        const botReply = openaiResponse.data.choices[0].message.content || "Could you tell me a bit more about that?";
-
-        // Add bot reply to conversation history
-        conversationHistory.push({ role: 'assistant', content: botReply });
-
-        // Check if discovery is complete based on bot reply
-        const discoveryComplete = trackDiscoveryQuestions(botReply, discoveryProgress, discoveryQuestions);
-        
-        // Transition conversation state
-        if (conversationState === 'introduction') {
-          conversationState = 'discovery';
-        } else if (conversationState === 'discovery' && discoveryComplete) {
-          conversationState = 'booking';
-          console.log('Transitioning to booking state');
-        }
-
-        // Send the AI response
-        ws.send(JSON.stringify({
-          content: botReply,
-          content_complete: true,
-          actions: [],
-          response_id: parsed.response_id
-        }));
-
-        // AFTER sending the response, check if we should send webhook
-        if (bookingInfo.preferredDay && !webhookSent && 
-            (conversationState === 'booking' || conversationState === 'completed')) {
-          console.log('=== SENDING WEBHOOK FOR SCHEDULING ===');
-          try {
-            const result = await sendSchedulingPreference(
-              bookingInfo.name,
-              bookingInfo.email,
-              bookingInfo.phone,
-              bookingInfo.preferredDay,
-              connectionData.callId,
-              discoveryData
-            );
-            
-            if (result.success) {
-              webhookSent = true;
-              bookingInfo.schedulingLinkSent = true;
-              conversationState = 'completed';
-              console.log('Webhook sent successfully after response');
-            } else {
-              console.error('Webhook failed:', result.error);
+            {
+              headers: {
+                Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+                'Content-Type': 'application/json'
+              },
+              timeout: 8000
             }
-          } catch (webhookError) {
-            console.error('Error sending webhook:', webhookError);
+          );
+
+          const botReply = openaiResponse.data.choices[0].message.content || "Could you tell me a bit more about that?";
+          console.log('OpenAI response:', botReply);
+
+          // Add bot reply to conversation history
+          conversationHistory.push({ role: 'assistant', content: botReply });
+
+          // Check if discovery is complete based on bot reply
+          const discoveryComplete = trackDiscoveryQuestions(botReply, discoveryProgress, discoveryQuestions);
+          
+          // Transition conversation state
+          if (conversationState === 'introduction') {
+            conversationState = 'discovery';
+          } else if (conversationState === 'discovery' && discoveryComplete) {
+            conversationState = 'booking';
+            console.log('Transitioning to booking state');
           }
+
+          console.log('=== SENDING AI RESPONSE ===');
+          // Send the AI response
+          ws.send(JSON.stringify({
+            content: botReply,
+            content_complete: true,
+            actions: [],
+            response_id: parsed.response_id
+          }));
+
+          // AFTER sending the response, check if we should send webhook
+          if (bookingInfo.preferredDay && !webhookSent && 
+              (conversationState === 'booking' || conversationState === 'completed')) {
+            console.log('=== SENDING WEBHOOK FOR SCHEDULING ===');
+            setTimeout(async () => {
+              try {
+                const result = await sendSchedulingPreference(
+                  bookingInfo.name,
+                  bookingInfo.email,
+                  bookingInfo.phone,
+                  bookingInfo.preferredDay,
+                  connectionData.callId,
+                  discoveryData
+                );
+                
+                if (result.success) {
+                  webhookSent = true;
+                  bookingInfo.schedulingLinkSent = true;
+                  conversationState = 'completed';
+                  console.log('Webhook sent successfully after response');
+                } else {
+                  console.error('Webhook failed:', result.error);
+                }
+              } catch (webhookError) {
+                console.error('Error sending webhook:', webhookError);
+              }
+            }, 1000); // Delay webhook by 1 second
+          }
+
+        } catch (openaiError) {
+          console.error('OpenAI API error:', openaiError);
+          // Send fallback response
+          ws.send(JSON.stringify({
+            content: "I'm having a small technical issue. Could you repeat that?",
+            content_complete: true,
+            actions: [],
+            response_id: parsed.response_id
+          }));
         }
       }
 
     } catch (error) {
       console.error('Error handling message:', error.message);
+      console.error('Full error:', error);
       
       // Send error recovery message
       ws.send(JSON.stringify({
         content: "I'm sorry, could you repeat that?",
         content_complete: true,
         actions: [],
-        response_id: 9999
+        response_id: parsed.response_id || 9999
       }));
     }
   });
@@ -676,7 +700,7 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
   });
 });
 
-// Retell webhook endpoint
+// Endpoint to receive Retell webhook call events
 app.post('/retell-webhook', express.json(), async (req, res) => {
   try {
     const { event, call } = req.body;
