@@ -672,6 +672,67 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
                 
                 // Try to set the variable for the Retell call as well
                 try {
+                  if (parsed.call && parsed.call.call_id) {
+                    const variableKey = `discovery_q${i}`;
+                    const variableData = {
+                      variables: {
+                        [variableKey]: userMessage
+                      }
+                    };
+                    
+                    // Set the variable on the Retell call
+                    axios.post(`https://api.retellai.com/v1/calls/${parsed.call.call_id}/variables`, 
+                      variableData, 
+                      {
+                        headers: {
+                          'Authorization': `Bearer ${process.env.RETELL_API_KEY}`,
+                          'Content-Type': 'application/json'
+                        }
+                      }
+                    ).catch(err => console.error(`Error setting discovery variable ${variableKey}:`, err));
+                  }
+                } catch (varError) {
+                  console.error('Error setting call variable:', varError);
+                }
+                
+                break;
+              }
+            }
+          }
+        }
+        
+        // Check if user wants to schedule
+        if (userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss)\b/)) {
+          console.log('User requested scheduling');
+          // Only move to booking if we've completed discovery
+          if (discoveryProgress.allQuestionsAsked) {
+            conversationState = 'booking';
+          }
+        }
+        
+        // IMPROVED: Better day preference detection
+        if (conversationState === 'booking' || 
+           (conversationState === 'discovery' && discoveryProgress.allQuestionsAsked)) {
+          const dayInfo = handleSchedulingPreference(userMessage);
+          
+          if (dayInfo && !webhookSent) {
+            bookingInfo.preferredDay = dayInfo.dayName;
+            
+            // Alert the Retell agent through custom variables
+            try {
+              if (parsed.call && parsed.call.call_id) {
+                await axios.post(`https://api.retellai.com/v1/calls/${parsed.call.call_id}/variables`, {
+                  variables: {
+                    preferredDay: bookingInfo.preferredDay,
+                    schedulingComplete: true,
+                    // Include full discovery data
+                    discovery_data: JSON.stringify(discoveryData)
+                  }
+                }, {
+                  headers: {
+                    'Authorization': `Bearer ${process.env.RETELL_API_KEY}`,
+                    'Content-Type': 'application/json'
+                  }
                 });
                 console.log('Set Retell call variables for scheduling and discovery data');
               }
@@ -984,63 +1045,4 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Nexella WebSocket Server with Calendly scheduling link integration is listening on port ${PORT}`);
-});if (parsed.call && parsed.call.call_id) {
-                    const variableKey = `discovery_q${i}`;
-                    const variableData = {
-                      variables: {
-                        [variableKey]: userMessage
-                      }
-                    };
-                    
-                    // Set the variable on the Retell call
-                    axios.post(`https://api.retellai.com/v1/calls/${parsed.call.call_id}/variables`, 
-                      variableData, 
-                      {
-                        headers: {
-                          'Authorization': `Bearer ${process.env.RETELL_API_KEY}`,
-                          'Content-Type': 'application/json'
-                        }
-                      }
-                    ).catch(err => console.error(`Error setting discovery variable ${variableKey}:`, err));
-                  }
-                } catch (varError) {
-                  console.error('Error setting call variable:', varError);
-                }
-                
-                break;
-              }
-            }
-          }
-        }
-        
-        // Check if user wants to schedule
-        if (userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss)\b/)) {
-          console.log('User requested scheduling');
-          // Only move to booking if we've completed discovery
-          if (discoveryProgress.allQuestionsAsked) {
-            conversationState = 'booking';
-          }
-        }
-        
-        // IMPROVED: Better day preference detection
-        if (conversationState === 'booking' || 
-           (conversationState === 'discovery' && discoveryProgress.allQuestionsAsked)) {
-          const dayInfo = handleSchedulingPreference(userMessage);
-          
-          if (dayInfo && !webhookSent) {
-            bookingInfo.preferredDay = dayInfo.dayName;
-            
-            // Alert the Retell agent through custom variables
-            try {
-              if (parsed.call && parsed.call.call_id) {
-                await axios.post(`https://api.retellai.com/v1/calls/${parsed.call.call_id}/variables`, {
-                  variables: {
-                    preferredDay: bookingInfo.preferredDay,
-                    schedulingComplete: true,
-                    // Include full discovery data
-                    discovery_data: JSON.stringify(discoveryData)
-                  }
-                }, {
-                  headers: {
-                    'Authorization': `Bearer ${process.env.RETELL_API_KEY}`,
-                    'Content-Type': 'application/json'
+});
