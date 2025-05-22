@@ -10,11 +10,6 @@ const wss = new WebSocketServer({ server });
 
 app.use(express.json());
 
-// Store the latest Typeform submission for reference
-global.lastTypeformSubmission = null;
-// Store submissions by phone number for better lookup
-global.submissionsByPhone = new Map();
-
 app.get('/', (req, res) => {
   res.send('Nexella WebSocket Server with Calendly scheduling link integration is live!');
 });
@@ -65,41 +60,6 @@ async function updateConversationState(callId, discoveryComplete, preferredDay) 
   }
 }
 
-// Helper function to find contact info by phone number
-function findContactByPhone(phone) {
-  if (!phone) return null;
-  
-  // Normalize phone number for lookup
-  const normalizedPhone = phone.replace(/[^0-9]/g, '');
-  
-  console.log(`Looking for contact with phone: ${phone} (normalized: ${normalizedPhone})`);
-  
-  // Check the phone-based storage first
-  for (const [storedPhone, contact] of global.submissionsByPhone.entries()) {
-    const normalizedStoredPhone = storedPhone.replace(/[^0-9]/g, '');
-    if (normalizedStoredPhone === normalizedPhone || 
-        normalizedStoredPhone.endsWith(normalizedPhone) || 
-        normalizedPhone.endsWith(normalizedStoredPhone)) {
-      console.log(`Found contact by phone: ${JSON.stringify(contact)}`);
-      return contact;
-    }
-  }
-  
-  // Check the global last submission as fallback
-  if (global.lastTypeformSubmission && global.lastTypeformSubmission.phone) {
-    const globalPhone = global.lastTypeformSubmission.phone.replace(/[^0-9]/g, '');
-    if (globalPhone === normalizedPhone || 
-        globalPhone.endsWith(normalizedPhone) || 
-        normalizedPhone.endsWith(globalPhone)) {
-      console.log(`Found contact from global submission: ${JSON.stringify(global.lastTypeformSubmission)}`);
-      return global.lastTypeformSubmission;
-    }
-  }
-  
-  console.log('No contact found for phone number');
-  return null;
-}
-
 // IMPROVED: Send scheduling data to trigger server webhook endpoint with better field mapping
 async function sendSchedulingPreference(name, email, phone, preferredDay, callId, discoveryData = {}) {
   try {
@@ -144,71 +104,30 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       }
     });
     
-    // Add pain point from the last question if it's available but not yet mapped
-    if (discoveryData['question_5'] && !formattedDiscoveryData['Pain points']) {
-      formattedDiscoveryData['Pain points'] = discoveryData['question_5'];
-      console.log('Added pain points from question_5:', discoveryData['question_5']);
-    }
-    
-    // IMPORTANT FIX: Try multiple sources to get email and name
-    console.log('Starting email/name resolution...');
-    console.log('Initial values - name:', name, 'email:', email, 'phone:', phone);
-    
-    // 1. Try call metadata first
-    if (callId && activeCallsMetadata.has(callId)) {
+    // IMPORTANT FIX: Ensure we have the metadata from call ID if available
+    if (callId && activeCallsMetadata.has(callId) && (!email || !name || !phone)) {
       const callMetadata = activeCallsMetadata.get(callId);
       if (callMetadata) {
-        if (!email && callMetadata.customer_email) {
-          email = callMetadata.customer_email;
-          console.log(`Got email from call metadata: ${email}`);
-        }
-        if (!name && callMetadata.customer_name) {
-          name = callMetadata.customer_name;
-          console.log(`Got name from call metadata: ${name}`);
-        }
-        if (!phone && (callMetadata.phone || callMetadata.to_number || callMetadata.customer_phone)) {
-          phone = callMetadata.phone || callMetadata.to_number || callMetadata.customer_phone;
-          console.log(`Got phone from call metadata: ${phone}`);
+        if (!email && callMetadata.customer_email) email = callMetadata.customer_email;
+        if (!name && callMetadata.customer_name) name = callMetadata.customer_name;
+        if (!phone) {
+          phone = callMetadata.phone || callMetadata.to_number;
         }
       }
+      console.log(`Retrieved metadata from call ID ${callId}: ${email}, ${name}, ${phone}`);
     }
     
-    // 2. Try to find contact by phone number
-    if (phone && (!email || !name)) {
-      const contactInfo = findContactByPhone(phone);
-      if (contactInfo) {
-        if (!email && contactInfo.email) {
-          email = contactInfo.email;
-          console.log(`Got email from phone lookup: ${email}`);
-        }
-        if (!name && contactInfo.name) {
-          name = contactInfo.name;
-          console.log(`Got name from phone lookup: ${name}`);
-        }
-      }
+    // FIX: Don't use fallback email unless email is actually undefined or null
+    if (email === undefined || email === null) {
+      console.log('WARNING: Email is missing, using empty string');
+      email = ''; // Use empty string instead of hardcoded fallback
     }
-    
-    // 3. Try global Typeform submission
-    if ((!email || !name) && global.lastTypeformSubmission) {
-      if (!email && global.lastTypeformSubmission.email) {
-        email = global.lastTypeformSubmission.email;
-        console.log(`Got email from global submission: ${email}`);
-      }
-      if (!name && global.lastTypeformSubmission.name) {
-        name = global.lastTypeformSubmission.name;
-        console.log(`Got name from global submission: ${name}`);
-      }
-    }
-    
-    // Log final resolution
-    console.log('Final resolved values - name:', name, 'email:', email, 'phone:', phone);
     
     // Ensure phone number is formatted properly with leading +
     if (phone && !phone.startsWith('+')) {
       phone = '+1' + phone.replace(/[^0-9]/g, '');
     }
     
-    // Make the webhook data
     const webhookData = {
       name: name || '',
       email: email || '',
@@ -219,7 +138,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       discovery_data: formattedDiscoveryData
     };
     
-    console.log('Sending scheduling preference to trigger server:', JSON.stringify(webhookData, null, 2));
+    console.log('Sending scheduling preference to trigger server with EXACTLY MAPPED field names:', JSON.stringify(webhookData, null, 2));
     
     const response = await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, webhookData, {
       headers: { 'Content-Type': 'application/json' },
@@ -237,61 +156,20 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL || 'https://n8n-clp2.onrender.com/webhook/retell-scheduling';
       console.log(`Using n8n webhook URL: ${n8nWebhookUrl}`);
       
-      // Format discovery data again for n8n
-      const formattedDiscoveryData = {};
-      
-      const fieldMappings = {
-        'question_0': 'How did you hear about us',
-        'question_1': 'Business/Industry',
-        'question_2': 'Main product',
-        'question_3': 'Running ads',
-        'question_4': 'Using CRM',
-        'question_5': 'Pain points'
-      };
-      
-      Object.entries(discoveryData).forEach(([key, value]) => {
-        if (key.startsWith('question_')) {
-          if (fieldMappings[key]) {
-            formattedDiscoveryData[fieldMappings[key]] = value;
-          } else {
-            formattedDiscoveryData[key] = value;
-          }
-        } else if (key.includes('hear about us')) {
-          formattedDiscoveryData['How did you hear about us'] = value;
-        } else if (key.includes('business') || key.includes('industry')) {
-          formattedDiscoveryData['Business/Industry'] = value;
-        } else if (key.includes('product')) {
-          formattedDiscoveryData['Main product'] = value;
-        } else if (key.includes('ads') || key.includes('advertising')) {
-          formattedDiscoveryData['Running ads'] = value;
-        } else if (key.includes('crm')) {
-          formattedDiscoveryData['Using CRM'] = value;
-        } else if (key.includes('pain') || key.includes('problem') || key.includes('points')) {
-          formattedDiscoveryData['Pain points'] = value;
-        } else {
-          formattedDiscoveryData[key] = value;
-        }
-      });
-      
-      if (discoveryData['question_5'] && !formattedDiscoveryData['Pain points']) {
-        formattedDiscoveryData['Pain points'] = discoveryData['question_5'];
-      }
-      
       const webhookData = {
         name: name || '',
-        email: email || '',
+        email: email || '', // Remove the hardcoded fallback here too
         phone: phone || '',
         preferredDay: preferredDay || '',
         call_id: callId || '',
         schedulingComplete: true,
-        discovery_data: formattedDiscoveryData
+        discovery_data: formattedDiscoveryData || {}
       };
       
       const n8nResponse = await axios.post(n8nWebhookUrl, webhookData, {
         headers: { 'Content-Type': 'application/json' },
         timeout: 10000
       });
-      
       console.log('Successfully sent directly to n8n:', n8nResponse.data);
       return { success: true, fallback: true };
     } catch (n8nError) {
@@ -418,49 +296,38 @@ function handleSchedulingPreference(userMessage) {
 }
 
 // HTTP Request - Trigger Retell Call
-// This endpoint initiates the call with Retell and stores contact info
+// This endpoint initiates the call with Retell
 app.post('/trigger-retell-call', express.json(), async (req, res) => {
   try {
     const { name, email, phone, userId } = req.body;
     console.log(`Received request to trigger Retell call for ${name} (${email})`);
     
-    // Store the contact info immediately when we receive it
-    if (email || name || phone) {
-      const contactInfo = {
-        timestamp: new Date().toISOString(),
-        email: email || '',
-        name: name || '',
-        phone: phone || '',
-        source: 'API Call'
-      };
-      
-      global.lastTypeformSubmission = contactInfo;
-      
-      // Also store by phone for easier lookup
-      if (phone) {
-        global.submissionsByPhone.set(phone, contactInfo);
-        console.log(`Stored contact info by phone ${phone}:`, contactInfo);
-      }
-      
-      console.log('Saved API call contact info globally:', contactInfo);
+    // Check if we have all required fields
+    if (!email) {
+      return res.status(400).json({ success: false, error: 'Email is required' });
     }
     
     // Ensure we have a unique user ID
     const userIdentifier = userId || `user_${phone || Date.now()}`;
     
+    // Log the incoming request data
+    console.log('Call request data:', { name, email, phone, userIdentifier });
+    
     // Set up metadata for the Retell call
+    // This is how we'll pass customer information to the voice agent
     const metadata = {
-      customer_name: name || '',
-      customer_email: email || '',
-      customer_phone: phone || ''
+      customer_name: name || '',  // Ensure name is passed to agent
+      customer_email: email,      // Always include email
+      customer_phone: phone || '' // Include phone if available
     };
     
+    // Log the metadata we're sending to Retell
     console.log('Setting up call with metadata:', metadata);
     
     // Prevent fallback to "Monica" by setting a variable directly in the agent
     const initialVariables = {
       customer_name: name || '',
-      customer_email: email || ''
+      customer_email: email
     };
     
     // Make call to Retell API
@@ -468,7 +335,9 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
       {
         agent_id: process.env.RETELL_AGENT_ID,
         customer_number: phone,
+        // Set LLM variables to pass customer info (may need Retell update to use)
         variables: initialVariables,
+        // Pass metadata which will be available in WebSocket connection
         metadata
       },
       {
@@ -492,43 +361,6 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
       success: false, 
       error: error.message || 'Unknown error triggering call' 
     });
-  }
-});
-
-// NEW: Endpoint to handle direct contact info storage (for your n8n workflow)
-app.post('/store-contact', express.json(), (req, res) => {
-  try {
-    const { name, email, phone } = req.body;
-    console.log('Storing contact info:', { name, email, phone });
-    
-    if (email || name || phone) {
-      const contactInfo = {
-        timestamp: new Date().toISOString(),
-        email: email || '',
-        name: name || '',
-        phone: phone || '',
-        source: 'Direct Storage'
-      };
-      
-      global.lastTypeformSubmission = contactInfo;
-      
-      // Also store by phone for easier lookup
-      if (phone) {
-        global.submissionsByPhone.set(phone, contactInfo);
-        console.log(`Stored contact info by phone ${phone}:`, contactInfo);
-      }
-      
-      console.log('Successfully stored contact info:', contactInfo);
-    }
-    
-    res.status(200).json({ 
-      success: true, 
-      message: 'Contact info stored successfully',
-      stored: global.lastTypeformSubmission
-    });
-  } catch (error) {
-    console.error('Error storing contact info:', error);
-    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -674,9 +506,11 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
           
           // Extract customer info from metadata if available
           if (connectionData.metadata.customer_name) {
+            // Ensure we use the name from the form submission, not a hardcoded name
             bookingInfo.name = connectionData.metadata.customer_name;
             
-            // Update system prompt with the actual customer name
+            // Remove any name placeholder that might exist like "Monica"
+            // And replace with the actual customer name from Typeform
             const systemPrompt = conversationHistory[0].content;
             conversationHistory[0].content = systemPrompt
               .replace(/\[Name\]/g, bookingInfo.name)
@@ -691,30 +525,19 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
             collectedContactInfo = true;
           }
           
-          if (connectionData.metadata.customer_phone || connectionData.metadata.to_number || parsed.call.to_number) {
-            bookingInfo.phone = connectionData.metadata.customer_phone || connectionData.metadata.to_number || parsed.call.to_number;
+          if (connectionData.metadata.to_number) {
+            bookingInfo.phone = connectionData.metadata.to_number;
+            collectedContactInfo = true;
+          } else if (parsed.call.to_number) {
+            bookingInfo.phone = parsed.call.to_number;
             collectedContactInfo = true;
           }
           
           // Store this call's metadata globally
           activeCallsMetadata.set(connectionData.callId, parsed.call.metadata);
           
-          // Try to find additional contact info by phone
-          if (bookingInfo.phone) {
-            const contactInfo = findContactByPhone(bookingInfo.phone);
-            if (contactInfo) {
-              if (!bookingInfo.email && contactInfo.email) {
-                bookingInfo.email = contactInfo.email;
-                console.log(`Found email via phone lookup: ${bookingInfo.email}`);
-              }
-              if (!bookingInfo.name && contactInfo.name) {
-                bookingInfo.name = contactInfo.name;
-                console.log(`Found name via phone lookup: ${bookingInfo.name}`);
-              }
-            }
-          }
-          
-          console.log(`Final captured customer info for call ${connectionData.callId}:`, {
+          // Log what we've captured
+          console.log(`Captured customer info for call ${connectionData.callId}:`, {
             name: bookingInfo.name,
             email: bookingInfo.email,
             phone: bookingInfo.phone
@@ -817,106 +640,7 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
             }
             
             // Immediately send data to trigger server when we get a day preference
-            console.log('Sending scheduling preference to trigger server with all collected data');
-            const result = await sendSchedulingPreference(
-              bookingInfo.name,
-              bookingInfo.email,
-              bookingInfo.phone,
-              bookingInfo.preferredDay,
-              connectionData.callId,
-              discoveryData
-            );
-            
-            // Mark as sent and continue conversation naturally
-            bookingInfo.schedulingLinkSent = true;
-            conversationState = 'completed';
-            webhookSent = true;
-            
-            // Update conversation state in trigger server
-            if (connectionData.callId) {
-              await updateConversationState(connectionData.callId, true, bookingInfo.preferredDay);
-            }
-            
-            console.log('Data sent to n8n and conversation marked as completed');
-          }
-        }
-
-        // Add user message to conversation history
-        conversationHistory.push({ role: 'user', content: userMessage });
-
-        // Process with GPT
-        const openaiResponse = await axios.post(
-          'https://api.openai.com/v1/chat/completions',
-          {
-            model: 'gpt-4o',
-            messages: conversationHistory,
-            temperature: 0.7 // Increased for more natural responses
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-              'Content-Type': 'application/json'
-            },
-            timeout: 8000 // Increased timeout for more reliable responses
-          }
-        );
-
-        const botReply = openaiResponse.data.choices[0].message.content || "Haha, could you tell me a bit more about that?";
-
-        // Add bot reply to conversation history
-        conversationHistory.push({ role: 'assistant', content: botReply });
-
-        // Check if discovery is complete based on bot reply
-        const discoveryComplete = trackDiscoveryQuestions(botReply, discoveryProgress, discoveryQuestions);
-        
-        // Transition state based on content and tracking
-        if (conversationState === 'introduction') {
-          // Move to discovery after introduction
-          conversationState = 'discovery';
-        } else if (conversationState === 'discovery' && discoveryComplete) {
-          // Transition to booking if all discovery questions are asked
-          conversationState = 'booking';
-          
-          // Update conversation state in trigger server
-          if (connectionData.callId) {
-            updateConversationState(connectionData.callId, true, null);
-          }
-          
-          console.log('Transitioning to booking state based on discovery completion');
-        }
-
-        // Send the AI response
-        ws.send(JSON.stringify({
-          content: botReply,
-          content_complete: true,
-          actions: [],
-          response_id: parsed.response_id
-        }));
-        
-        // After sending the response, check if this should be our last message
-        if (conversationState === 'completed' && !webhookSent && botReply.toLowerCase().includes('scheduling')) {
-          // If we're in the completed state and talking about scheduling but haven't sent the webhook yet
-          if (bookingInfo.email || connectionData.metadata?.customer_email) {
-            console.log('Sending final webhook before conversation end');
-            await sendSchedulingPreference(
-              bookingInfo.name || connectionData.metadata?.customer_name || '',
-              bookingInfo.email || connectionData.metadata?.customer_email || '',
-              bookingInfo.phone || connectionData.metadata?.to_number || '',
-              bookingInfo.preferredDay || 'Not specified',
-              connectionData.callId,
-              discoveryData
-            );
-            webhookSent = true;
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Error handling message:', error.message);
-      
-      // Always try to send whatever data we have if an error occurs
-      if (!webhookSent && connectionData.callId && (bookingInfo.email || connectionData.metadata?.customer_email)) {
-        try {
-          console.log('Sending webhook due to error');
+            console.log('Sending webhook due to error');
           await sendSchedulingPreference(
             bookingInfo.name || connectionData.metadata?.customer_name || '',
             bookingInfo.email || connectionData.metadata?.customer_email || '',
@@ -998,31 +722,12 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
       let preferredDay = '';
       let discoveryData = {};
       
-      // Store this info globally as well
-      if (email || name || phone) {
-        const contactInfo = {
-          timestamp: new Date().toISOString(),
-          email: email || '',
-          name: name || '',
-          phone: phone || '',
-          source: 'Retell Webhook'
-        };
-        
-        global.lastTypeformSubmission = contactInfo;
-        
-        if (phone) {
-          global.submissionsByPhone.set(phone, contactInfo);
-        }
-        
-        console.log('Stored Retell webhook contact info globally:', contactInfo);
-      }
-      
       // Look for preferred day in various locations
       if (call.variables && call.variables.preferredDay) {
         preferredDay = call.variables.preferredDay;
       } else if (call.custom_data && call.custom_data.preferredDay) {
         preferredDay = call.custom_data.preferredDay;
-      } else if (call.analysis && call.analysis.custom_data) {
+        } else if (call.analysis && call.analysis.custom_data) {
         try {
           const customData = typeof call.analysis.custom_data === 'string'
             ? JSON.parse(call.analysis.custom_data)
@@ -1128,4 +833,104 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Nexella WebSocket Server with Calendly scheduling link integration is listening on port ${PORT}`);
-});
+}); scheduling preference to trigger server with all collected data');
+            const result = await sendSchedulingPreference(
+              bookingInfo.name,
+              bookingInfo.email,
+              bookingInfo.phone,
+              bookingInfo.preferredDay,
+              connectionData.callId,
+              discoveryData
+            );
+            
+            // Mark as sent and continue conversation naturally
+            bookingInfo.schedulingLinkSent = true;
+            conversationState = 'completed';
+            webhookSent = true;
+            
+            // Update conversation state in trigger server
+            if (connectionData.callId) {
+              await updateConversationState(connectionData.callId, true, bookingInfo.preferredDay);
+            }
+            
+            console.log('Data sent to n8n and conversation marked as completed');
+          }
+        }
+
+        // Add user message to conversation history
+        conversationHistory.push({ role: 'user', content: userMessage });
+
+        // Process with GPT
+        const openaiResponse = await axios.post(
+          'https://api.openai.com/v1/chat/completions',
+          {
+            model: 'gpt-4o',
+            messages: conversationHistory,
+            temperature: 0.7 // Increased for more natural responses
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+              'Content-Type': 'application/json'
+            },
+            timeout: 8000 // Increased timeout for more reliable responses
+          }
+        );
+
+        const botReply = openaiResponse.data.choices[0].message.content || "Haha, could you tell me a bit more about that?";
+
+        // Add bot reply to conversation history
+        conversationHistory.push({ role: 'assistant', content: botReply });
+
+        // Check if discovery is complete based on bot reply
+        const discoveryComplete = trackDiscoveryQuestions(botReply, discoveryProgress, discoveryQuestions);
+        
+        // Transition state based on content and tracking
+        if (conversationState === 'introduction') {
+          // Move to discovery after introduction
+          conversationState = 'discovery';
+        } else if (conversationState === 'discovery' && discoveryComplete) {
+          // Transition to booking if all discovery questions are asked
+          conversationState = 'booking';
+          
+          // Update conversation state in trigger server
+          if (connectionData.callId) {
+            updateConversationState(connectionData.callId, true, null);
+          }
+          
+          console.log('Transitioning to booking state based on discovery completion');
+        }
+
+        // Send the AI response
+        ws.send(JSON.stringify({
+          content: botReply,
+          content_complete: true,
+          actions: [],
+          response_id: parsed.response_id
+        }));
+        
+        // After sending the response, check if this should be our last message
+        if (conversationState === 'completed' && !webhookSent && botReply.toLowerCase().includes('scheduling')) {
+          // If we're in the completed state and talking about scheduling but haven't sent the webhook yet
+          if (bookingInfo.email || connectionData.metadata?.customer_email) {
+            console.log('Sending final webhook before conversation end');
+            await sendSchedulingPreference(
+              bookingInfo.name || connectionData.metadata?.customer_name || '',
+              bookingInfo.email || connectionData.metadata?.customer_email || '',
+              bookingInfo.phone || connectionData.metadata?.to_number || '',
+              bookingInfo.preferredDay || 'Not specified',
+              connectionData.callId,
+              discoveryData
+            );
+            webhookSent = true;
+          }
+        }
+      }
+
+    } catch (error) {
+      console.error('Error handling message:', error.message);
+      
+      // Always try to send whatever data we have if an error occurs
+      if (!webhookSent && connectionData.callId && (bookingInfo.email || connectionData.metadata?.customer_email)) {
+        try {
+          console.log('Sending
