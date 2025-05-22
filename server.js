@@ -643,61 +643,79 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
         console.log('Call data structure:', JSON.stringify(parsed.call, null, 2));
       }
       
+      // ENHANCED: Try to get contact info from global storage first
+      if (!collectedContactInfo && global.lastTypeformSubmission) {
+        console.log('🔄 Loading contact info from global storage');
+        bookingInfo.email = global.lastTypeformSubmission.email;
+        bookingInfo.name = global.lastTypeformSubmission.name || '';
+        bookingInfo.phone = global.lastTypeformSubmission.phone || '';
+        collectedContactInfo = true;
+        console.log('✅ Loaded contact info from global storage:', {
+          name: bookingInfo.name,
+          email: bookingInfo.email,
+          phone: bookingInfo.phone
+        });
+      }
+      
       // KEEP SIMPLE: Basic metadata handling like the old version
       if (parsed.call && parsed.call.call_id && !connectionData.callId) {
         connectionData.callId = parsed.call.call_id;
+        console.log(`🔗 Connected to call: ${connectionData.callId}`);
         
         // Store call metadata if available
         if (parsed.call.metadata) {
           connectionData.metadata = parsed.call.metadata;
-          console.log('Call metadata received:', JSON.stringify(connectionData.metadata, null, 2));
+          console.log('📞 Call metadata received:', JSON.stringify(connectionData.metadata, null, 2));
           
           // Extract customer info from metadata if available
-          if (connectionData.metadata.customer_name) {
+          if (connectionData.metadata.customer_name && !bookingInfo.name) {
             bookingInfo.name = connectionData.metadata.customer_name;
-            
-            // Update system prompt with the actual customer name
+            console.log(`Updated name from metadata: ${bookingInfo.name}`);
+          }
+          
+          if (connectionData.metadata.customer_email && !bookingInfo.email) {
+            bookingInfo.email = connectionData.metadata.customer_email;
+            console.log(`Updated email from metadata: ${bookingInfo.email}`);
+          }
+          
+          if ((connectionData.metadata.to_number || parsed.call.to_number) && !bookingInfo.phone) {
+            bookingInfo.phone = connectionData.metadata.to_number || parsed.call.to_number;
+            console.log(`Updated phone from metadata: ${bookingInfo.phone}`);
+          }
+          
+          // Update system prompt with the actual customer name if we have it
+          if (bookingInfo.name) {
             const systemPrompt = conversationHistory[0].content;
             conversationHistory[0].content = systemPrompt
               .replace(/\[Name\]/g, bookingInfo.name)
               .replace(/Monica/g, bookingInfo.name);
-              
             console.log(`Updated system prompt with customer name: ${bookingInfo.name}`);
-            collectedContactInfo = true;
           }
           
-          if (connectionData.metadata.customer_email) {
-            bookingInfo.email = connectionData.metadata.customer_email;
-            
-            // Store this globally as well with higher priority
+          collectedContactInfo = true;
+          
+          // Store this globally if not already stored
+          if (bookingInfo.email) {
             storeContactInfoGlobally(bookingInfo.name, bookingInfo.email, bookingInfo.phone, 'Call Metadata');
-            
-            collectedContactInfo = true;
-          }
-          
-          if (connectionData.metadata.to_number) {
-            bookingInfo.phone = connectionData.metadata.to_number;
-            collectedContactInfo = true;
-          } else if (parsed.call.to_number) {
-            bookingInfo.phone = parsed.call.to_number;
-            collectedContactInfo = true;
           }
           
           // Store this call's metadata in the active calls map
           activeCallsMetadata.set(connectionData.callId, {
-            customer_email: connectionData.metadata.customer_email,
-            customer_name: connectionData.metadata.customer_name,
-            phone: connectionData.metadata.to_number || parsed.call.to_number,
-            to_number: connectionData.metadata.to_number || parsed.call.to_number,
+            customer_email: bookingInfo.email,
+            customer_name: bookingInfo.name,
+            phone: bookingInfo.phone,
+            to_number: bookingInfo.phone,
             ...parsed.call.metadata
           });
           
           // Log what we've captured
-          console.log(`Captured customer info for call ${connectionData.callId}:`, {
+          console.log(`✅ Final captured customer info for call ${connectionData.callId}:`, {
             name: bookingInfo.name,
             email: bookingInfo.email,
             phone: bookingInfo.phone
           });
+        } else {
+          console.log('⚠️ No metadata in call object, but that\'s OK - using global storage');
         }
       }
 
