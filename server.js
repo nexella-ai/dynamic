@@ -397,7 +397,7 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
       console.log('Saved API call contact info globally:', global.lastTypeformSubmission);
     }
 
-    // ✅ Generate and store callId for metadata lookup later
+    // Generate and store callId for metadata lookup later
     const callId = `call_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
     activeCallsMetadata.set(callId, {
       customer_name: name,
@@ -414,10 +414,9 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
     const initialVariables = {
       customer_name: name || '',
       customer_email: email,
-      call_id: callId // ✅ added to help WebSocket match metadata
+      call_id: callId
     };
 
-    // ✅ Pass callId to Retell call
     const response = await axios.post('https://api.retellai.com/v1/calls', 
       {
         agent_id: process.env.RETELL_AGENT_ID,
@@ -440,56 +439,6 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
       message: `Call initiated for ${name || email}`
     });
 
-  } catch (error) {
-    console.error('Error triggering Retell call:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message || 'Unknown error triggering call' 
-    });
-  }
-}); 
-    // Set up metadata for the Retell call
-    // This is how we'll pass customer information to the voice agent
-    const metadata = {
-      customer_name: name || '',  // Ensure name is passed to agent
-      customer_email: email,      // Always include email
-      customer_phone: phone || '' // Include phone if available
-    };
-    
-    // Log the metadata we're sending to Retell
-    console.log('Setting up call with metadata:', metadata);
-    
-    // Prevent fallback to "Monica" by setting a variable directly in the agent
-    const initialVariables = {
-      customer_name: name || '',
-      customer_email: email
-    };
-    
-    // Make call to Retell API
-    const response = await axios.post('https://api.retellai.com/v1/calls', 
-      {
-        agent_id: process.env.RETELL_AGENT_ID,
-        customer_number: phone,
-        // Set LLM variables to pass customer info (may need Retell update to use)
-        variables: initialVariables,
-        // Pass metadata which will be available in WebSocket connection
-        metadata
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${process.env.RETELL_API_KEY}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-    
-    console.log(`Successfully triggered Retell call: ${response.data.call_id}`);
-    res.status(200).json({ 
-      success: true, 
-      call_id: response.data.call_id,
-      message: `Call initiated for ${name || email}`
-    });
-    
   } catch (error) {
     console.error('Error triggering Retell call:', error);
     res.status(500).json({ 
@@ -498,7 +447,6 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
     });
   }
 });
-
 wss.on('connection', (ws) => {
   console.log('Retell connected via WebSocket.');
   
@@ -629,6 +577,12 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
       userHasSpoken = true;
       
       const parsed = JSON.parse(data);
+      
+      // Debug logging to see what we're receiving
+      console.log('WebSocket message type:', parsed.interaction_type || 'unknown');
+      if (parsed.call) {
+        console.log('Call data structure:', JSON.stringify(parsed.call, null, 2));
+      }
       
       // IMPROVED: Better metadata handling for call information
       if (parsed.call && parsed.call.call_id && !connectionData.callId) {
@@ -951,6 +905,16 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
     }
   });
 });
+
+// Endpoint to receive Retell webhook call events
+app.post('/retell-webhook', express.json(), async (req, res) => {
+  try {
+    const { event, call } = req.body;
+    
+    console.log(`Received Retell webhook event: ${event}`);
+    
+    if (call && call.call_id) {
+      console.log(`Call ID: ${call.call_id}, Status: ${call.call_status}`);
       
       // Extract important call information
       const email = call.metadata?.customer_email || '';
