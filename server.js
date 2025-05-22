@@ -951,16 +951,6 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
     }
   });
 });
-
-// Endpoint to receive Retell webhook call events
-app.post('/retell-webhook', express.json(), async (req, res) => {
-  try {
-    const { event, call } = req.body;
-    
-    console.log(`Received Retell webhook event: ${event}`);
-    
-    if (call && call.call_id) {
-      console.log(`Call ID: ${call.call_id}, Status: ${call.call_status}`);
       
       // Extract important call information
       const email = call.metadata?.customer_email || '';
