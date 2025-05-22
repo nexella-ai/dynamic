@@ -20,6 +20,27 @@ app.get('/', (req, res) => {
 // Store active calls metadata
 const activeCallsMetadata = new Map();
 
+// Enhanced function to store contact info globally with multiple fallbacks
+function storeContactInfoGlobally(name, email, phone, source = 'Unknown') {
+  console.log(`📝 Storing contact info globally from ${source}:`, { name, email, phone });
+  
+  // Always update if we have an email
+  if (email && email.trim() !== '') {
+    global.lastTypeformSubmission = {
+      timestamp: new Date().toISOString(),
+      email: email.trim(),
+      name: (name || '').trim(),
+      phone: (phone || '').trim(),
+      source: source
+    };
+    console.log('✅ Stored contact info globally:', global.lastTypeformSubmission);
+    return true;
+  } else {
+    console.warn('⚠️ Cannot store contact info - missing email');
+    return false;
+  }
+}
+
 // For checking slot availability with our trigger server
 async function checkAvailability(startTime, endTime) {
   try {
@@ -63,50 +84,72 @@ async function updateConversationState(callId, discoveryComplete, preferredDay) 
   }
 }
 
-// FIXED: Send scheduling data with proper email handling - NO FALLBACK EMAIL
+// FIXED: Send scheduling data with proper email handling - ENHANCED VERSION
 async function sendSchedulingPreference(name, email, phone, preferredDay, callId, discoveryData = {}) {
   try {
     console.log('=== WEBHOOK SENDING DEBUG ===');
     console.log('Input parameters:', { name, email, phone, preferredDay, callId });
     console.log('Global Typeform submission:', global.lastTypeformSubmission);
     
-    // FIRST: Always try to get data from global Typeform submission
-    if (global.lastTypeformSubmission && global.lastTypeformSubmission.email) {
-      if (!email || email.trim() === '') {
-        email = global.lastTypeformSubmission.email;
-        console.log(`Using email from Typeform: ${email}`);
-      }
-      if (!name || name.trim() === '') {
-        name = global.lastTypeformSubmission.name;
-        console.log(`Using name from Typeform: ${name}`);
-      }
-      if (!phone || phone.trim() === '') {
-        phone = global.lastTypeformSubmission.phone;
-        console.log(`Using phone from Typeform: ${phone}`);
-      }
-    }
+    // ENHANCED: Try multiple methods to get email
+    let finalEmail = email;
+    let finalName = name;
+    let finalPhone = phone;
     
-    // SECOND: Get customer data from call metadata if still missing
-    if (callId && activeCallsMetadata.has(callId)) {
+    // Method 1: Use provided email if valid
+    if (finalEmail && finalEmail.trim() !== '') {
+      console.log(`Using provided email: ${finalEmail}`);
+    }
+    // Method 2: Get from global Typeform submission
+    else if (global.lastTypeformSubmission && global.lastTypeformSubmission.email) {
+      finalEmail = global.lastTypeformSubmission.email;
+      console.log(`Using email from global Typeform: ${finalEmail}`);
+    }
+    // Method 3: Get from call metadata if available
+    else if (callId && activeCallsMetadata.has(callId)) {
       const callMetadata = activeCallsMetadata.get(callId);
-      if (callMetadata) {
-        if (!email && callMetadata.customer_email) {
-          email = callMetadata.customer_email;
-          console.log(`Using email from call metadata: ${email}`);
-        }
-        if (!name && callMetadata.customer_name) {
-          name = callMetadata.customer_name;
-          console.log(`Using name from call metadata: ${name}`);
-        }
-        if (!phone && (callMetadata.phone || callMetadata.to_number)) {
-          phone = callMetadata.phone || callMetadata.to_number;
-          console.log(`Using phone from call metadata: ${phone}`);
+      if (callMetadata && callMetadata.customer_email) {
+        finalEmail = callMetadata.customer_email;
+        console.log(`Using email from call metadata: ${finalEmail}`);
+      }
+    }
+    
+    // Enhanced name retrieval
+    if (!finalName || finalName.trim() === '') {
+      if (global.lastTypeformSubmission && global.lastTypeformSubmission.name) {
+        finalName = global.lastTypeformSubmission.name;
+        console.log(`Using name from global Typeform: ${finalName}`);
+      } else if (callId && activeCallsMetadata.has(callId)) {
+        const callMetadata = activeCallsMetadata.get(callId);
+        if (callMetadata && callMetadata.customer_name) {
+          finalName = callMetadata.customer_name;
+          console.log(`Using name from call metadata: ${finalName}`);
         }
       }
     }
     
-    // Log what email we're going to use
-    console.log(`Final email being used for webhook: "${email}"`);
+    // Enhanced phone retrieval
+    if (!finalPhone || finalPhone.trim() === '') {
+      if (global.lastTypeformSubmission && global.lastTypeformSubmission.phone) {
+        finalPhone = global.lastTypeformSubmission.phone;
+        console.log(`Using phone from global Typeform: ${finalPhone}`);
+      } else if (callId && activeCallsMetadata.has(callId)) {
+        const callMetadata = activeCallsMetadata.get(callId);
+        if (callMetadata && (callMetadata.phone || callMetadata.to_number)) {
+          finalPhone = callMetadata.phone || callMetadata.to_number;
+          console.log(`Using phone from call metadata: ${finalPhone}`);
+        }
+      }
+    }
+    
+    // Log what we're going to use
+    console.log(`Final contact info - Email: "${finalEmail}", Name: "${finalName}", Phone: "${finalPhone}"`);
+    
+    // CRITICAL: Don't proceed if we still don't have an email
+    if (!finalEmail || finalEmail.trim() === '') {
+      console.error('❌ CRITICAL: No email found from any source. Cannot send webhook.');
+      return { success: false, error: 'No email address available' };
+    }
     
     // Format discovery data to exactly match Airtable field names
     const formattedDiscoveryData = {};
@@ -114,7 +157,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     // Map the discovery questions to the EXACT Airtable field names
     const fieldMappings = {
       'question_0': 'How did you hear about us',
-      'question_1': 'Business/Industry',
+      'question_1': 'Business/Industry', 
       'question_2': 'Main product',
       'question_3': 'Running ads',
       'question_4': 'Using CRM',
@@ -157,15 +200,15 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     }
     
     // Ensure phone number is formatted properly with leading +
-    if (phone && !phone.startsWith('+')) {
-      phone = '+1' + phone.replace(/[^0-9]/g, '');
+    if (finalPhone && !finalPhone.startsWith('+')) {
+      finalPhone = '+1' + finalPhone.replace(/[^0-9]/g, '');
     }
     
-    // Make the webhook data - SEND EVEN IF EMAIL IS MISSING (let trigger server handle it)
+    // Make the webhook data with GUARANTEED email
     const webhookData = {
-      name: name || '',
-      email: email || '',  // Send whatever email we have, even if empty
-      phone: phone || '',
+      name: finalName || '',
+      email: finalEmail, // This is now guaranteed to have a value
+      phone: finalPhone || '',
       preferredDay: preferredDay || '',
       call_id: callId || '',
       schedulingComplete: true,
@@ -173,23 +216,41 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     };
     
     // Log the data we're about to send
-    console.log('Sending scheduling preference to trigger server:', JSON.stringify(webhookData, null, 2));
+    console.log('✅ Sending scheduling preference to trigger server:', JSON.stringify(webhookData, null, 2));
     
     const response = await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, webhookData, {
       headers: { 'Content-Type': 'application/json' },
       timeout: 10000
     });
     
-    console.log('Scheduling preference sent successfully:', response.data);
+    console.log('✅ Scheduling preference sent successfully:', response.data);
     return { success: true, data: response.data };
   } catch (error) {
-    console.error('Error sending scheduling preference:', error);
+    console.error('❌ Error sending scheduling preference:', error);
     
-    // Even if there's an error, try to send directly to n8n webhook
+    // Enhanced fallback to n8n
     try {
-      console.log('Attempting to send directly to n8n webhook as fallback');
+      console.log('🔄 Attempting to send directly to n8n webhook as fallback');
       const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL || 'https://n8n-clp2.onrender.com/webhook/retell-scheduling';
       console.log(`Using n8n webhook URL: ${n8nWebhookUrl}`);
+      
+      // Use the same enhanced email logic for fallback
+      let fallbackEmail = email;
+      let fallbackName = name;
+      let fallbackPhone = phone;
+      
+      if (!fallbackEmail && global.lastTypeformSubmission) {
+        fallbackEmail = global.lastTypeformSubmission.email;
+        fallbackName = fallbackName || global.lastTypeformSubmission.name;
+        fallbackPhone = fallbackPhone || global.lastTypeformSubmission.phone;
+      }
+      
+      if (!fallbackEmail && callId && activeCallsMetadata.has(callId)) {
+        const callMetadata = activeCallsMetadata.get(callId);
+        fallbackEmail = fallbackEmail || callMetadata?.customer_email;
+        fallbackName = fallbackName || callMetadata?.customer_name;
+        fallbackPhone = fallbackPhone || callMetadata?.phone || callMetadata?.to_number;
+      }
       
       // Format discovery data again for n8n
       const formattedDiscoveryData = {};
@@ -231,25 +292,27 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
         formattedDiscoveryData['Pain points'] = discoveryData['question_5'];
       }
       
-      const webhookData = {
-        name: name || '',
-        email: email || '',  // Keep the email we found or empty string
-        phone: phone || '',
+      const fallbackWebhookData = {
+        name: fallbackName || '',
+        email: fallbackEmail || '', // Send whatever we found
+        phone: fallbackPhone || '',
         preferredDay: preferredDay || '',
         call_id: callId || '',
         schedulingComplete: true,
         discovery_data: formattedDiscoveryData
       };
       
-      const n8nResponse = await axios.post(n8nWebhookUrl, webhookData, {
+      console.log('🔄 Fallback webhook data:', JSON.stringify(fallbackWebhookData, null, 2));
+      
+      const n8nResponse = await axios.post(n8nWebhookUrl, fallbackWebhookData, {
         headers: { 'Content-Type': 'application/json' },
         timeout: 10000
       });
       
-      console.log('Successfully sent directly to n8n:', n8nResponse.data);
+      console.log('✅ Successfully sent directly to n8n:', n8nResponse.data);
       return { success: true, fallback: true };
     } catch (n8nError) {
-      console.error('Error sending directly to n8n:', n8nError);
+      console.error('❌ Error sending directly to n8n:', n8nError);
       return { success: false, error: error.message };
     }
   }
@@ -377,51 +440,46 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
   try {
     const { name, email, phone, userId } = req.body;
     console.log(`Received request to trigger Retell call for ${name} (${email})`);
-
+    
+    // Check if we have all required fields
     if (!email) {
       return res.status(400).json({ success: false, error: 'Email is required' });
     }
-
+    
+    // Ensure we have a unique user ID
     const userIdentifier = userId || `user_${phone || Date.now()}`;
-
+    
+    // Log the incoming request data
     console.log('Call request data:', { name, email, phone, userIdentifier });
-
-    if (email) {
-      global.lastTypeformSubmission = {
-        timestamp: new Date().toISOString(),
-        email: email,
-        name: name || '',
-        phone: phone || '',
-        source: 'API Call'
-      };
-      console.log('Saved API call contact info globally:', global.lastTypeformSubmission);
-    }
-
-    // Generate and store callId for metadata lookup later
-    const callId = `call_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
-    activeCallsMetadata.set(callId, {
-      customer_name: name,
-      customer_email: email,
-      phone: phone
-    });
-
+    
+    // ENHANCED: Store the data globally immediately
+    storeContactInfoGlobally(name, email, phone, 'API Call');
+    
+    // Set up metadata for the Retell call
+    // This is how we'll pass customer information to the voice agent
     const metadata = {
-      customer_name: name || '',
-      customer_email: email,
-      customer_phone: phone || ''
+      customer_name: name || '',  // Ensure name is passed to agent
+      customer_email: email,      // Always include email
+      customer_phone: phone || '' // Include phone if available
     };
-
+    
+    // Log the metadata we're sending to Retell
+    console.log('Setting up call with metadata:', metadata);
+    
+    // Prevent fallback to "Monica" by setting a variable directly in the agent
     const initialVariables = {
       customer_name: name || '',
-      customer_email: email,
-      call_id: callId
+      customer_email: email
     };
-
+    
+    // Make call to Retell API
     const response = await axios.post('https://api.retellai.com/v1/calls', 
       {
         agent_id: process.env.RETELL_AGENT_ID,
         customer_number: phone,
+        // Set LLM variables to pass customer info (may need Retell update to use)
         variables: initialVariables,
+        // Pass metadata which will be available in WebSocket connection
         metadata
       },
       {
@@ -431,14 +489,14 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
         }
       }
     );
-
+    
     console.log(`Successfully triggered Retell call: ${response.data.call_id}`);
     res.status(200).json({ 
       success: true, 
       call_id: response.data.call_id,
       message: `Call initiated for ${name || email}`
     });
-
+    
   } catch (error) {
     console.error('Error triggering Retell call:', error);
     res.status(500).json({ 
@@ -447,6 +505,7 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
     });
   }
 });
+
 wss.on('connection', (ws) => {
   console.log('Retell connected via WebSocket.');
   
@@ -584,65 +643,63 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
         console.log('Call data structure:', JSON.stringify(parsed.call, null, 2));
       }
       
-      // IMPROVED: Better metadata handling for call information
+      // ENHANCED: Better metadata handling for call information
       if (parsed.call && parsed.call.call_id && !connectionData.callId) {
         connectionData.callId = parsed.call.call_id;
         
         // Store call metadata if available
         if (parsed.call.metadata) {
           connectionData.metadata = parsed.call.metadata;
-          console.log('Call metadata received:', JSON.stringify(connectionData.metadata, null, 2));
+          console.log('📞 Call metadata received:', JSON.stringify(connectionData.metadata, null, 2));
           
-          // Extract customer info from metadata if available
-          if (connectionData.metadata.customer_name) {
-            // Ensure we use the name from the form submission, not a hardcoded name
-            bookingInfo.name = connectionData.metadata.customer_name;
-            
-            // Remove any name placeholder that might exist like "Monica"
-            // And replace with the actual customer name from Typeform
-            const systemPrompt = conversationHistory[0].content;
-            conversationHistory[0].content = systemPrompt
-              .replace(/\[Name\]/g, bookingInfo.name)
-              .replace(/Monica/g, bookingInfo.name);
-              
-            console.log(`Updated system prompt with customer name: ${bookingInfo.name}`);
-            collectedContactInfo = true;
-          }
+          // Extract and validate customer info from metadata
+          let metadataEmail = connectionData.metadata.customer_email;
+          let metadataName = connectionData.metadata.customer_name;  
+          let metadataPhone = connectionData.metadata.to_number || parsed.call.to_number;
           
-          if (connectionData.metadata.customer_email) {
-            bookingInfo.email = connectionData.metadata.customer_email;
+          // ENHANCED: Update booking info and store globally if we have valid data
+          if (metadataEmail && metadataEmail.trim() !== '') {
+            bookingInfo.email = metadataEmail.trim();
+            bookingInfo.name = (metadataName || '').trim();
+            bookingInfo.phone = (metadataPhone || '').trim();
             
-            // Also store this globally
-            if (!global.lastTypeformSubmission || !global.lastTypeformSubmission.email) {
-              global.lastTypeformSubmission = {
-                timestamp: new Date().toISOString(),
-                email: bookingInfo.email,
-                name: bookingInfo.name || '',
-                phone: bookingInfo.phone || '',
-                source: 'Call Metadata'
-              };
-              console.log('Stored email from call metadata globally:', global.lastTypeformSubmission);
-            }
+            // Store this globally as well with higher priority
+            storeContactInfoGlobally(bookingInfo.name, bookingInfo.email, bookingInfo.phone, 'Call Metadata');
             
             collectedContactInfo = true;
+            console.log(`✅ Updated contact info from call metadata: ${bookingInfo.email}`);
           }
           
-          if (connectionData.metadata.to_number) {
-            bookingInfo.phone = connectionData.metadata.to_number;
-            collectedContactInfo = true;
-          } else if (parsed.call.to_number) {
-            bookingInfo.phone = parsed.call.to_number;
-            collectedContactInfo = true;
-          }
+          // Store this call's metadata in the active calls map
+          activeCallsMetadata.set(connectionData.callId, {
+            customer_email: metadataEmail,
+            customer_name: metadataName,
+            phone: metadataPhone,
+            to_number: metadataPhone,
+            ...parsed.call.metadata
+          });
           
-          // Store this call's metadata globally
-          activeCallsMetadata.set(connectionData.callId, parsed.call.metadata);
+          console.log(`📝 Stored metadata for call ${connectionData.callId}:`, {
+            email: metadataEmail,
+            name: metadataName, 
+            phone: metadataPhone
+          });
+        }
+        
+        // FALLBACK: If no metadata, try to get info from global storage
+        if (!bookingInfo.email && global.lastTypeformSubmission && global.lastTypeformSubmission.email) {
+          console.log('🔄 Using global Typeform data as fallback for call metadata');
+          bookingInfo.email = global.lastTypeformSubmission.email;
+          bookingInfo.name = global.lastTypeformSubmission.name || '';
+          bookingInfo.phone = global.lastTypeformSubmission.phone || '';
+          collectedContactInfo = true;
           
-          // Log what we've captured
-          console.log(`Captured customer info for call ${connectionData.callId}:`, {
-            name: bookingInfo.name,
-            email: bookingInfo.email,
-            phone: bookingInfo.phone
+          // Also store in activeCallsMetadata for consistency
+          activeCallsMetadata.set(connectionData.callId, {
+            customer_email: bookingInfo.email,
+            customer_name: bookingInfo.name,
+            phone: bookingInfo.phone,
+            to_number: bookingInfo.phone
           });
         }
       }
@@ -925,14 +982,7 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
       
       // Store this info globally as well
       if (email) {
-        global.lastTypeformSubmission = {
-          timestamp: new Date().toISOString(),
-          email: email,
-          name: name || '',
-          phone: phone || '',
-          source: 'Retell Webhook'
-        };
-        console.log('Stored Retell webhook email globally:', global.lastTypeformSubmission);
+        storeContactInfoGlobally(name, email, phone, 'Retell Webhook');
       }
       
       // Look for preferred day in various locations
