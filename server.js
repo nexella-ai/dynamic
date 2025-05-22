@@ -377,19 +377,15 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
   try {
     const { name, email, phone, userId } = req.body;
     console.log(`Received request to trigger Retell call for ${name} (${email})`);
-    
-    // Check if we have all required fields
+
     if (!email) {
       return res.status(400).json({ success: false, error: 'Email is required' });
     }
-    
-    // Ensure we have a unique user ID
+
     const userIdentifier = userId || `user_${phone || Date.now()}`;
-    
-    // Log the incoming request data
+
     console.log('Call request data:', { name, email, phone, userIdentifier });
-    
-    // Store the data globally for later use
+
     if (email) {
       global.lastTypeformSubmission = {
         timestamp: new Date().toISOString(),
@@ -400,7 +396,58 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
       };
       console.log('Saved API call contact info globally:', global.lastTypeformSubmission);
     }
-    
+
+    // ✅ Generate and store callId for metadata lookup later
+    const callId = `call_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
+    activeCallsMetadata.set(callId, {
+      customer_name: name,
+      customer_email: email,
+      phone: phone
+    });
+
+    const metadata = {
+      customer_name: name || '',
+      customer_email: email,
+      customer_phone: phone || ''
+    };
+
+    const initialVariables = {
+      customer_name: name || '',
+      customer_email: email,
+      call_id: callId // ✅ added to help WebSocket match metadata
+    };
+
+    // ✅ Pass callId to Retell call
+    const response = await axios.post('https://api.retellai.com/v1/calls', 
+      {
+        agent_id: process.env.RETELL_AGENT_ID,
+        customer_number: phone,
+        variables: initialVariables,
+        metadata
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.RETELL_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    console.log(`Successfully triggered Retell call: ${response.data.call_id}`);
+    res.status(200).json({ 
+      success: true, 
+      call_id: response.data.call_id,
+      message: `Call initiated for ${name || email}`
+    });
+
+  } catch (error) {
+    console.error('Error triggering Retell call:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message || 'Unknown error triggering call' 
+    });
+  }
+}); 
     // Set up metadata for the Retell call
     // This is how we'll pass customer information to the voice agent
     const metadata = {
