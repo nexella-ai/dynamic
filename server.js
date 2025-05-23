@@ -853,22 +853,27 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
         console.log('User said:', userMessage);
         console.log('Current conversation state:', conversationState);
 
-        // IMPROVED: Better discovery answer tracking
+        // IMPROVED: Better discovery answer tracking with comprehensive debugging
         if (conversationState === 'discovery') {
           // Match user answers to questions
           const lastBotMessage = conversationHistory[conversationHistory.length - 1];
           if (lastBotMessage && lastBotMessage.role === 'assistant') {
+            
+            console.log(`🔍 DISCOVERY DEBUG - Bot just said: "${lastBotMessage.content}"`);
+            console.log(`🔍 DISCOVERY DEBUG - User responded: "${userMessage}"`);
             
             // Check which discovery question was asked
             for (let i = 0; i < discoveryQuestions.length; i++) {
               const question = discoveryQuestions[i];
               const shortQuestionStart = question.toLowerCase().substring(0, 15);
               
+              console.log(`🔍 Checking question ${i}: "${question}" (looking for: "${shortQuestionStart}")`);
+              
               // Check if bot message contains this question
               if (lastBotMessage.content.toLowerCase().includes(shortQuestionStart)) {
                 // Store the answer with question index
                 discoveryData[`question_${i}`] = userMessage;
-                console.log(`✅ STORED answer to question ${i}: ${question} = "${userMessage}"`); // Enhanced logging
+                console.log(`✅ STORED answer to question ${i}: ${question} = "${userMessage}"`);
                 
                 // SPECIAL CASE: Always log question 5 (pain points)
                 if (i === 5) {
@@ -903,6 +908,24 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
                 break;
               }
             }
+            
+            // ADDITIONAL: Check for pain points with broader criteria
+            const botMessageLower = lastBotMessage.content.toLowerCase();
+            if ((botMessageLower.includes('pain') || 
+                 botMessageLower.includes('problem') || 
+                 botMessageLower.includes('challenge') || 
+                 botMessageLower.includes('struggle') ||
+                 botMessageLower.includes('difficult') ||
+                 botMessageLower.includes('issue')) && 
+                !discoveryData['question_5']) {
+              
+              console.log(`🎯 BROAD PAIN POINTS DETECTION - Bot message contains pain/problem keywords`);
+              console.log(`🎯 STORING as question_5: "${userMessage}"`);
+              discoveryData['question_5'] = userMessage;
+            }
+            
+            // Log current discovery data state
+            console.log(`📊 Current discovery data:`, JSON.stringify(discoveryData, null, 2));
           }
         }
         
