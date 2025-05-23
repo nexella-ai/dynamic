@@ -506,7 +506,7 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
   }
 });
 
-// FIXED WEBSOCKET CONNECTION HANDLER - NO DUPLICATES
+// ENHANCED WEBSOCKET CONNECTION HANDLER - EXTRACTS CALL ID, EMAIL, NAME
 wss.on('connection', async (ws, req) => {
   console.log('🔗 NEW WEBSOCKET CONNECTION ESTABLISHED');
   console.log('Connection URL:', req.url);
@@ -521,37 +521,74 @@ wss.on('connection', async (ws, req) => {
   const connectionData = {
     callId: callId, // ← FIXED: Set the call ID immediately
     metadata: null,
-    customerEmail: null, // Store email for later use
+    customerEmail: null,
+    customerName: null,
+    customerPhone: null,
     isOutboundCall: false,
     isAppointmentConfirmation: false
   };
 
-  // Fetch call metadata if we have a call ID
+  // Try to fetch call metadata but don't block if it fails
   if (callId) {
     try {
       console.log('🔍 Fetching metadata for call:', callId);
       const TRIGGER_SERVER_URL = process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com';
-      const response = await fetch(`${TRIGGER_SERVER_URL}/api/get-call-data/${callId}`);
-      if (response.ok) {
-        const callData = await response.json();
-        console.log('📋 Retrieved call metadata:', callData);
-        connectionData.metadata = callData;
-        
-        // Extract email from metadata
-        const email = callData.email || callData.customer_email || callData.user_email;
-        console.log('📧 Extracted email:', email);
-        
-        // Check if this is an appointment confirmation call
-        if (callData.call_type === 'appointment_confirmation') {
-          connectionData.isAppointmentConfirmation = true;
-          connectionData.customerEmail = email; // Store email for later use
-          console.log('📅 This is an APPOINTMENT CONFIRMATION call for:', email);
+      
+      // Try multiple possible endpoints
+      const possibleEndpoints = [
+        `${TRIGGER_SERVER_URL}/api/get-call-data/${callId}`,
+        `${TRIGGER_SERVER_URL}/get-call-info/${callId}`,
+        `${TRIGGER_SERVER_URL}/call-data/${callId}`,
+        `${TRIGGER_SERVER_URL}/api/call/${callId}`
+      ];
+      
+      let metadataFetched = false;
+      for (const endpoint of possibleEndpoints) {
+        try {
+          console.log(`Trying endpoint: ${endpoint}`);
+          const response = await fetch(endpoint, { 
+            timeout: 3000,
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          });
+          if (response.ok) {
+            const callData = await response.json();
+            console.log('📋 Retrieved call metadata:', callData);
+            connectionData.metadata = callData;
+            
+            // Extract data from metadata
+            connectionData.customerEmail = callData.email || callData.customer_email || callData.user_email;
+            connectionData.customerName = callData.name || callData.customer_name || callData.user_name;
+            connectionData.customerPhone = callData.phone || callData.customer_phone || callData.to_number;
+            
+            console.log('📧 Extracted from metadata:', {
+              email: connectionData.customerEmail,
+              name: connectionData.customerName,
+              phone: connectionData.customerPhone
+            });
+            
+            // Check if this is an appointment confirmation call
+            if (callData.call_type === 'appointment_confirmation') {
+              connectionData.isAppointmentConfirmation = true;
+              console.log('📅 This is an APPOINTMENT CONFIRMATION call');
+            }
+            
+            metadataFetched = true;
+            break;
+          }
+        } catch (endpointError) {
+          console.log(`Endpoint ${endpoint} failed:`, endpointError.message);
         }
-      } else {
-        console.log('⚠️ Failed to fetch call metadata:', response.status);
       }
+      
+      if (!metadataFetched) {
+        console.log('⚠️ Could not fetch metadata from any endpoint - will try to get from WebSocket messages');
+      }
+      
     } catch (error) {
       console.log('❌ Error fetching call metadata:', error.message);
+      console.log('🔄 Will extract data from WebSocket messages instead');
     }
   }
   
@@ -637,15 +674,15 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
   // States for conversation flow
   let conversationState = 'introduction';  // introduction -> discovery -> booking -> completed
   let bookingInfo = {
-    name: '',
-    email: '',
-    phone: '',
+    name: connectionData.customerName || '',
+    email: connectionData.customerEmail || '',
+    phone: connectionData.customerPhone || '',
     preferredDay: '',
     schedulingLinkSent: false,
     userId: `user_${Date.now()}`
   };
   let discoveryData = {}; // Store answers to discovery questions
-  let collectedContactInfo = false;
+  let collectedContactInfo = !!connectionData.customerEmail; // True if we have email
   let userHasSpoken = false;
   let webhookSent = false; // Track if we've sent the webhook
 
@@ -657,9 +694,10 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
     response_id: 0
   }));
 
-  // Set a timer for auto-greeting if user doesn't speak first
-  const autoGreetingTimer = setTimeout(() => {
+  // Send auto-greeting after a short delay
+  setTimeout(() => {
     if (!userHasSpoken) {
+      console.log('🎙️ Sending auto-greeting message');
       ws.send(JSON.stringify({
         content: "Hi there! This is Sarah from Nexella AI. How are you doing today?",
         content_complete: true,
@@ -667,7 +705,20 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
         response_id: 1
       }));
     }
-  }, 5000); // 5 seconds delay
+  }, 2000); // Reduced to 2 seconds for faster response
+
+  // Set a timer for auto-greeting if user doesn't speak first
+  const autoGreetingTimer = setTimeout(() => {
+    if (!userHasSpoken) {
+      console.log('🎙️ Sending backup auto-greeting');
+      ws.send(JSON.stringify({
+        content: "Hello! This is Sarah from Nexella AI. I'm here to help you today. How's everything going?",
+        content_complete: true,
+        actions: [],
+        response_id: 2
+      }));
+    }
+  }, 5000); // 5 seconds delay as backup
 
   ws.on('message', async (data) => {
     try {
@@ -685,11 +736,70 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
         console.log('Call data structure:', JSON.stringify(parsed.call, null, 2));
       }
       
-      // ENHANCED: Get contact info when we connect to a call
-      if (parsed.call && parsed.call.call_id && !connectionData.callId) {
-        connectionData.callId = parsed.call.call_id;
-        console.log(`🔗 Connected to call: ${connectionData.callId}`);
+      // ENHANCED: Extract call info from WebSocket messages
+      if (parsed.call && parsed.call.call_id) {
+        // Update call ID if we didn't have it
+        if (!connectionData.callId) {
+          connectionData.callId = parsed.call.call_id;
+          console.log(`🔗 Got call ID from WebSocket: ${connectionData.callId}`);
+        }
         
+        // Extract metadata from call object
+        if (parsed.call.metadata) {
+          console.log('📞 Call metadata from WebSocket:', JSON.stringify(parsed.call.metadata, null, 2));
+          
+          // Extract customer info from metadata
+          if (!connectionData.customerEmail && parsed.call.metadata.customer_email) {
+            connectionData.customerEmail = parsed.call.metadata.customer_email;
+            bookingInfo.email = connectionData.customerEmail;
+            console.log(`✅ Got email from WebSocket metadata: ${connectionData.customerEmail}`);
+          }
+          
+          if (!connectionData.customerName && parsed.call.metadata.customer_name) {
+            connectionData.customerName = parsed.call.metadata.customer_name;
+            bookingInfo.name = connectionData.customerName;
+            console.log(`✅ Got name from WebSocket metadata: ${connectionData.customerName}`);
+            
+            // Update system prompt with customer name
+            conversationHistory[0].content = conversationHistory[0].content
+              .replace(/Monica/g, connectionData.customerName);
+          }
+          
+          if (!connectionData.customerPhone && (parsed.call.metadata.customer_phone || parsed.call.to_number)) {
+            connectionData.customerPhone = parsed.call.metadata.customer_phone || parsed.call.to_number;
+            bookingInfo.phone = connectionData.customerPhone;
+            console.log(`✅ Got phone from WebSocket metadata: ${connectionData.customerPhone}`);
+          }
+        }
+        
+        // Extract phone from call object if not in metadata
+        if (!connectionData.customerPhone && parsed.call.to_number) {
+          connectionData.customerPhone = parsed.call.to_number;
+          bookingInfo.phone = connectionData.customerPhone;
+          console.log(`✅ Got phone from call object: ${connectionData.customerPhone}`);
+        }
+        
+        // Store in active calls metadata map
+        activeCallsMetadata.set(connectionData.callId, {
+          customer_email: connectionData.customerEmail,
+          customer_name: connectionData.customerName,
+          phone: connectionData.customerPhone,
+          to_number: connectionData.customerPhone
+        });
+        
+        // Log all extracted info
+        console.log(`✅ EXTRACTED CUSTOMER DATA:`, {
+          callId: connectionData.callId,
+          email: connectionData.customerEmail,
+          name: connectionData.customerName,
+          phone: connectionData.customerPhone
+        });
+        
+        collectedContactInfo = !!connectionData.customerEmail;
+      }
+      
+      // ENHANCED: Get contact info when we connect to a call (BACKUP METHOD)
+      if (parsed.call && parsed.call.call_id && !collectedContactInfo) {
         // FIRST: Try to get contact info from trigger server using call_id
         try {
           console.log('📞 Fetching contact info from trigger server...');
@@ -699,6 +809,30 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
           
           if (triggerResponse.data && triggerResponse.data.success) {
             const callInfo = triggerResponse.data.data;
+            if (!bookingInfo.email) bookingInfo.email = callInfo.email || '';
+            if (!bookingInfo.name) bookingInfo.name = callInfo.name || '';
+            if (!bookingInfo.phone) bookingInfo.phone = callInfo.phone || '';
+            collectedContactInfo = true;
+            
+            console.log('✅ Got contact info from trigger server:', {
+              name: bookingInfo.name,
+              email: bookingInfo.email,
+              phone: bookingInfo.phone
+            });
+            
+            // Update system prompt with the actual customer name if we have it
+            if (bookingInfo.name) {
+              const systemPrompt = conversationHistory[0].content;
+              conversationHistory[0].content = systemPrompt
+                .replace(/\[Name\]/g, bookingInfo.name)
+                .replace(/Monica/g, bookingInfo.name);
+              console.log(`Updated system prompt with customer name: ${bookingInfo.name}`);
+            }
+          }
+        } catch (triggerError) {
+          console.log('⚠️ Could not fetch contact info from trigger server:', triggerError.message);
+        }
+      }
             bookingInfo.email = callInfo.email || '';
             bookingInfo.name = callInfo.name || '';
             bookingInfo.phone = callInfo.phone || '';
@@ -989,18 +1123,26 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
     console.log('Connection closed.');
     clearTimeout(autoGreetingTimer); // Clear the timer when connection closes
     
+    // Log final extracted data
+    console.log('📊 FINAL EXTRACTED DATA:', {
+      callId: connectionData.callId,
+      email: connectionData.customerEmail || bookingInfo.email,
+      name: connectionData.customerName || bookingInfo.name,
+      phone: connectionData.customerPhone || bookingInfo.phone
+    });
+    
     // ALWAYS send data to trigger server when call ends, regardless of completion status
     if (!webhookSent && connectionData.callId) {
       try {
         // Get any metadata we can find for this call
-        if (!bookingInfo.name && connectionData?.metadata?.customer_name) {
-          bookingInfo.name = connectionData.metadata.customer_name;
+        if (!bookingInfo.name && (connectionData?.customerName || connectionData?.metadata?.customer_name)) {
+          bookingInfo.name = connectionData.customerName || connectionData.metadata.customer_name;
         }
-        if (!bookingInfo.email && connectionData?.metadata?.customer_email) {
-          bookingInfo.email = connectionData.metadata.customer_email;
+        if (!bookingInfo.email && (connectionData?.customerEmail || connectionData?.metadata?.customer_email)) {
+          bookingInfo.email = connectionData.customerEmail || connectionData.metadata.customer_email;
         }
-        if (!bookingInfo.phone && connectionData?.metadata?.to_number) {
-          bookingInfo.phone = connectionData.metadata.to_number;
+        if (!bookingInfo.phone && (connectionData?.customerPhone || connectionData?.metadata?.to_number)) {
+          bookingInfo.phone = connectionData.customerPhone || connectionData.metadata.to_number;
         }
 
         console.log('Connection closed - sending final webhook data with discovery info:', discoveryData);
