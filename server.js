@@ -655,6 +655,8 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
       userHasSpoken = true;
       
       const parsed = JSON.parse(data);
+
+      console.log('📥 Raw WebSocket Message:', JSON.stringify(parsed, null, 2));
       
       // Debug logging to see what we're receiving
       console.log('WebSocket message type:', parsed.interaction_type || 'unknown');
