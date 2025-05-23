@@ -118,22 +118,6 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       }
     }
     
-    // Log what we're going to use
-    console.log(`Final contact info - Email: "${finalEmail}", Name: "${finalName}", Phone: "${finalPhone}"`);
-    
-    // CRITICAL: Don't proceed if we still don't have an email
-    if (!finalEmail || finalEmail.trim() === '') {
-      console.error('❌ CRITICAL: No email found from any source. Cannot send webhook.');
-      return { success: false, error: 'No email address available' };
-    }: Get from call metadata if available
-    else if (callId && activeCallsMetadata.has(callId)) {
-      const callMetadata = activeCallsMetadata.get(callId);
-      if (callMetadata && callMetadata.customer_email) {
-        finalEmail = callMetadata.customer_email;
-        console.log(`Using email from call metadata: ${finalEmail}`);
-      }
-    }
-    
     // Enhanced name retrieval
     if (!finalName || finalName.trim() === '') {
       if (global.lastTypeformSubmission && global.lastTypeformSubmission.name) {
