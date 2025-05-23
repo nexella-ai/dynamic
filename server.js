@@ -103,8 +103,6 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     // Method 2: Get from global Typeform submission
     else if (global.lastTypeformSubmission && global.lastTypeformSubmission.email) {
       finalEmail = global.lastTypeformSubmission.email;
-      finalName = finalName || global.lastTypeformSubmission.name;
-      finalPhone = finalPhone || global.lastTypeformSubmission.phone;
       console.log(`Using email from global Typeform: ${finalEmail}`);
     }
     // Method 3: Get from call metadata if available
@@ -112,8 +110,6 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       const callMetadata = activeCallsMetadata.get(callId);
       if (callMetadata && callMetadata.customer_email) {
         finalEmail = callMetadata.customer_email;
-        finalName = finalName || callMetadata.customer_name;
-        finalPhone = finalPhone || callMetadata.phone;
         console.log(`Using email from call metadata: ${finalEmail}`);
       }
     }
@@ -641,19 +637,10 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
       
       const parsed = JSON.parse(data);
       
-      // ENHANCED DEBUG: Log everything we receive
-      console.log('=== WEBSOCKET MESSAGE DEBUG ===');
-      console.log('Message type:', parsed.interaction_type || 'unknown');
-      console.log('Has call?', !!parsed.call);
-      console.log('connectionData.callId:', connectionData.callId);
-      
+      // Debug logging to see what we're receiving
+      console.log('WebSocket message type:', parsed.interaction_type || 'unknown');
       if (parsed.call) {
-        console.log('Call object keys:', Object.keys(parsed.call));
-        console.log('Call ID from message:', parsed.call.call_id);
-        console.log('Call metadata exists?', !!parsed.call.metadata);
-        if (parsed.call.metadata) {
-          console.log('Metadata:', JSON.stringify(parsed.call.metadata, null, 2));
-        }
+        console.log('Call data structure:', JSON.stringify(parsed.call, null, 2));
       }
       
       // ENHANCED: Get contact info when we connect to a call
