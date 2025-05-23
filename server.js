@@ -700,7 +700,7 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
 
   // Send connecting message
   ws.send(JSON.stringify({
-    content: "connecting...",
+    content: "Hi there",
     content_complete: true,
     actions: [],
     response_id: 0
