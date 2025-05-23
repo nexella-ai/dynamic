@@ -506,6 +506,7 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
   }
 });
 
+// FIXED: Enhanced WebSocket connection handler
 wss.on('connection', (ws) => {
   console.log('Retell connected via WebSocket.');
   
@@ -643,68 +644,76 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
         console.log('Call data structure:', JSON.stringify(parsed.call, null, 2));
       }
       
-      // ENHANCED: Get contact info when we connect to a call
+      // FIXED: Enhanced contact info extraction when we connect to a call
       if (parsed.call && parsed.call.call_id && !connectionData.callId) {
         connectionData.callId = parsed.call.call_id;
         console.log(`🔗 Connected to call: ${connectionData.callId}`);
         
-        // FIRST: Try to get contact info from trigger server using call_id
-        try {
-          console.log('📞 Fetching contact info from trigger server...');
-          const triggerResponse = await axios.get(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/get-call-info/${connectionData.callId}`, {
-            timeout: 5000
-          });
-          
-          if (triggerResponse.data && triggerResponse.data.success) {
-            const callInfo = triggerResponse.data.data;
-            bookingInfo.email = callInfo.email || '';
-            bookingInfo.name = callInfo.name || '';
-            bookingInfo.phone = callInfo.phone || '';
-            collectedContactInfo = true;
-            
-            console.log('✅ Got contact info from trigger server:', {
-              name: bookingInfo.name,
-              email: bookingInfo.email,
-              phone: bookingInfo.phone
-            });
-            
-            // Update system prompt with the actual customer name if we have it
-            if (bookingInfo.name) {
-              const systemPrompt = conversationHistory[0].content;
-              conversationHistory[0].content = systemPrompt
-                .replace(/\[Name\]/g, bookingInfo.name)
-                .replace(/Monica/g, bookingInfo.name);
-              console.log(`Updated system prompt with customer name: ${bookingInfo.name}`);
-            }
-          }
-        } catch (triggerError) {
-          console.log('⚠️ Could not fetch contact info from trigger server:', triggerError.message);
-        }
-        
-        // SECOND: Try to get from call metadata (as backup)
+        // PRIORITY 1: Extract from call metadata immediately
         if (parsed.call.metadata) {
           connectionData.metadata = parsed.call.metadata;
           console.log('📞 Call metadata received:', JSON.stringify(connectionData.metadata, null, 2));
           
-          // Only use metadata if we don't already have the info
-          if (connectionData.metadata.customer_name && !bookingInfo.name) {
+          // Extract contact info from metadata
+          if (connectionData.metadata.customer_name) {
             bookingInfo.name = connectionData.metadata.customer_name;
-            console.log(`Updated name from metadata: ${bookingInfo.name}`);
+            console.log(`✅ Got name from metadata: ${bookingInfo.name}`);
           }
           
-          if (connectionData.metadata.customer_email && !bookingInfo.email) {
+          if (connectionData.metadata.customer_email) {
             bookingInfo.email = connectionData.metadata.customer_email;
-            console.log(`Updated email from metadata: ${bookingInfo.email}`);
+            console.log(`✅ Got email from metadata: ${bookingInfo.email}`);
+            collectedContactInfo = true;
           }
           
-          if ((connectionData.metadata.to_number || parsed.call.to_number) && !bookingInfo.phone) {
-            bookingInfo.phone = connectionData.metadata.to_number || parsed.call.to_number;
-            console.log(`Updated phone from metadata: ${bookingInfo.phone}`);
+          if (connectionData.metadata.user_id && connectionData.metadata.user_id.includes('+')) {
+            // Extract phone from user_id if it contains a phone number
+            bookingInfo.phone = connectionData.metadata.user_id.replace('user_', '');
+            console.log(`✅ Got phone from user_id: ${bookingInfo.phone}`);
+          } else if (parsed.call.to_number) {
+            bookingInfo.phone = parsed.call.to_number;
+            console.log(`✅ Got phone from to_number: ${bookingInfo.phone}`);
           }
           
-          collectedContactInfo = true;
+          // Store this in global variable for sendSchedulingPreference function
+          storeContactInfoGlobally(bookingInfo.name, bookingInfo.email, bookingInfo.phone, 'Call Metadata');
         } else {
           console.log('⚠️ No metadata in call object');
+        }
+        
+        // PRIORITY 2: Try to get contact info from trigger server using call_id (as backup)
+        if (!bookingInfo.email) {
+          try {
+            console.log('📞 Attempting to fetch contact info from trigger server...');
+            const triggerResponse = await axios.get(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/get-call-info/${connectionData.callId}`, {
+              timeout: 5000
+            });
+            
+            if (triggerResponse.data && triggerResponse.data.success) {
+              const callInfo = triggerResponse.data.data;
+              
+              if (callInfo.email && !bookingInfo.email) {
+                bookingInfo.email = callInfo.email;
+                console.log('✅ Got email from trigger server:', bookingInfo.email);
+                collectedContactInfo = true;
+              }
+              
+              if (callInfo.name && !bookingInfo.name) {
+                bookingInfo.name = callInfo.name;
+                console.log('✅ Got name from trigger server:', bookingInfo.name);
+              }
+              
+              if (callInfo.phone && !bookingInfo.phone) {
+                bookingInfo.phone = callInfo.phone;
+                console.log('✅ Got phone from trigger server:', bookingInfo.phone);
+              }
+              
+              // Store this globally as well
+              storeContactInfoGlobally(bookingInfo.name, bookingInfo.email, bookingInfo.phone, 'Trigger Server');
+            }
+          } catch (triggerError) {
+            console.log('⚠️ Could not fetch contact info from trigger server:', triggerError.message);
+          }
         }
         
         // Store in active calls metadata map for the sendSchedulingPreference function
@@ -715,12 +724,31 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
           to_number: bookingInfo.phone
         });
         
+        // Update system prompt with the actual customer name if we have it
+        if (bookingInfo.name && bookingInfo.name.trim() !== '') {
+          const systemPrompt = conversationHistory[0].content;
+          conversationHistory[0].content = systemPrompt
+            .replace(/\[Name\]/g, bookingInfo.name)
+            .replace(/Monica/g, bookingInfo.name);
+          console.log(`✅ Updated system prompt with customer name: ${bookingInfo.name}`);
+        }
+        
         // Log final captured info
         console.log(`✅ Final captured customer info for call ${connectionData.callId}:`, {
           name: bookingInfo.name,
           email: bookingInfo.email,
-          phone: bookingInfo.phone
+          phone: bookingInfo.phone,
+          collectedContactInfo: collectedContactInfo
         });
+        
+        // CRITICAL: Verify we have the email
+        if (!bookingInfo.email || bookingInfo.email.trim() === '') {
+          console.error('❌ CRITICAL: Still no email found after all attempts!');
+          console.error('Call metadata:', JSON.stringify(parsed.call.metadata, null, 2));
+          console.error('Call object keys:', Object.keys(parsed.call));
+        } else {
+          console.log('✅ SUCCESS: Email confirmed available for webhook:', bookingInfo.email);
+        }
       }
 
       if (parsed.interaction_type === 'response_required') {
@@ -729,6 +757,7 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
 
         console.log('User said:', userMessage);
         console.log('Current conversation state:', conversationState);
+        console.log('Current email status:', bookingInfo.email ? 'Available' : 'NOT AVAILABLE');
 
         // IMPROVED: Better discovery answer tracking
         if (conversationState === 'discovery') {
@@ -745,7 +774,7 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
               if (lastBotMessage.content.toLowerCase().includes(shortQuestionStart)) {
                 // Store the answer with question index
                 discoveryData[`question_${i}`] = userMessage;
-                console.log(`Stored answer to question ${i}: ${question}`);
+                console.log(`✅ Stored answer to question ${i}: ${question} = "${userMessage}"`);
                 
                 // Try to set the variable for the Retell call as well
                 try {
@@ -795,6 +824,30 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
           if (dayInfo && !webhookSent) {
             bookingInfo.preferredDay = dayInfo.dayName;
             
+            console.log('📅 Day preference detected:', bookingInfo.preferredDay);
+            console.log('📧 Email status before webhook:', bookingInfo.email ? 'Available' : 'MISSING');
+            
+            // CRITICAL: Final check for email before sending webhook
+            if (!bookingInfo.email || bookingInfo.email.trim() === '') {
+              console.error('❌ ATTEMPTING FINAL EMAIL RECOVERY...');
+              
+              // Try global typeform submission
+              if (global.lastTypeformSubmission && global.lastTypeformSubmission.email) {
+                bookingInfo.email = global.lastTypeformSubmission.email;
+                bookingInfo.name = bookingInfo.name || global.lastTypeformSubmission.name;
+                console.log('✅ Recovered email from global submission:', bookingInfo.email);
+              }
+              
+              // Try active calls metadata
+              if (!bookingInfo.email && connectionData.callId && activeCallsMetadata.has(connectionData.callId)) {
+                const callMeta = activeCallsMetadata.get(connectionData.callId);
+                if (callMeta && callMeta.customer_email) {
+                  bookingInfo.email = callMeta.customer_email;
+                  console.log('✅ Recovered email from active calls metadata:', bookingInfo.email);
+                }
+              }
+            }
+            
             // Alert the Retell agent through custom variables
             try {
               if (parsed.call && parsed.call.call_id) {
@@ -811,14 +864,17 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
                     'Content-Type': 'application/json'
                   }
                 });
-                console.log('Set Retell call variables for scheduling and discovery data');
+                console.log('✅ Set Retell call variables for scheduling and discovery data');
               }
             } catch (variableError) {
               console.error('Error setting Retell variables:', variableError);
             }
             
             // Immediately send data to trigger server when we get a day preference
-            console.log('Sending scheduling preference to trigger server with all collected data');
+            console.log('📤 Sending scheduling preference to trigger server with all collected data');
+            console.log('📧 Final email before webhook:', bookingInfo.email);
+            console.log('📋 Discovery data:', JSON.stringify(discoveryData, null, 2));
+            
             const result = await sendSchedulingPreference(
               bookingInfo.name,
               bookingInfo.email,
@@ -838,7 +894,7 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
               await updateConversationState(connectionData.callId, true, bookingInfo.preferredDay);
             }
             
-            console.log('Data sent to n8n and conversation marked as completed');
+            console.log('✅ Data sent to n8n and conversation marked as completed');
           }
         }
 
@@ -1109,6 +1165,106 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
   } catch (error) {
     console.error('Error handling Retell webhook:', error);
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// DEBUG ENDPOINTS
+// Add this debug endpoint to your WebSocket server for testing
+app.post('/debug-call-setup', express.json(), async (req, res) => {
+  try {
+    const { name, email, phone } = req.body;
+    
+    console.log('=== DEBUG CALL SETUP ===');
+    console.log('Input data:', { name, email, phone });
+    
+    // Test 1: Store globally
+    const globalStored = storeContactInfoGlobally(name, email, phone, 'Debug Test');
+    console.log('Global storage result:', globalStored);
+    console.log('Global lastTypeformSubmission:', global.lastTypeformSubmission);
+    
+    // Test 2: Make call to trigger server
+    const triggerResponse = await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/trigger-retell-call`, {
+      name,
+      email,
+      phone,
+      userId: `debug_${Date.now()}`
+    });
+    
+    console.log('Trigger server response:', triggerResponse.data);
+    
+    // Test 3: Check if call was stored correctly
+    if (triggerResponse.data.call_id) {
+      setTimeout(async () => {
+        try {
+          const callInfoResponse = await axios.get(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/get-call-info/${triggerResponse.data.call_id}`);
+          console.log('Retrieved call info:', callInfoResponse.data);
+        } catch (error) {
+          console.error('Error retrieving call info:', error.message);
+        }
+      }, 2000);
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: 'Debug call setup completed',
+      global_storage: globalStored,
+      global_data: global.lastTypeformSubmission,
+      trigger_response: triggerResponse.data
+    });
+    
+  } catch (error) {
+    console.error('Debug call setup error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Add this endpoint to test webhook sending directly
+app.post('/debug-webhook-test', express.json(), async (req, res) => {
+  try {
+    const { name, email, phone, preferredDay } = req.body;
+    
+    console.log('=== DEBUG WEBHOOK TEST ===');
+    console.log('Input:', { name, email, phone, preferredDay });
+    
+    // Store globally first
+    storeContactInfoGlobally(name, email, phone, 'Debug Webhook Test');
+    
+    // Test discovery data
+    const testDiscoveryData = {
+      'question_0': 'Instagram',
+      'question_1': 'Solar',
+      'question_2': 'Solar panels',
+      'question_3': 'No',
+      'question_4': 'Yes. Go high level',
+      'question_5': 'Not following up leads quickly'
+    };
+    
+    // Send webhook
+    const result = await sendSchedulingPreference(
+      name,
+      email,
+      phone,
+      preferredDay || 'Monday',
+      `debug_call_${Date.now()}`,
+      testDiscoveryData
+    );
+    
+    res.status(200).json({
+      success: true,
+      message: 'Debug webhook test completed',
+      webhook_result: result,
+      discovery_data: testDiscoveryData
+    });
+    
+  } catch (error) {
+    console.error('Debug webhook test error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 });
 
