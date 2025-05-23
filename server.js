@@ -833,72 +833,6 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
           console.log('⚠️ Could not fetch contact info from trigger server:', triggerError.message);
         }
       }
-            bookingInfo.email = callInfo.email || '';
-            bookingInfo.name = callInfo.name || '';
-            bookingInfo.phone = callInfo.phone || '';
-            collectedContactInfo = true;
-            
-            console.log('✅ Got contact info from trigger server:', {
-              name: bookingInfo.name,
-              email: bookingInfo.email,
-              phone: bookingInfo.phone
-            });
-            
-            // Update system prompt with the actual customer name if we have it
-            if (bookingInfo.name) {
-              const systemPrompt = conversationHistory[0].content;
-              conversationHistory[0].content = systemPrompt
-                .replace(/\[Name\]/g, bookingInfo.name)
-                .replace(/Monica/g, bookingInfo.name);
-              console.log(`Updated system prompt with customer name: ${bookingInfo.name}`);
-            }
-          }
-        } catch (triggerError) {
-          console.log('⚠️ Could not fetch contact info from trigger server:', triggerError.message);
-        }
-        
-        // SECOND: Try to get from call metadata (as backup)
-        if (parsed.call.metadata) {
-          connectionData.metadata = parsed.call.metadata;
-          console.log('📞 Call metadata received:', JSON.stringify(connectionData.metadata, null, 2));
-          
-          // FIXED: Extract email from metadata safely
-          if (connectionData.metadata.customer_email && !bookingInfo.email) {
-            bookingInfo.email = connectionData.metadata.customer_email;
-            console.log(`✅ Got email from metadata: ${bookingInfo.email}`);
-          }
-          
-          // Only use metadata if we don't already have the info
-          if (connectionData.metadata.customer_name && !bookingInfo.name) {
-            bookingInfo.name = connectionData.metadata.customer_name;
-            console.log(`Updated name from metadata: ${bookingInfo.name}`);
-          }
-          
-          if ((connectionData.metadata.to_number || parsed.call.to_number) && !bookingInfo.phone) {
-            bookingInfo.phone = connectionData.metadata.to_number || parsed.call.to_number;
-            console.log(`Updated phone from metadata: ${bookingInfo.phone}`);
-          }
-          
-          collectedContactInfo = true;
-        } else {
-          console.log('⚠️ No metadata in call object');
-        }
-        
-        // Store in active calls metadata map for the sendSchedulingPreference function
-        activeCallsMetadata.set(connectionData.callId, {
-          customer_email: bookingInfo.email,
-          customer_name: bookingInfo.name,
-          phone: bookingInfo.phone,
-          to_number: bookingInfo.phone
-        });
-        
-        // Log final captured info
-        console.log(`✅ Final captured customer info for call ${connectionData.callId}:`, {
-          name: bookingInfo.name,
-          email: bookingInfo.email,
-          phone: bookingInfo.phone
-        });
-      }
 
       if (parsed.interaction_type === 'response_required') {
         const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
@@ -1074,12 +1008,12 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
         // After sending the response, check if this should be our last message
         if (conversationState === 'completed' && !webhookSent && botReply.toLowerCase().includes('scheduling')) {
           // If we're in the completed state and talking about scheduling but haven't sent the webhook yet
-          if (bookingInfo.email || connectionData.metadata?.customer_email) {
+          if (bookingInfo.email || connectionData.customerEmail) {
             console.log('Sending final webhook before conversation end');
             await sendSchedulingPreference(
-              bookingInfo.name || connectionData.metadata?.customer_name || '',
-              bookingInfo.email || connectionData.metadata?.customer_email || '',
-              bookingInfo.phone || connectionData.metadata?.to_number || '',
+              bookingInfo.name || connectionData.customerName || '',
+              bookingInfo.email || connectionData.customerEmail || '',
+              bookingInfo.phone || connectionData.customerPhone || '',
               bookingInfo.preferredDay || 'Not specified',
               connectionData.callId,
               discoveryData
@@ -1092,13 +1026,13 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
       console.error('Error handling message:', error.message);
       
       // Always try to send whatever data we have if an error occurs
-      if (!webhookSent && connectionData.callId && (bookingInfo.email || connectionData.metadata?.customer_email)) {
+      if (!webhookSent && connectionData.callId && (bookingInfo.email || connectionData.customerEmail)) {
         try {
           console.log('Sending webhook due to error');
           await sendSchedulingPreference(
-            bookingInfo.name || connectionData.metadata?.customer_name || '',
-            bookingInfo.email || connectionData.metadata?.customer_email || '',
-            bookingInfo.phone || connectionData.metadata?.to_number || '',
+            bookingInfo.name || connectionData.customerName || '',
+            bookingInfo.email || connectionData.customerEmail || '',
+            bookingInfo.phone || connectionData.customerPhone || '',
             bookingInfo.preferredDay || 'Not specified',
             connectionData.callId,
             discoveryData
