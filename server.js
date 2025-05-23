@@ -8,63 +8,6 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-// Add this right after: const wss = new WebSocketServer({ server });
-
-wss.on('connection', async (ws, req) => { // ← Note: add 'async' here!
-  console.log('🔗 NEW WEBSOCKET CONNECTION ESTABLISHED');
-  console.log('Connection URL:', req.url);
-  
-  // Extract call ID from URL
-  const callIdMatch = req.url.match(/\/call_([a-f0-9]+)/);
-  const callId = callIdMatch ? `call_${callIdMatch[1]}` : null;
-  
-  console.log('📞 Extracted Call ID:', callId);
-  
-  // Fetch call metadata if we have a call ID
-  if (callId) {
-    try {
-      console.log('🔍 Fetching metadata for call:', callId);
-      const response = await fetch(`${TRIGGER_SERVER_URL}/api/get-call-data/${callId}`);
-      if (response.ok) {
-        const callData = await response.json();
-        console.log('📋 Retrieved call metadata:', callData);
-        connectionData.metadata = callData;
-        
-        // Check if this is an appointment confirmation call
-        if (callData.call_type === 'appointment_confirmation') {
-          connectionData.isAppointmentConfirmation = true;
-          console.log('📅 This is an APPOINTMENT CONFIRMATION call');
-        }
-      } else {
-        console.log('⚠️ Failed to fetch call metadata:', response.status);
-      }
-    } catch (error) {
-      console.log('❌ Error fetching call metadata:', error.message);
-    }
-  }
-  
-  console.log('Retell connected via WebSocket.');
-  
-  // Store connection data with this WebSocket
-  const connectionData = {
-    callId: callId,
-    metadata: null, // This will be updated above
-    isOutboundCall: false,
-    isAppointmentConfirmation: false
-  };
-  
-  // Your existing connection handler code goes here...
-});
-
-// Also add error handling
-wss.on('error', (error) => {
-  console.error('❌ WebSocket Server Error:', error);
-});
-
-server.on('error', (error) => {
-  console.error('❌ HTTP Server Error:', error);
-});
-
 app.use(express.json());
 
 // Store the latest Typeform submission for reference
@@ -563,16 +506,56 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
   }
 });
 
-wss.on('connection', (ws) => {
-  console.log('Retell connected via WebSocket.');
+// FIXED WEBSOCKET CONNECTION HANDLER - NO DUPLICATES
+wss.on('connection', async (ws, req) => {
+  console.log('🔗 NEW WEBSOCKET CONNECTION ESTABLISHED');
+  console.log('Connection URL:', req.url);
+  
+  // Extract call ID from URL
+  const callIdMatch = req.url.match(/\/call_([a-f0-9]+)/);
+  const callId = callIdMatch ? `call_${callIdMatch[1]}` : null;
+  
+  console.log('📞 Extracted Call ID:', callId);
   
   // Store connection data with this WebSocket
   const connectionData = {
-    callId: null,
+    callId: callId, // ← FIXED: Set the call ID immediately
     metadata: null,
+    customerEmail: null, // Store email for later use
     isOutboundCall: false,
     isAppointmentConfirmation: false
   };
+
+  // Fetch call metadata if we have a call ID
+  if (callId) {
+    try {
+      console.log('🔍 Fetching metadata for call:', callId);
+      const TRIGGER_SERVER_URL = process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com';
+      const response = await fetch(`${TRIGGER_SERVER_URL}/api/get-call-data/${callId}`);
+      if (response.ok) {
+        const callData = await response.json();
+        console.log('📋 Retrieved call metadata:', callData);
+        connectionData.metadata = callData;
+        
+        // Extract email from metadata
+        const email = callData.email || callData.customer_email || callData.user_email;
+        console.log('📧 Extracted email:', email);
+        
+        // Check if this is an appointment confirmation call
+        if (callData.call_type === 'appointment_confirmation') {
+          connectionData.isAppointmentConfirmation = true;
+          connectionData.customerEmail = email; // Store email for later use
+          console.log('📅 This is an APPOINTMENT CONFIRMATION call for:', email);
+        }
+      } else {
+        console.log('⚠️ Failed to fetch call metadata:', response.status);
+      }
+    } catch (error) {
+      console.log('❌ Error fetching call metadata:', error.message);
+    }
+  }
+  
+  console.log('Retell connected via WebSocket.');
   
   // Define discovery questions as a trackable list - MODIFIED to match Airtable field names
   const discoveryQuestions = [
@@ -1040,6 +1023,15 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
       console.log(`Cleaned up metadata for call ${connectionData.callId}`);
     }
   });
+});
+
+// Add error handling for WebSocket server
+wss.on('error', (error) => {
+  console.error('❌ WebSocket Server Error:', error);
+});
+
+server.on('error', (error) => {
+  console.error('❌ HTTP Server Error:', error);
 });
 
 // Endpoint to receive Retell webhook call events
