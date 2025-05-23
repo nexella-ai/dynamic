@@ -10,7 +10,7 @@ const wss = new WebSocketServer({ server });
 
 // Add this right after: const wss = new WebSocketServer({ server });
 
-wss.on('connection', (ws, req) => {
+wss.on('connection', async (ws, req) => { // ← Note: add 'async' here!
   console.log('🔗 NEW WEBSOCKET CONNECTION ESTABLISHED');
   console.log('Connection URL:', req.url);
   
@@ -20,12 +20,35 @@ wss.on('connection', (ws, req) => {
   
   console.log('📞 Extracted Call ID:', callId);
   
+  // Fetch call metadata if we have a call ID
+  if (callId) {
+    try {
+      console.log('🔍 Fetching metadata for call:', callId);
+      const response = await fetch(`${TRIGGER_SERVER_URL}/api/get-call-data/${callId}`);
+      if (response.ok) {
+        const callData = await response.json();
+        console.log('📋 Retrieved call metadata:', callData);
+        connectionData.metadata = callData;
+        
+        // Check if this is an appointment confirmation call
+        if (callData.call_type === 'appointment_confirmation') {
+          connectionData.isAppointmentConfirmation = true;
+          console.log('📅 This is an APPOINTMENT CONFIRMATION call');
+        }
+      } else {
+        console.log('⚠️ Failed to fetch call metadata:', response.status);
+      }
+    } catch (error) {
+      console.log('❌ Error fetching call metadata:', error.message);
+    }
+  }
+  
   console.log('Retell connected via WebSocket.');
   
   // Store connection data with this WebSocket
   const connectionData = {
-    callId: callId, // ← FIXED: Set the call ID immediately
-    metadata: null,
+    callId: callId,
+    metadata: null, // This will be updated above
     isOutboundCall: false,
     isAppointmentConfirmation: false
   };
