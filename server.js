@@ -13,6 +13,9 @@ app.use(express.json());
 // Store the latest Typeform submission for reference
 global.lastTypeformSubmission = null;
 
+// ADD: Track sent webhooks to prevent duplicates
+const sentWebhooks = new Map();
+
 app.get('/', (req, res) => {
   res.send('Nexella WebSocket Server with Calendly scheduling link integration is live!');
 });
@@ -84,9 +87,33 @@ async function updateConversationState(callId, discoveryComplete, preferredDay) 
   }
 }
 
-// ENHANCED: Send scheduling data with proper email handling - MULTIPLE SOURCES
+// ENHANCED: Send scheduling data with proper email handling - MULTIPLE SOURCES + DUPLICATE PREVENTION
 async function sendSchedulingPreference(name, email, phone, preferredDay, callId, discoveryData = {}) {
   try {
+    // CREATE UNIQUE KEY FOR DEDUPLICATION
+    const webhookKey = `${email}_${callId}_${preferredDay}`;
+    const now = Date.now();
+    const fiveMinutesAgo = now - (5 * 60 * 1000);
+    
+    // CHECK IF WE ALREADY SENT THIS WEBHOOK RECENTLY
+    if (sentWebhooks.has(webhookKey)) {
+      const lastSent = sentWebhooks.get(webhookKey);
+      if (lastSent > fiveMinutesAgo) {
+        console.log(`⚠️ Webhook already sent recently for ${webhookKey}. Skipping duplicate.`);
+        return { success: true, duplicate: true };
+      }
+    }
+    
+    // MARK AS BEING SENT
+    sentWebhooks.set(webhookKey, now);
+    
+    // CLEANUP OLD ENTRIES
+    for (const [key, timestamp] of sentWebhooks.entries()) {
+      if (timestamp < fiveMinutesAgo) {
+        sentWebhooks.delete(key);
+      }
+    }
+
     console.log('=== WEBHOOK SENDING DEBUG ===');
     console.log('Input parameters:', { name, email, phone, preferredDay, callId });
     console.log('Global Typeform submission:', global.lastTypeformSubmission);
@@ -512,7 +539,7 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
   }
 });
 
-// ENHANCED WEBSOCKET CONNECTION HANDLER - EXTRACTS CALL ID, EMAIL, NAME
+// ENHANCED WEBSOCKET CONNECTION HANDLER - EXTRACTS CALL ID, EMAIL, NAME + DUPLICATE PREVENTION
 wss.on('connection', async (ws, req) => {
   console.log('🔗 NEW WEBSOCKET CONNECTION ESTABLISHED');
   console.log('Connection URL:', req.url);
@@ -697,6 +724,8 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
   let collectedContactInfo = !!connectionData.customerEmail; // True if we have email
   let userHasSpoken = false;
   let webhookSent = false; // Track if we've sent the webhook
+  let webhookAttempts = 0; // ADDED: Track webhook attempts
+  const maxWebhookAttempts = 1; // ADDED: Only try once per connection
 
   // Send connecting message
   ws.send(JSON.stringify({
@@ -938,12 +967,14 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
           }
         }
         
-        // IMPROVED: Better day preference detection
+        // IMPROVED: Better day preference detection + DUPLICATE PREVENTION
         if (conversationState === 'booking' || 
            (conversationState === 'discovery' && discoveryProgress.allQuestionsAsked)) {
           const dayInfo = handleSchedulingPreference(userMessage);
           
-          if (dayInfo && !webhookSent) {
+          // ONLY SEND WEBHOOK ONCE PER CONNECTION
+          if (dayInfo && !webhookSent && webhookAttempts < maxWebhookAttempts) {
+            webhookAttempts++;
             bookingInfo.preferredDay = dayInfo.dayName;
             
             // Alert the Retell agent through custom variables
@@ -1009,10 +1040,15 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
               discoveryData
             );
             
-            // Mark as sent and continue conversation naturally
-            bookingInfo.schedulingLinkSent = true;
-            conversationState = 'completed';
-            webhookSent = true;
+            // Mark as sent ONLY if successful and not a duplicate
+            if (result.success && !result.duplicate) {
+              bookingInfo.schedulingLinkSent = true;
+              conversationState = 'completed';
+              webhookSent = true;
+              console.log('✅ Webhook sent successfully, marking as complete');
+            } else if (result.duplicate) {
+              console.log('⚠️ Duplicate webhook detected, not marking as sent');
+            }
             
             // Update conversation state in trigger server
             if (connectionData.callId) {
@@ -1075,43 +1111,9 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
           response_id: parsed.response_id
         }));
         
-        // After sending the response, check if this should be our last message
-        if (conversationState === 'completed' && !webhookSent && botReply.toLowerCase().includes('scheduling')) {
-          // If we're in the completed state and talking about scheduling but haven't sent the webhook yet
-          if (bookingInfo.email || connectionData.customerEmail) {
-            console.log('Sending final webhook before conversation end');
-            await sendSchedulingPreference(
-              bookingInfo.name || connectionData.customerName || '',
-              bookingInfo.email || connectionData.customerEmail || '',
-              bookingInfo.phone || connectionData.customerPhone || '',
-              bookingInfo.preferredDay || 'Not specified',
-              connectionData.callId,
-              discoveryData
-            );
-            webhookSent = true;
-          }
-        }
       }
     } catch (error) {
       console.error('Error handling message:', error.message);
-      
-      // Always try to send whatever data we have if an error occurs
-      if (!webhookSent && connectionData.callId && (bookingInfo.email || connectionData.customerEmail)) {
-        try {
-          console.log('Sending webhook due to error');
-          await sendSchedulingPreference(
-            bookingInfo.name || connectionData.customerName || '',
-            bookingInfo.email || connectionData.customerEmail || '',
-            bookingInfo.phone || connectionData.customerPhone || '',
-            bookingInfo.preferredDay || 'Not specified',
-            connectionData.callId,
-            discoveryData
-          );
-          webhookSent = true;
-        } catch (webhookError) {
-          console.error('Failed to send webhook after error:', webhookError);
-        }
-      }
       
       // Send a recovery message
       ws.send(JSON.stringify({
@@ -1135,8 +1137,8 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
       phone: connectionData.customerPhone || bookingInfo.phone
     });
     
-    // ALWAYS send data to trigger server when call ends, regardless of completion status
-    if (!webhookSent && connectionData.callId) {
+    // ONLY send data if we haven't sent before AND we have essential data
+    if (!webhookSent && connectionData.callId && (bookingInfo.email || connectionData.customerEmail)) {
       try {
         // Get any metadata we can find for this call
         if (!bookingInfo.name && (connectionData?.customerName || connectionData?.metadata?.customer_name)) {
@@ -1149,8 +1151,8 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
           bookingInfo.phone = connectionData.customerPhone || connectionData.metadata.to_number;
         }
 
-        console.log('Connection closed - sending final webhook data with discovery info:', discoveryData);
-        await sendSchedulingPreference(
+        console.log('📞 Connection closed - sending final webhook data with discovery info:', discoveryData);
+        const result = await sendSchedulingPreference(
           bookingInfo.name || '',
           bookingInfo.email || '',
           bookingInfo.phone || '',
@@ -1158,8 +1160,13 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
           connectionData.callId,
           discoveryData
         );
-        console.log(`Final data sent for call ${connectionData.callId}`);
-        webhookSent = true;
+        
+        if (result.success && !result.duplicate) {
+          console.log(`✅ Final data sent for call ${connectionData.callId}`);
+          webhookSent = true;
+        } else if (result.duplicate) {
+          console.log(`⚠️ Final webhook was duplicate for call ${connectionData.callId}`);
+        }
       } catch (finalError) {
         console.error('Error sending final webhook:', finalError.message);
       }
@@ -1167,6 +1174,8 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
       // Clean up
       activeCallsMetadata.delete(connectionData.callId);
       console.log(`Cleaned up metadata for call ${connectionData.callId}`);
+    } else {
+      console.log('📞 Connection closed - webhook already sent or missing required data');
     }
   });
 });
@@ -1180,15 +1189,37 @@ server.on('error', (error) => {
   console.error('❌ HTTP Server Error:', error);
 });
 
-// Endpoint to receive Retell webhook call events
+// Endpoint to receive Retell webhook call events + DUPLICATE PREVENTION
 app.post('/retell-webhook', express.json(), async (req, res) => {
   try {
     const { event, call } = req.body;
     
-    console.log(`Received Retell webhook event: ${event}`);
+    console.log(`📨 Received Retell webhook event: ${event}`);
+    
+    // ONLY PROCESS SPECIFIC EVENTS TO AVOID DUPLICATES
+    if (!['call_ended', 'call_analyzed'].includes(event)) {
+      console.log(`⚠️ Ignoring event: ${event}`);
+      return res.status(200).json({ success: true, message: 'Event ignored' });
+    }
     
     if (call && call.call_id) {
       console.log(`Call ID: ${call.call_id}, Status: ${call.call_status}`);
+      
+      // CHECK FOR DUPLICATE RETELL WEBHOOK
+      const webhookKey = `retell_${call.call_id}_${event}`;
+      const now = Date.now();
+      const fiveMinutesAgo = now - (5 * 60 * 1000);
+      
+      if (sentWebhooks.has(webhookKey)) {
+        const lastSent = sentWebhooks.get(webhookKey);
+        if (lastSent > fiveMinutesAgo) {
+          console.log(`⚠️ Retell webhook already processed for ${webhookKey}. Skipping duplicate.`);
+          return res.status(200).json({ success: true, duplicate: true });
+        }
+      }
+      
+      // MARK AS PROCESSED
+      sentWebhooks.set(webhookKey, now);
       
       // Extract important call information
       const email = call.metadata?.customer_email || '';
@@ -1276,27 +1307,30 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
         });
       }
       
-      // Send webhook for call ending events
-      if ((event === 'call_ended' || event === 'call_analyzed') && email) {
-        console.log(`Sending webhook for ${event} event with discovery data:`, discoveryData);
+      // ONLY SEND WEBHOOK IF WE HAVE AN EMAIL
+      if (email) {
+        console.log(`📤 Sending webhook for Retell ${event} event with discovery data:`, discoveryData);
         
         try {
-          // Use the trigger server to route the webhook
-          await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, {
+          const result = await sendSchedulingPreference(
             name,
             email,
             phone,
-            preferredDay: preferredDay || 'Not specified',
-            call_id: call.call_id,
-            call_status: call.call_status,
-            discovery_data: discoveryData,
-            schedulingComplete: true
-          });
+            preferredDay || 'Not specified',
+            call.call_id,
+            discoveryData
+          );
           
-          console.log(`Successfully sent webhook for ${event}`);
+          if (result.success && !result.duplicate) {
+            console.log(`✅ Successfully sent webhook for ${event}`);
+          } else if (result.duplicate) {
+            console.log(`⚠️ Webhook was duplicate for ${event}`);
+          }
         } catch (error) {
-          console.error(`Error sending webhook for ${event}:`, error);
+          console.error(`❌ Error sending webhook for ${event}:`, error);
         }
+      } else {
+        console.log(`⚠️ No email found for Retell ${event} event. Skipping webhook.`);
       }
       
       // Clean up any stored data
@@ -1305,7 +1339,7 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
     
     res.status(200).json({ success: true });
   } catch (error) {
-    console.error('Error handling Retell webhook:', error);
+    console.error('❌ Error handling Retell webhook:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
