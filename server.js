@@ -12,8 +12,23 @@ const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws, req) => {
   console.log('🔗 NEW WEBSOCKET CONNECTION ESTABLISHED');
-  console.log('Connection headers:', req.headers);
   console.log('Connection URL:', req.url);
+  
+  // Extract call ID from URL
+  const callIdMatch = req.url.match(/\/call_([a-f0-9]+)/);
+  const callId = callIdMatch ? `call_${callIdMatch[1]}` : null;
+  
+  console.log('📞 Extracted Call ID:', callId);
+  
+  console.log('Retell connected via WebSocket.');
+  
+  // Store connection data with this WebSocket
+  const connectionData = {
+    callId: callId, // ← FIXED: Set the call ID immediately
+    metadata: null,
+    isOutboundCall: false,
+    isAppointmentConfirmation: false
+  };
   
   // Your existing connection handler code goes here...
 });
