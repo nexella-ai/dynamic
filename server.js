@@ -656,6 +656,18 @@ if (connectionData.metadata.customer_email) {
             timeout: 5000
           });
           
+         // ENHANCED: Get contact info when we connect to a call
+      if (parsed.call && parsed.call.call_id && !connectionData.callId) {
+        connectionData.callId = parsed.call.call_id;
+        console.log(`🔗 Connected to call: ${connectionData.callId}`);
+        
+        // FIRST: Try to get contact info from trigger server using call_id
+        try {
+          console.log('📞 Fetching contact info from trigger server...');
+          const triggerResponse = await axios.get(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/get-call-info/${connectionData.callId}`, {
+            timeout: 5000
+          });
+          
           if (triggerResponse.data && triggerResponse.data.success) {
             const callInfo = triggerResponse.data.data;
             bookingInfo.email = callInfo.email || '';
@@ -687,15 +699,16 @@ if (connectionData.metadata.customer_email) {
           connectionData.metadata = parsed.call.metadata;
           console.log('📞 Call metadata received:', JSON.stringify(connectionData.metadata, null, 2));
           
+          // FIXED: Extract email from metadata safely
+          if (connectionData.metadata.customer_email) {
+            bookingInfo.email = connectionData.metadata.customer_email;
+            console.log(`✅ Got email from metadata: ${bookingInfo.email}`);
+          }
+          
           // Only use metadata if we don't already have the info
           if (connectionData.metadata.customer_name && !bookingInfo.name) {
             bookingInfo.name = connectionData.metadata.customer_name;
             console.log(`Updated name from metadata: ${bookingInfo.name}`);
-          }
-          
-          if (connectionData.metadata.customer_email && !bookingInfo.email) {
-            bookingInfo.email = connectionData.metadata.customer_email;
-            console.log(`Updated email from metadata: ${bookingInfo.email}`);
           }
           
           if ((connectionData.metadata.to_number || parsed.call.to_number) && !bookingInfo.phone) {
