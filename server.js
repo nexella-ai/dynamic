@@ -644,19 +644,6 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
       }
       
       // ENHANCED: Get contact info when we connect to a call
-if (connectionData.metadata.customer_email) {
-  bookingInfo.email = connectionData.metadata.customer_email;
-  console.log(`✅ Got email from metadata: ${bookingInfo.email}`);
-}
-        
-        // FIRST: Try to get contact info from trigger server using call_id
-        try {
-          console.log('📞 Fetching contact info from trigger server...');
-          const triggerResponse = await axios.get(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/get-call-info/${connectionData.callId}`, {
-            timeout: 5000
-          });
-          
-         // ENHANCED: Get contact info when we connect to a call
       if (parsed.call && parsed.call.call_id && !connectionData.callId) {
         connectionData.callId = parsed.call.call_id;
         console.log(`🔗 Connected to call: ${connectionData.callId}`);
@@ -700,7 +687,7 @@ if (connectionData.metadata.customer_email) {
           console.log('📞 Call metadata received:', JSON.stringify(connectionData.metadata, null, 2));
           
           // FIXED: Extract email from metadata safely
-          if (connectionData.metadata.customer_email) {
+          if (connectionData.metadata.customer_email && !bookingInfo.email) {
             bookingInfo.email = connectionData.metadata.customer_email;
             console.log(`✅ Got email from metadata: ${bookingInfo.email}`);
           }
