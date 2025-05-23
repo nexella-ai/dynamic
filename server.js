@@ -643,31 +643,50 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
         console.log('Call data structure:', JSON.stringify(parsed.call, null, 2));
       }
       
-      // ENHANCED: Try to get contact info from global storage first
-      if (!collectedContactInfo && global.lastTypeformSubmission) {
-        console.log('🔄 Loading contact info from global storage');
-        bookingInfo.email = global.lastTypeformSubmission.email;
-        bookingInfo.name = global.lastTypeformSubmission.name || '';
-        bookingInfo.phone = global.lastTypeformSubmission.phone || '';
-        collectedContactInfo = true;
-        console.log('✅ Loaded contact info from global storage:', {
-          name: bookingInfo.name,
-          email: bookingInfo.email,
-          phone: bookingInfo.phone
-        });
-      }
-      
-      // KEEP SIMPLE: Basic metadata handling like the old version
+      // ENHANCED: Get contact info when we connect to a call
       if (parsed.call && parsed.call.call_id && !connectionData.callId) {
         connectionData.callId = parsed.call.call_id;
         console.log(`🔗 Connected to call: ${connectionData.callId}`);
         
-        // Store call metadata if available
+        // FIRST: Try to get contact info from trigger server using call_id
+        try {
+          console.log('📞 Fetching contact info from trigger server...');
+          const triggerResponse = await axios.get(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/get-call-info/${connectionData.callId}`, {
+            timeout: 5000
+          });
+          
+          if (triggerResponse.data && triggerResponse.data.success) {
+            const callInfo = triggerResponse.data.data;
+            bookingInfo.email = callInfo.email || '';
+            bookingInfo.name = callInfo.name || '';
+            bookingInfo.phone = callInfo.phone || '';
+            collectedContactInfo = true;
+            
+            console.log('✅ Got contact info from trigger server:', {
+              name: bookingInfo.name,
+              email: bookingInfo.email,
+              phone: bookingInfo.phone
+            });
+            
+            // Update system prompt with the actual customer name if we have it
+            if (bookingInfo.name) {
+              const systemPrompt = conversationHistory[0].content;
+              conversationHistory[0].content = systemPrompt
+                .replace(/\[Name\]/g, bookingInfo.name)
+                .replace(/Monica/g, bookingInfo.name);
+              console.log(`Updated system prompt with customer name: ${bookingInfo.name}`);
+            }
+          }
+        } catch (triggerError) {
+          console.log('⚠️ Could not fetch contact info from trigger server:', triggerError.message);
+        }
+        
+        // SECOND: Try to get from call metadata (as backup)
         if (parsed.call.metadata) {
           connectionData.metadata = parsed.call.metadata;
           console.log('📞 Call metadata received:', JSON.stringify(connectionData.metadata, null, 2));
           
-          // Extract customer info from metadata if available
+          // Only use metadata if we don't already have the info
           if (connectionData.metadata.customer_name && !bookingInfo.name) {
             bookingInfo.name = connectionData.metadata.customer_name;
             console.log(`Updated name from metadata: ${bookingInfo.name}`);
@@ -683,40 +702,25 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
             console.log(`Updated phone from metadata: ${bookingInfo.phone}`);
           }
           
-          // Update system prompt with the actual customer name if we have it
-          if (bookingInfo.name) {
-            const systemPrompt = conversationHistory[0].content;
-            conversationHistory[0].content = systemPrompt
-              .replace(/\[Name\]/g, bookingInfo.name)
-              .replace(/Monica/g, bookingInfo.name);
-            console.log(`Updated system prompt with customer name: ${bookingInfo.name}`);
-          }
-          
           collectedContactInfo = true;
-          
-          // Store this globally if not already stored
-          if (bookingInfo.email) {
-            storeContactInfoGlobally(bookingInfo.name, bookingInfo.email, bookingInfo.phone, 'Call Metadata');
-          }
-          
-          // Store this call's metadata in the active calls map
-          activeCallsMetadata.set(connectionData.callId, {
-            customer_email: bookingInfo.email,
-            customer_name: bookingInfo.name,
-            phone: bookingInfo.phone,
-            to_number: bookingInfo.phone,
-            ...parsed.call.metadata
-          });
-          
-          // Log what we've captured
-          console.log(`✅ Final captured customer info for call ${connectionData.callId}:`, {
-            name: bookingInfo.name,
-            email: bookingInfo.email,
-            phone: bookingInfo.phone
-          });
         } else {
-          console.log('⚠️ No metadata in call object, but that\'s OK - using global storage');
+          console.log('⚠️ No metadata in call object');
         }
+        
+        // Store in active calls metadata map for the sendSchedulingPreference function
+        activeCallsMetadata.set(connectionData.callId, {
+          customer_email: bookingInfo.email,
+          customer_name: bookingInfo.name,
+          phone: bookingInfo.phone,
+          to_number: bookingInfo.phone
+        });
+        
+        // Log final captured info
+        console.log(`✅ Final captured customer info for call ${connectionData.callId}:`, {
+          name: bookingInfo.name,
+          email: bookingInfo.email,
+          phone: bookingInfo.phone
+        });
       }
 
       if (parsed.interaction_type === 'response_required') {
