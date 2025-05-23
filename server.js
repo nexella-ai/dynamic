@@ -8,6 +8,25 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
+// Add this right after: const wss = new WebSocketServer({ server });
+
+wss.on('connection', (ws, req) => {
+  console.log('🔗 NEW WEBSOCKET CONNECTION ESTABLISHED');
+  console.log('Connection headers:', req.headers);
+  console.log('Connection URL:', req.url);
+  
+  // Your existing connection handler code goes here...
+});
+
+// Also add error handling
+wss.on('error', (error) => {
+  console.error('❌ WebSocket Server Error:', error);
+});
+
+server.on('error', (error) => {
+  console.error('❌ HTTP Server Error:', error);
+});
+
 app.use(express.json());
 
 // Store the latest Typeform submission for reference
