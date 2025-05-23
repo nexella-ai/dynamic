@@ -331,7 +331,7 @@ function trackDiscoveryQuestions(botMessage, discoveryProgress, discoveryQuestio
     ["product", "service", "offer", "price point", "main product", "typical price"], // What's your main product
     ["ads", "advertising", "marketing", "meta", "google", "tiktok", "running ads"], // Are you running ads
     ["crm", "gohighlevel", "management system", "customer relationship", "using any crm"], // Are you using a CRM
-    ["problems", "challenges", "issues", "pain points", "difficulties", "running into", "what problems"] // What problems are you facing
+    ["problems", "challenges", "issues", "pain points", "difficulties", "running into", "what problems", "struggling with", "biggest challenge"] // What problems are you facing - ENHANCED
   ];
   
   // Check each question's key phrases
@@ -339,6 +339,11 @@ function trackDiscoveryQuestions(botMessage, discoveryProgress, discoveryQuestio
     if (phrases.some(phrase => botMessageLower.includes(phrase))) {
       discoveryProgress.questionsAsked.add(index);
       console.log(`Detected question ${index} was asked: ${discoveryQuestions[index]}`);
+      
+      // Special logging for pain points question
+      if (index === 5) {
+        console.log(`🎯 PAIN POINTS QUESTION DETECTED in bot message: "${botMessage}"`);
+      }
     }
   });
   
@@ -353,6 +358,7 @@ function trackDiscoveryQuestions(botMessage, discoveryProgress, discoveryQuestio
   
   // Log the progress for debugging
   console.log(`Question progress: ${discoveryProgress.questionsAsked.size}/${discoveryQuestions.length}, Scheduling phrase: ${hasSchedulingPhrase}`);
+  console.log(`Questions asked so far: [${Array.from(discoveryProgress.questionsAsked).join(', ')}]`);
   
   // Consider discovery complete when we have enough questions OR all questions
   const discoveryComplete = (hasEnoughQuestions && hasSchedulingPhrase) || hasAllQuestions;
@@ -862,7 +868,12 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
               if (lastBotMessage.content.toLowerCase().includes(shortQuestionStart)) {
                 // Store the answer with question index
                 discoveryData[`question_${i}`] = userMessage;
-                console.log(`Stored answer to question ${i}: ${question}`);
+                console.log(`✅ STORED answer to question ${i}: ${question} = "${userMessage}"`); // Enhanced logging
+                
+                // SPECIAL CASE: Always log question 5 (pain points)
+                if (i === 5) {
+                  console.log(`🎯 PAIN POINTS CAPTURED: "${userMessage}"`);
+                }
                 
                 // Try to set the variable for the Retell call as well
                 try {
@@ -936,6 +947,36 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
             
             // Immediately send data to trigger server when we get a day preference
             console.log('Sending scheduling preference to trigger server with all collected data');
+            
+            // ENHANCED: Ensure pain points are captured from the last user message if missing
+            if (!discoveryData['question_5'] && !discoveryData['Pain points']) {
+              console.log('🔧 MISSING PAIN POINTS - Attempting fallback capture');
+              // Look at the last few user messages for pain points
+              const recentMessages = conversationHistory.slice(-8); // Last 8 messages
+              for (let i = recentMessages.length - 1; i >= 0; i--) {
+                const msg = recentMessages[i];
+                if (msg.role === 'user' && msg.content && msg.content.length > 10) {
+                  // Check if previous bot message mentioned pain points
+                  const prevBotMsg = recentMessages[i - 1];
+                  if (prevBotMsg && prevBotMsg.role === 'assistant' && 
+                      (prevBotMsg.content.toLowerCase().includes('pain') || 
+                       prevBotMsg.content.toLowerCase().includes('problems') ||
+                       prevBotMsg.content.toLowerCase().includes('challenges'))) {
+                    discoveryData['question_5'] = msg.content;
+                    console.log(`🔧 FALLBACK: Captured pain points from recent message: "${msg.content}"`);
+                    break;
+                  }
+                }
+              }
+            }
+            
+            // Log final discovery data before sending
+            console.log('=== FINAL DISCOVERY DATA DEBUG ===');
+            console.log('Raw discoveryData object:', JSON.stringify(discoveryData, null, 2));
+            console.log('question_5 value:', discoveryData['question_5']);
+            console.log('All question keys:', Object.keys(discoveryData));
+            console.log('=== END DEBUG ===');
+            
             const result = await sendSchedulingPreference(
               bookingInfo.name,
               bookingInfo.email,
