@@ -555,12 +555,18 @@ wss.on('connection', async (ws, req) => {
           if (response.ok) {
             const callData = await response.json();
             console.log('📋 Retrieved call metadata:', callData);
-            connectionData.metadata = callData;
             
-            // Extract data from metadata
-            connectionData.customerEmail = callData.email || callData.customer_email || callData.user_email;
-            connectionData.customerName = callData.name || callData.customer_name || callData.user_name;
-            connectionData.customerPhone = callData.phone || callData.customer_phone || callData.to_number;
+            // Handle nested response structure
+            const actualData = callData.data || callData;
+            connectionData.metadata = actualData;
+            
+            // Extract data from metadata - handle both direct and nested structure
+            connectionData.customerEmail = actualData.email || actualData.customer_email || actualData.user_email || 
+                                         (actualData.metadata && actualData.metadata.customer_email);
+            connectionData.customerName = actualData.name || actualData.customer_name || actualData.user_name ||
+                                        (actualData.metadata && actualData.metadata.customer_name);
+            connectionData.customerPhone = actualData.phone || actualData.customer_phone || actualData.to_number ||
+                                         (actualData.metadata && actualData.metadata.customer_phone);
             
             console.log('📧 Extracted from metadata:', {
               email: connectionData.customerEmail,
