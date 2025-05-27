@@ -890,21 +890,22 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
             for (let i = 0; i < discoveryQuestions.length; i++) {
               const question = discoveryQuestions[i];
               
-              // More flexible question matching
-              const questionKeywords = [
-                ['hear about', 'find us', 'found us'], // Question 0
-                ['industry', 'business', 'company', 'line of work'], // Question 1
-                ['product', 'service', 'sell', 'offer'], // Question 2
-                ['ads', 'advertising', 'marketing', 'running ads'], // Question 3
-                ['crm', 'system', 'management', 'software'], // Question 4
-                ['pain', 'problems', 'challenges', 'issues', 'difficulties', 'struggling'] // Question 5
-              ];
+              // More specific question matching to avoid confusion
+const questionKeywords = [
+  ['hear about us', 'find us', 'found us', 'how did you hear'], // Question 0 - More specific
+  ['industry', 'business are you in', 'line of business', 'what business'], // Question 1
+  ['main product', 'your product', 'what do you sell', 'product do you'], // Question 2 - More specific  
+  ['running ads', 'ads right now', 'advertising', 'any ads'], // Question 3
+  ['using a crm', 'crm system', 'any crm', 'management system'], // Question 4
+  ['pain points', 'problems', 'challenges', 'struggling with', 'difficulties'] // Question 5
+];
               
               console.log(`🔍 Checking question ${i}: "${question}"`);
               
               // Check if bot message contains keywords for this question
-              const botMessageLower = lastBotMessage.content.toLowerCase();
-              if (questionKeywords[i] && questionKeywords[i].some(keyword => botMessageLower.includes(keyword))) {
+const botMessageLower = lastBotMessage.content.toLowerCase();
+console.log(`🔍 Bot message lower: "${botMessageLower}"`); // Add this line
+if (questionKeywords[i] && questionKeywords[i].some(keyword => botMessageLower.includes(keyword))) {
                 // Store the answer with question index
                 discoveryData[`question_${i}`] = userMessage.trim();
                 console.log(`✅ STORED answer to question ${i}: ${question} = "${userMessage}"`);
