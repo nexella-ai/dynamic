@@ -154,6 +154,9 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     // Format discovery data to exactly match Airtable field names
     const formattedDiscoveryData = {};
     
+    console.log('🔧 PROCESSING DISCOVERY DATA:');
+    console.log('Raw discoveryData input:', JSON.stringify(discoveryData, null, 2));
+    
     // Map the discovery questions to the EXACT Airtable field names
     const fieldMappings = {
       'question_0': 'How did you hear about us',
@@ -166,10 +169,13 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     
     // Process all discovery data with exact field names
     Object.entries(discoveryData).forEach(([key, value]) => {
-      if (key.startsWith('question_')) {
+      console.log(`🔧 Processing key: "${key}" with value: "${value}"`);
+      
+      if (key.startsWith('question_') && value && value.trim() !== '') {
         // Map question_X to the exact Airtable field name
         if (fieldMappings[key]) {
-          formattedDiscoveryData[fieldMappings[key]] = value;
+          formattedDiscoveryData[fieldMappings[key]] = value.trim();
+          console.log(`✅ Mapped ${key} -> "${fieldMappings[key]}" = "${value.trim()}"`);
         } else {
           // Fallback if question key not found
           formattedDiscoveryData[key] = value;
@@ -199,10 +205,23 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       console.log('Added pain points from question_5:', discoveryData['question_5']);
     }
     
+    console.log('🔧 FINAL FORMATTED DISCOVERY DATA:', JSON.stringify(formattedDiscoveryData, null, 2));
+    
     // Ensure phone number is formatted properly with leading +
     if (finalPhone && !finalPhone.startsWith('+')) {
       finalPhone = '+1' + finalPhone.replace(/[^0-9]/g, '');
     }
+    
+    // Enhanced webhook data logging
+    console.log('📤 Webhook Data Structure:');
+    console.log('- Name:', finalName);
+    console.log('- Email:', finalEmail);
+    console.log('- Phone:', finalPhone);
+    console.log('- Call ID:', callId);
+    console.log('- Preferred Day:', preferredDay);
+    console.log('- Discovery Data Object:', JSON.stringify(formattedDiscoveryData, null, 2));
+    console.log('- Discovery Data Keys:', Object.keys(formattedDiscoveryData));
+    console.log('- Non-empty Discovery Fields:', Object.entries(formattedDiscoveryData).filter(([k,v]) => v && v.trim() !== ''));
     
     // Make the webhook data with GUARANTEED email
     const webhookData = {
@@ -212,8 +231,11 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       preferredDay: preferredDay || '',
       call_id: callId || '',
       schedulingComplete: true,
-      discovery_data: formattedDiscoveryData
+      discovery_data: formattedDiscoveryData,
+      formatted_discovery: formattedDiscoveryData // Send both for compatibility
     };
+    
+    console.log('📤 COMPLETE WEBHOOK PAYLOAD:', JSON.stringify(webhookData, null, 2));
     
     // Log the data we're about to send
     console.log('✅ Sending scheduling preference to trigger server:', JSON.stringify(webhookData, null, 2));
@@ -643,6 +665,8 @@ PERSONALITY & TONE:
 - Use contractions and everyday language that sounds natural
 - Only use exclamation points when truly appropriate
 - Maintain a calm, professional demeanor at all times
+- Only go up in pitch or tone when you ask a question
+- Responses should always be an even consistent tone and pitch except when asking a question
 
 KEY REMINDERS:
 - We already have the customer's name and email from their form submission
@@ -865,14 +889,24 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
             // Check which discovery question was asked
             for (let i = 0; i < discoveryQuestions.length; i++) {
               const question = discoveryQuestions[i];
-              const shortQuestionStart = question.toLowerCase().substring(0, 15);
               
-              console.log(`🔍 Checking question ${i}: "${question}" (looking for: "${shortQuestionStart}")`);
+              // More flexible question matching
+              const questionKeywords = [
+                ['hear about', 'find us', 'found us'], // Question 0
+                ['industry', 'business', 'company', 'line of work'], // Question 1
+                ['product', 'service', 'sell', 'offer'], // Question 2
+                ['ads', 'advertising', 'marketing', 'running ads'], // Question 3
+                ['crm', 'system', 'management', 'software'], // Question 4
+                ['pain', 'problems', 'challenges', 'issues', 'difficulties', 'struggling'] // Question 5
+              ];
               
-              // Check if bot message contains this question
-              if (lastBotMessage.content.toLowerCase().includes(shortQuestionStart)) {
+              console.log(`🔍 Checking question ${i}: "${question}"`);
+              
+              // Check if bot message contains keywords for this question
+              const botMessageLower = lastBotMessage.content.toLowerCase();
+              if (questionKeywords[i] && questionKeywords[i].some(keyword => botMessageLower.includes(keyword))) {
                 // Store the answer with question index
-                discoveryData[`question_${i}`] = userMessage;
+                discoveryData[`question_${i}`] = userMessage.trim();
                 console.log(`✅ STORED answer to question ${i}: ${question} = "${userMessage}"`);
                 
                 // SPECIAL CASE: Always log question 5 (pain points)
@@ -908,6 +942,11 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
                 break;
               }
             }
+            
+            // Log current discovery data state after each capture
+            console.log(`📊 Current discovery data:`, JSON.stringify(discoveryData, null, 2));
+            console.log(`📊 Discovery data keys:`, Object.keys(discoveryData));
+            console.log(`📊 Total answers captured:`, Object.keys(discoveryData).length);
             
             // ADDITIONAL: Check for pain points with broader criteria
             const botMessageLower = lastBotMessage.content.toLowerCase();
@@ -1126,6 +1165,35 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
   ws.on('close', async () => {
     console.log('Connection closed.');
     clearTimeout(autoGreetingTimer); // Clear the timer when connection closes
+    
+    // Enhanced discovery data capture on close
+    console.log('=== CONNECTION CLOSE DISCOVERY RECAP ===');
+    console.log('Final discoveryData object:', JSON.stringify(discoveryData, null, 2));
+    console.log('Total discovery answers captured:', Object.keys(discoveryData).length);
+    
+    // Try to capture any missing pain points from conversation history
+    if (!discoveryData['question_5'] || discoveryData['question_5'].trim() === '') {
+      console.log('🔧 Attempting to capture missing pain points from conversation history');
+      
+      // Look through recent conversation for pain points
+      const recentMessages = conversationHistory.slice(-12); // Last 12 messages
+      for (let i = 0; i < recentMessages.length - 1; i++) {
+        const botMsg = recentMessages[i];
+        const userMsg = recentMessages[i + 1];
+        
+        if (botMsg.role === 'assistant' && userMsg.role === 'user') {
+          const botContent = botMsg.content.toLowerCase();
+          if ((botContent.includes('pain') || botContent.includes('problem') || 
+               botContent.includes('challenge') || botContent.includes('difficult')) &&
+              userMsg.content && userMsg.content.trim().length > 5) {
+            
+            discoveryData['question_5'] = userMsg.content.trim();
+            console.log(`🔧 CAPTURED pain points from conversation: "${userMsg.content.trim()}"`);
+            break;
+          }
+        }
+      }
+    }
     
     // Log final extracted data
     console.log('📊 FINAL EXTRACTED DATA:', {
