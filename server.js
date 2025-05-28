@@ -10,6 +10,14 @@ const wss = new WebSocketServer({ server });
 
 app.use(express.json());
 
+// Ensure we have the required environment variables
+if (!process.env.TRIGGER_SERVER_URL) {
+  process.env.TRIGGER_SERVER_URL = 'https://trigger-server-qt7u.onrender.com';
+}
+if (!process.env.N8N_WEBHOOK_URL) {
+  process.env.N8N_WEBHOOK_URL = 'https://n8n-clp2.onrender.com/webhook/retell-scheduling';
+}
+
 // Store the latest Typeform submission for reference
 global.lastTypeformSubmission = null;
 
@@ -87,8 +95,10 @@ async function updateConversationState(callId, discoveryComplete, preferredDay) 
 // ENHANCED: Send scheduling data with proper email handling - MULTIPLE SOURCES
 async function sendSchedulingPreference(name, email, phone, preferredDay, callId, discoveryData = {}) {
   try {
-    console.log('=== WEBHOOK SENDING DEBUG ===');
+    console.log('=== ENHANCED WEBHOOK SENDING DEBUG ===');
     console.log('Input parameters:', { name, email, phone, preferredDay, callId });
+    console.log('Raw discovery data input:', JSON.stringify(discoveryData, null, 2));
+    console.log('Discovery data keys:', Object.keys(discoveryData));
     console.log('Global Typeform submission:', global.lastTypeformSubmission);
     
     // ENHANCED: Try multiple methods to get email
@@ -114,35 +124,29 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       }
     }
     
-    // Enhanced name retrieval
+    // Enhanced name and phone retrieval
     if (!finalName || finalName.trim() === '') {
       if (global.lastTypeformSubmission && global.lastTypeformSubmission.name) {
         finalName = global.lastTypeformSubmission.name;
-        console.log(`Using name from global Typeform: ${finalName}`);
       } else if (callId && activeCallsMetadata.has(callId)) {
         const callMetadata = activeCallsMetadata.get(callId);
         if (callMetadata && callMetadata.customer_name) {
           finalName = callMetadata.customer_name;
-          console.log(`Using name from call metadata: ${finalName}`);
         }
       }
     }
     
-    // Enhanced phone retrieval
     if (!finalPhone || finalPhone.trim() === '') {
       if (global.lastTypeformSubmission && global.lastTypeformSubmission.phone) {
         finalPhone = global.lastTypeformSubmission.phone;
-        console.log(`Using phone from global Typeform: ${finalPhone}`);
       } else if (callId && activeCallsMetadata.has(callId)) {
         const callMetadata = activeCallsMetadata.get(callId);
         if (callMetadata && (callMetadata.phone || callMetadata.to_number)) {
           finalPhone = callMetadata.phone || callMetadata.to_number;
-          console.log(`Using phone from call metadata: ${finalPhone}`);
         }
       }
     }
     
-    // Log what we're going to use
     console.log(`Final contact info - Email: "${finalEmail}", Name: "${finalName}", Phone: "${finalPhone}"`);
     
     // CRITICAL: Don't proceed if we still don't have an email
@@ -151,79 +155,69 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       return { success: false, error: 'No email address available' };
     }
     
-    // Format discovery data to exactly match Airtable field names
-    const formattedDiscoveryData = {};
-    
+    // ENHANCED: Process discovery data with better field mapping
     console.log('🔧 PROCESSING DISCOVERY DATA:');
     console.log('Raw discoveryData input:', JSON.stringify(discoveryData, null, 2));
     
-    // Map the discovery questions to the EXACT Airtable field names
+    // Initialize formatted discovery data
+    const formattedDiscoveryData = {};
+    
+    // Define field mappings from question keys to Airtable field names
     const fieldMappings = {
       'question_0': 'How did you hear about us',
-      'question_1': 'Business/Industry',
+      'question_1': 'Business/Industry', 
       'question_2': 'Main product',
       'question_3': 'Running ads',
       'question_4': 'Using CRM',
       'question_5': 'Pain points'
     };
     
-    // Process all discovery data with exact field names
+    // Process all discovery data
     Object.entries(discoveryData).forEach(([key, value]) => {
       console.log(`🔧 Processing key: "${key}" with value: "${value}"`);
       
-      if (key.startsWith('question_') && value && value.trim() !== '') {
-        // Map question_X to the exact Airtable field name
-        if (fieldMappings[key]) {
-          formattedDiscoveryData[fieldMappings[key]] = value.trim();
-          console.log(`✅ Mapped ${key} -> "${fieldMappings[key]}" = "${value.trim()}"`);
+      if (value && typeof value === 'string' && value.trim() !== '') {
+        const trimmedValue = value.trim();
+        
+        if (key.startsWith('question_') && fieldMappings[key]) {
+          // Map question_X to the exact Airtable field name
+          formattedDiscoveryData[fieldMappings[key]] = trimmedValue;
+          console.log(`✅ Mapped ${key} -> "${fieldMappings[key]}" = "${trimmedValue}"`);
+        } else if (key === 'How did you hear about us' || key.includes('hear about')) {
+          formattedDiscoveryData['How did you hear about us'] = trimmedValue;
+          console.log(`✅ Direct mapping: How did you hear about us = "${trimmedValue}"`);
+        } else if (key === 'Business/Industry' || key.includes('business') || key.includes('industry')) {
+          formattedDiscoveryData['Business/Industry'] = trimmedValue;
+          console.log(`✅ Direct mapping: Business/Industry = "${trimmedValue}"`);
+        } else if (key === 'Main product' || key.includes('product')) {
+          formattedDiscoveryData['Main product'] = trimmedValue;
+          console.log(`✅ Direct mapping: Main product = "${trimmedValue}"`);
+        } else if (key === 'Running ads' || key.includes('ads') || key.includes('advertising')) {
+          formattedDiscoveryData['Running ads'] = trimmedValue;
+          console.log(`✅ Direct mapping: Running ads = "${trimmedValue}"`);
+        } else if (key === 'Using CRM' || key.includes('crm')) {
+          formattedDiscoveryData['Using CRM'] = trimmedValue;
+          console.log(`✅ Direct mapping: Using CRM = "${trimmedValue}"`);
+        } else if (key === 'Pain points' || key.includes('pain') || key.includes('problem') || key.includes('challenge')) {
+          formattedDiscoveryData['Pain points'] = trimmedValue;
+          console.log(`✅ Direct mapping: Pain points = "${trimmedValue}"`);
         } else {
-          // Fallback if question key not found
-          formattedDiscoveryData[key] = value;
+          // Keep original key if it doesn't match any pattern
+          formattedDiscoveryData[key] = trimmedValue;
+          console.log(`📝 Keeping original key: ${key} = "${trimmedValue}"`);
         }
-      } else if (key.includes('hear about us')) {
-        formattedDiscoveryData['How did you hear about us'] = value;
-      } else if (key.includes('business') || key.includes('industry')) {
-        formattedDiscoveryData['Business/Industry'] = value;
-      } else if (key.includes('product')) {
-        formattedDiscoveryData['Main product'] = value;
-      } else if (key.includes('ads') || key.includes('advertising')) {
-        formattedDiscoveryData['Running ads'] = value;
-      } else if (key.includes('crm')) {
-        formattedDiscoveryData['Using CRM'] = value;
-      } else if (key.includes('pain') || key.includes('problem') || key.includes('points')) {
-        formattedDiscoveryData['Pain points'] = value;
-      } else {
-        // Keep original keys for anything not matched
-        formattedDiscoveryData[key] = value;
       }
     });
     
-    // Add pain point from the last question if it's available but not yet mapped
-    // This ensures we always capture the pain points question answer
-    if (discoveryData['question_5'] && !formattedDiscoveryData['Pain points']) {
-      formattedDiscoveryData['Pain points'] = discoveryData['question_5'];
-      console.log('Added pain points from question_5:', discoveryData['question_5']);
-    }
-    
     console.log('🔧 FINAL FORMATTED DISCOVERY DATA:', JSON.stringify(formattedDiscoveryData, null, 2));
+    console.log('📊 Total discovery fields captured:', Object.keys(formattedDiscoveryData).length);
     
-    // Ensure phone number is formatted properly with leading +
+    // Ensure phone number is formatted properly
     if (finalPhone && !finalPhone.startsWith('+')) {
       finalPhone = '+1' + finalPhone.replace(/[^0-9]/g, '');
     }
     
-    // Enhanced webhook data logging
-    console.log('📤 Webhook Data Structure:');
-    console.log('- Name:', finalName);
-    console.log('- Email:', finalEmail);
-    console.log('- Phone:', finalPhone);
-    console.log('- Call ID:', callId);
-    console.log('- Preferred Day:', preferredDay);
-    console.log('- Discovery Data Object:', JSON.stringify(formattedDiscoveryData, null, 2));
-    console.log('- Discovery Data Keys:', Object.keys(formattedDiscoveryData));
-    console.log('- Non-empty Discovery Fields:', Object.entries(formattedDiscoveryData).filter(([k,v]) => v && v.trim() !== ''));
-    
-    // Make the webhook data with GUARANTEED email
+    // Create the webhook payload
     const webhookData = {
       name: finalName || '',
       email: finalEmail, // This is now guaranteed to have a value
@@ -232,13 +226,18 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       call_id: callId || '',
       schedulingComplete: true,
       discovery_data: formattedDiscoveryData,
-      formatted_discovery: formattedDiscoveryData // Send both for compatibility
+      formatted_discovery: formattedDiscoveryData, // Send both for compatibility
+      // Also include individual fields for direct access
+      "How did you hear about us": formattedDiscoveryData["How did you hear about us"] || '',
+      "Business/Industry": formattedDiscoveryData["Business/Industry"] || '',
+      "Main product": formattedDiscoveryData["Main product"] || '',
+      "Running ads": formattedDiscoveryData["Running ads"] || '',
+      "Using CRM": formattedDiscoveryData["Using CRM"] || '',
+      "Pain points": formattedDiscoveryData["Pain points"] || ''
     };
     
     console.log('📤 COMPLETE WEBHOOK PAYLOAD:', JSON.stringify(webhookData, null, 2));
-    
-    // Log the data we're about to send
-    console.log('✅ Sending scheduling preference to trigger server:', JSON.stringify(webhookData, null, 2));
+    console.log('✅ Sending scheduling preference to trigger server');
     
     const response = await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, webhookData, {
       headers: { 'Content-Type': 'application/json' },
@@ -247,36 +246,29 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     
     console.log('✅ Scheduling preference sent successfully:', response.data);
     return { success: true, data: response.data };
+    
   } catch (error) {
     console.error('❌ Error sending scheduling preference:', error);
     
-    // Enhanced fallback to n8n
+    // Enhanced fallback to n8n with same data processing
     try {
       console.log('🔄 Attempting to send directly to n8n webhook as fallback');
       const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL || 'https://n8n-clp2.onrender.com/webhook/retell-scheduling';
-      console.log(`Using n8n webhook URL: ${n8nWebhookUrl}`);
       
-      // Use the same enhanced email logic for fallback
-      let fallbackEmail = email;
-      let fallbackName = name;
-      let fallbackPhone = phone;
+      // Use the same processing logic for fallback
+      let fallbackEmail = email || (global.lastTypeformSubmission && global.lastTypeformSubmission.email) || '';
+      let fallbackName = name || (global.lastTypeformSubmission && global.lastTypeformSubmission.name) || '';
+      let fallbackPhone = phone || (global.lastTypeformSubmission && global.lastTypeformSubmission.phone) || '';
       
-      if (!fallbackEmail && global.lastTypeformSubmission) {
-        fallbackEmail = global.lastTypeformSubmission.email;
-        fallbackName = fallbackName || global.lastTypeformSubmission.name;
-        fallbackPhone = fallbackPhone || global.lastTypeformSubmission.phone;
-      }
-      
-      if (!fallbackEmail && callId && activeCallsMetadata.has(callId)) {
+      if (callId && activeCallsMetadata.has(callId)) {
         const callMetadata = activeCallsMetadata.get(callId);
-        fallbackEmail = fallbackEmail || callMetadata?.customer_email;
-        fallbackName = fallbackName || callMetadata?.customer_name;
-        fallbackPhone = fallbackPhone || callMetadata?.phone || callMetadata?.to_number;
+        fallbackEmail = fallbackEmail || callMetadata?.customer_email || '';
+        fallbackName = fallbackName || callMetadata?.customer_name || '';
+        fallbackPhone = fallbackPhone || callMetadata?.phone || callMetadata?.to_number || '';
       }
       
-      // Format discovery data again for n8n
+      // Process discovery data for fallback (same logic)
       const formattedDiscoveryData = {};
-      
       const fieldMappings = {
         'question_0': 'How did you hear about us',
         'question_1': 'Business/Industry',
@@ -287,41 +279,43 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       };
       
       Object.entries(discoveryData).forEach(([key, value]) => {
-        if (key.startsWith('question_')) {
-          if (fieldMappings[key]) {
-            formattedDiscoveryData[fieldMappings[key]] = value;
+        if (value && typeof value === 'string' && value.trim() !== '') {
+          const trimmedValue = value.trim();
+          if (key.startsWith('question_') && fieldMappings[key]) {
+            formattedDiscoveryData[fieldMappings[key]] = trimmedValue;
+          } else if (key === 'How did you hear about us' || key.includes('hear about')) {
+            formattedDiscoveryData['How did you hear about us'] = trimmedValue;
+          } else if (key === 'Business/Industry' || key.includes('business') || key.includes('industry')) {
+            formattedDiscoveryData['Business/Industry'] = trimmedValue;
+          } else if (key === 'Main product' || key.includes('product')) {
+            formattedDiscoveryData['Main product'] = trimmedValue;
+          } else if (key === 'Running ads' || key.includes('ads')) {
+            formattedDiscoveryData['Running ads'] = trimmedValue;
+          } else if (key === 'Using CRM' || key.includes('crm')) {
+            formattedDiscoveryData['Using CRM'] = trimmedValue;
+          } else if (key === 'Pain points' || key.includes('pain') || key.includes('problem')) {
+            formattedDiscoveryData['Pain points'] = trimmedValue;
           } else {
-            formattedDiscoveryData[key] = value;
+            formattedDiscoveryData[key] = trimmedValue;
           }
-        } else if (key.includes('hear about us')) {
-          formattedDiscoveryData['How did you hear about us'] = value;
-        } else if (key.includes('business') || key.includes('industry')) {
-          formattedDiscoveryData['Business/Industry'] = value;
-        } else if (key.includes('product')) {
-          formattedDiscoveryData['Main product'] = value;
-        } else if (key.includes('ads') || key.includes('advertising')) {
-          formattedDiscoveryData['Running ads'] = value;
-        } else if (key.includes('crm')) {
-          formattedDiscoveryData['Using CRM'] = value;
-        } else if (key.includes('pain') || key.includes('problem') || key.includes('points')) {
-          formattedDiscoveryData['Pain points'] = value;
-        } else {
-          formattedDiscoveryData[key] = value;
         }
       });
       
-      if (discoveryData['question_5'] && !formattedDiscoveryData['Pain points']) {
-        formattedDiscoveryData['Pain points'] = discoveryData['question_5'];
-      }
-      
       const fallbackWebhookData = {
-        name: fallbackName || '',
-        email: fallbackEmail || '', // Send whatever we found
-        phone: fallbackPhone || '',
+        name: fallbackName,
+        email: fallbackEmail,
+        phone: fallbackPhone,
         preferredDay: preferredDay || '',
         call_id: callId || '',
         schedulingComplete: true,
-        discovery_data: formattedDiscoveryData
+        discovery_data: formattedDiscoveryData,
+        formatted_discovery: formattedDiscoveryData,
+        "How did you hear about us": formattedDiscoveryData["How did you hear about us"] || '',
+        "Business/Industry": formattedDiscoveryData["Business/Industry"] || '',
+        "Main product": formattedDiscoveryData["Main product"] || '',
+        "Running ads": formattedDiscoveryData["Running ads"] || '',
+        "Using CRM": formattedDiscoveryData["Using CRM"] || '',
+        "Pain points": formattedDiscoveryData["Pain points"] || ''
       };
       
       console.log('🔄 Fallback webhook data:', JSON.stringify(fallbackWebhookData, null, 2));
@@ -333,6 +327,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       
       console.log('✅ Successfully sent directly to n8n:', n8nResponse.data);
       return { success: true, fallback: true };
+      
     } catch (n8nError) {
       console.error('❌ Error sending directly to n8n:', n8nError);
       return { success: false, error: error.message };
@@ -340,53 +335,45 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
   }
 }
 
-// IMPROVED: Better detection of discovery questions being asked and answered
+// ENHANCED: Better detection of discovery questions being asked
 function trackDiscoveryQuestions(botMessage, discoveryProgress, discoveryQuestions) {
   if (!botMessage) return false;
   
   const botMessageLower = botMessage.toLowerCase();
   
-  // Key phrases to detect in the bot's message that indicate specific discovery questions
+  // Enhanced key phrases with more specific detection
   const keyPhrases = [
-    ["hear about us", "find us", "discover us", "found us", "discovered nexella"], // How did you hear about us
-    ["business", "company", "industry", "what do you do", "line of business", "business model"], // What line of business are you in
-    ["product", "service", "offer", "price point", "main product", "typical price"], // What's your main product
-    ["ads", "advertising", "marketing", "meta", "google", "tiktok", "running ads"], // Are you running ads
-    ["crm", "gohighlevel", "management system", "customer relationship", "using any crm"], // Are you using a CRM
-    ["problems", "challenges", "issues", "pain points", "difficulties", "running into", "what problems", "struggling with", "biggest challenge"] // What problems are you facing - ENHANCED
+    ["hear about us", "find us", "discover us", "found us", "how did you hear"], // How did you hear about us
+    ["business", "company", "industry", "what do you do", "line of business"], // What line of business are you in
+    ["product", "service", "offer", "main product", "what's your main"], // What's your main product
+    ["ads", "advertising", "marketing", "running ads", "ad campaigns"], // Are you running ads
+    ["crm", "gohighlevel", "management system", "customer relationship"], // Are you using a CRM
+    ["problems", "challenges", "issues", "pain points", "difficulties", "struggling with"] // What problems are you facing
   ];
   
   // Check each question's key phrases
   keyPhrases.forEach((phrases, index) => {
     if (phrases.some(phrase => botMessageLower.includes(phrase))) {
       discoveryProgress.questionsAsked.add(index);
-      console.log(`Detected question ${index} was asked: ${discoveryQuestions[index]}`);
-      
-      // Special logging for pain points question
-      if (index === 5) {
-        console.log(`🎯 PAIN POINTS QUESTION DETECTED in bot message: "${botMessage}"`);
-      }
+      console.log(`✅ Detected question ${index} was asked: ${discoveryQuestions[index]}`);
     }
   });
   
-  // Only consider discovery complete if we have asked at least 5 questions AND 
-  // there's a scheduling-related phrase OR all 6 questions have been asked
-  const minimumQuestionsAsked = 5;
-  const schedulingPhrases = ["schedule", "book a call", "day of the week", "what day works", "good time", "availability"];
-  
+  // Check for scheduling phrases
+  const schedulingPhrases = ["schedule", "book a call", "day of the week", "what day works", "good time", "availability", "when would", "time work"];
   const hasSchedulingPhrase = schedulingPhrases.some(phrase => botMessageLower.includes(phrase));
+  
+  // Log the progress
+  console.log(`📊 Question progress: ${discoveryProgress.questionsAsked.size}/${discoveryQuestions.length}, Scheduling phrase: ${hasSchedulingPhrase}`);
+  console.log(`📋 Questions asked so far: [${Array.from(discoveryProgress.questionsAsked).join(', ')}]`);
+  
+  // Discovery is complete when we have at least 4 questions OR scheduling is mentioned
+  const minimumQuestionsAsked = 4;
   const hasEnoughQuestions = discoveryProgress.questionsAsked.size >= minimumQuestionsAsked;
-  const hasAllQuestions = discoveryProgress.questionsAsked.size >= discoveryQuestions.length;
-  
-  // Log the progress for debugging
-  console.log(`Question progress: ${discoveryProgress.questionsAsked.size}/${discoveryQuestions.length}, Scheduling phrase: ${hasSchedulingPhrase}`);
-  console.log(`Questions asked so far: [${Array.from(discoveryProgress.questionsAsked).join(', ')}]`);
-  
-  // Consider discovery complete when we have enough questions OR all questions
-  const discoveryComplete = (hasEnoughQuestions && hasSchedulingPhrase) || hasAllQuestions;
+  const discoveryComplete = hasEnoughQuestions || hasSchedulingPhrase;
   
   if (discoveryComplete) {
-    console.log('Discovery process considered complete!');
+    console.log('🎉 Discovery process considered complete!');
   }
   
   discoveryProgress.allQuestionsAsked = discoveryComplete;
@@ -665,6 +652,8 @@ PERSONALITY & TONE:
 - Use contractions and everyday language that sounds natural
 - Only use exclamation points when truly appropriate
 - Maintain a calm, professional demeanor at all times
+- Never go up in tone or pitch at the end of sentences unless it is a question.
+- Always keep and even consistent tonality unless it is a question.
 
 KEY REMINDERS:
 - We already have the customer's name and email from their form submission
@@ -770,9 +759,8 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
         console.log('Call data structure:', JSON.stringify(parsed.call, null, 2));
       }
       
-      // ENHANCED: Extract call info from WebSocket messages
+      // Extract call info from WebSocket messages first
       if (parsed.call && parsed.call.call_id) {
-        // Update call ID if we didn't have it
         if (!connectionData.callId) {
           connectionData.callId = parsed.call.call_id;
           console.log(`🔗 Got call ID from WebSocket: ${connectionData.callId}`);
@@ -782,7 +770,6 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
         if (parsed.call.metadata) {
           console.log('📞 Call metadata from WebSocket:', JSON.stringify(parsed.call.metadata, null, 2));
           
-          // Extract customer info from metadata
           if (!connectionData.customerEmail && parsed.call.metadata.customer_email) {
             connectionData.customerEmail = parsed.call.metadata.customer_email;
             bookingInfo.email = connectionData.customerEmail;
@@ -793,10 +780,6 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
             connectionData.customerName = parsed.call.metadata.customer_name;
             bookingInfo.name = connectionData.customerName;
             console.log(`✅ Got name from WebSocket metadata: ${connectionData.customerName}`);
-            
-            // Update system prompt with customer name
-            conversationHistory[0].content = conversationHistory[0].content
-              .replace(/Monica/g, connectionData.customerName);
           }
           
           if (!connectionData.customerPhone && (parsed.call.metadata.customer_phone || parsed.call.to_number)) {
@@ -819,14 +802,6 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
           customer_name: connectionData.customerName,
           phone: connectionData.customerPhone,
           to_number: connectionData.customerPhone
-        });
-        
-        // Log all extracted info
-        console.log(`✅ EXTRACTED CUSTOMER DATA:`, {
-          callId: connectionData.callId,
-          email: connectionData.customerEmail,
-          name: connectionData.customerName,
-          phone: connectionData.customerPhone
         });
         
         collectedContactInfo = !!connectionData.customerEmail;
@@ -872,191 +847,142 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
         const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
         const userMessage = latestUserUtterance?.content || "";
 
-        console.log('User said:', userMessage);
-        console.log('Current conversation state:', conversationState);
+        console.log('🗣️ User said:', userMessage);
+        console.log('🔄 Current conversation state:', conversationState);
+        console.log('📊 Current discovery data before processing:', JSON.stringify(discoveryData, null, 2));
 
-        // IMPROVED: Better discovery answer tracking with comprehensive debugging
-        if (conversationState === 'discovery') {
-          // Match user answers to questions
+        // ENHANCED: Capture discovery answers IMMEDIATELY when user responds
+        if (conversationHistory.length >= 2) {
           const lastBotMessage = conversationHistory[conversationHistory.length - 1];
+          const secondLastMessage = conversationHistory[conversationHistory.length - 2];
+          
+          // Check the most recent bot message for discovery questions
+          let questionDetected = false;
+          let questionIndex = -1;
+          
           if (lastBotMessage && lastBotMessage.role === 'assistant') {
+            const botContent = lastBotMessage.content.toLowerCase();
+            console.log(`🔍 Analyzing bot message: "${lastBotMessage.content}"`);
             
-            console.log(`🔍 DISCOVERY DEBUG - Bot just said: "${lastBotMessage.content}"`);
-            console.log(`🔍 DISCOVERY DEBUG - User responded: "${userMessage}"`);
-            
-            // Check which discovery question was asked
-            for (let i = 0; i < discoveryQuestions.length; i++) {
-              const question = discoveryQuestions[i];
-              
-              // More flexible question matching
-              const questionKeywords = [
-                ['hear about', 'find us', 'found us'], // Question 0
-                ['industry', 'business', 'company', 'line of work'], // Question 1
-                ['product', 'service', 'sell', 'offer'], // Question 2
-                ['ads', 'advertising', 'marketing', 'running ads'], // Question 3
-                ['crm', 'system', 'management', 'software'], // Question 4
-                ['pain', 'problems', 'challenges', 'issues', 'difficulties', 'struggling'] // Question 5
-              ];
-              
-              console.log(`🔍 Checking question ${i}: "${question}"`);
-              
-              // Check if bot message contains keywords for this question
-              const botMessageLower = lastBotMessage.content.toLowerCase();
-              if (questionKeywords[i] && questionKeywords[i].some(keyword => botMessageLower.includes(keyword))) {
-                // Store the answer with question index
-                discoveryData[`question_${i}`] = userMessage.trim();
-                console.log(`✅ STORED answer to question ${i}: ${question} = "${userMessage}"`);
-                
-                // SPECIAL CASE: Always log question 5 (pain points)
-                if (i === 5) {
-                  console.log(`🎯 PAIN POINTS CAPTURED: "${userMessage}"`);
-                }
-                
-                // Try to set the variable for the Retell call as well
-                try {
-                  if (parsed.call && parsed.call.call_id) {
-                    const variableKey = `discovery_q${i}`;
-                    const variableData = {
-                      variables: {
-                        [variableKey]: userMessage
-                      }
-                    };
-                    
-                    // Set the variable on the Retell call
-                    axios.post(`https://api.retellai.com/v1/calls/${parsed.call.call_id}/variables`, 
-                      variableData, 
-                      {
-                        headers: {
-                          'Authorization': `Bearer ${process.env.RETELL_API_KEY}`,
-                          'Content-Type': 'application/json'
-                        }
-                      }
-                    ).catch(err => console.error(`Error setting discovery variable ${variableKey}:`, err));
-                  }
-                } catch (varError) {
-                  console.error('Error setting call variable:', varError);
-                }
-                
-                break;
+            // Enhanced question detection with more specific patterns
+            const questionPatterns = [
+              // Question 0: How did you hear about us?
+              {
+                keywords: ['hear about', 'find us', 'found us', 'discover us'],
+                index: 0,
+                field: 'How did you hear about us'
+              },
+              // Question 1: What business/industry?
+              {
+                keywords: ['industry', 'business', 'line of business', 'company', 'what do you do'],
+                index: 1,
+                field: 'Business/Industry'
+              },
+              // Question 2: Main product?
+              {
+                keywords: ['main product', 'product', 'service', 'sell', 'offer', 'price point'],
+                index: 2,
+                field: 'Main product'
+              },
+              // Question 3: Running ads?
+              {
+                keywords: ['ads', 'advertising', 'marketing', 'running ads', 'meta', 'google'],
+                index: 3,
+                field: 'Running ads'
+              },
+              // Question 4: Using CRM?
+              {
+                keywords: ['crm', 'gohighlevel', 'management system', 'customer relationship'],
+                index: 4,
+                field: 'Using CRM'
+              },
+              // Question 5: Pain points?
+              {
+                keywords: ['pain points', 'problems', 'challenges', 'issues', 'difficulties', 'struggling', 'biggest challenge'],
+                index: 5,
+                field: 'Pain points'
               }
-            }
+            ];
             
-            // Log current discovery data state after each capture
-            console.log(`📊 Current discovery data:`, JSON.stringify(discoveryData, null, 2));
-            console.log(`📊 Discovery data keys:`, Object.keys(discoveryData));
-            console.log(`📊 Total answers captured:`, Object.keys(discoveryData).length);
+            // Check each pattern
+            questionPatterns.forEach(pattern => {
+              if (pattern.keywords.some(keyword => botContent.includes(keyword))) {
+                questionDetected = true;
+                questionIndex = pattern.index;
+                
+                // IMMEDIATELY store the user's response
+                discoveryData[`question_${pattern.index}`] = userMessage.trim();
+                discoveryData[pattern.field] = userMessage.trim();
+                
+                console.log(`✅ CAPTURED ANSWER TO QUESTION ${pattern.index}:`);
+                console.log(`   Question: ${discoveryQuestions[pattern.index]}`);
+                console.log(`   Answer: "${userMessage.trim()}"`);
+                console.log(`   Field: ${pattern.field}`);
+                
+                // Mark question as asked
+                discoveryProgress.questionsAsked.add(pattern.index);
+              }
+            });
+          }
+          
+          // Also check if the second-to-last message was a question (in case of rapid responses)
+          if (!questionDetected && secondLastMessage && secondLastMessage.role === 'assistant') {
+            const botContent = secondLastMessage.content.toLowerCase();
+            console.log(`🔍 Also checking previous bot message: "${secondLastMessage.content}"`);
             
-            // ADDITIONAL: Check for pain points with broader criteria
-            const botMessageLower = lastBotMessage.content.toLowerCase();
-            if ((botMessageLower.includes('pain') || 
-                 botMessageLower.includes('problem') || 
-                 botMessageLower.includes('challenge') || 
-                 botMessageLower.includes('struggle') ||
-                 botMessageLower.includes('difficult') ||
-                 botMessageLower.includes('issue')) && 
-                !discoveryData['question_5']) {
-              
-              console.log(`🎯 BROAD PAIN POINTS DETECTION - Bot message contains pain/problem keywords`);
-              console.log(`🎯 STORING as question_5: "${userMessage}"`);
-              discoveryData['question_5'] = userMessage;
-            }
+            const questionPatterns = [
+              {keywords: ['hear about', 'find us', 'found us'], index: 0, field: 'How did you hear about us'},
+              {keywords: ['industry', 'business', 'line of business'], index: 1, field: 'Business/Industry'},
+              {keywords: ['main product', 'product', 'service'], index: 2, field: 'Main product'},
+              {keywords: ['ads', 'advertising', 'marketing'], index: 3, field: 'Running ads'},
+              {keywords: ['crm', 'management system'], index: 4, field: 'Using CRM'},
+              {keywords: ['pain points', 'problems', 'challenges'], index: 5, field: 'Pain points'}
+            ];
             
-            // Log current discovery data state
-            console.log(`📊 Current discovery data:`, JSON.stringify(discoveryData, null, 2));
+            questionPatterns.forEach(pattern => {
+              if (pattern.keywords.some(keyword => botContent.includes(keyword))) {
+                discoveryData[`question_${pattern.index}`] = userMessage.trim();
+                discoveryData[pattern.field] = userMessage.trim();
+                discoveryProgress.questionsAsked.add(pattern.index);
+                console.log(`✅ CAPTURED DELAYED ANSWER TO QUESTION ${pattern.index}: "${userMessage.trim()}"`);
+              }
+            });
           }
         }
         
-        // Check if user wants to schedule
-        if (userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss)\b/)) {
-          console.log('User requested scheduling');
-          // Only move to booking if we've completed discovery
-          if (discoveryProgress.allQuestionsAsked) {
-            conversationState = 'booking';
-          }
-        }
-        
-        // IMPROVED: Better day preference detection
-        if (conversationState === 'booking' || 
-           (conversationState === 'discovery' && discoveryProgress.allQuestionsAsked)) {
+        // Log current state after capture attempt
+        console.log('📊 Discovery data after capture attempt:', JSON.stringify(discoveryData, null, 2));
+        console.log('📊 Questions asked so far:', Array.from(discoveryProgress.questionsAsked));
+        console.log('📊 Total questions captured:', Object.keys(discoveryData).length);
+
+        // Check for scheduling preference
+        if (userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today)\b/)) {
+          console.log('🗓️ User mentioned scheduling');
+          
           const dayInfo = handleSchedulingPreference(userMessage);
           
           if (dayInfo && !webhookSent) {
             bookingInfo.preferredDay = dayInfo.dayName;
+            console.log('🗓️ Detected preferred day:', bookingInfo.preferredDay);
             
-            // Alert the Retell agent through custom variables
-            try {
-              if (parsed.call && parsed.call.call_id) {
-                await axios.post(`https://api.retellai.com/v1/calls/${parsed.call.call_id}/variables`, {
-                  variables: {
-                    preferredDay: bookingInfo.preferredDay,
-                    schedulingComplete: true,
-                    // Include full discovery data
-                    discovery_data: JSON.stringify(discoveryData)
-                  }
-                }, {
-                  headers: {
-                    'Authorization': `Bearer ${process.env.RETELL_API_KEY}`,
-                    'Content-Type': 'application/json'
-                  }
-                });
-                console.log('Set Retell call variables for scheduling and discovery data');
-              }
-            } catch (variableError) {
-              console.error('Error setting Retell variables:', variableError);
-            }
-            
-            // Immediately send data to trigger server when we get a day preference
-            console.log('Sending scheduling preference to trigger server with all collected data');
-            
-            // ENHANCED: Ensure pain points are captured from the last user message if missing
-            if (!discoveryData['question_5'] && !discoveryData['Pain points']) {
-              console.log('🔧 MISSING PAIN POINTS - Attempting fallback capture');
-              // Look at the last few user messages for pain points
-              const recentMessages = conversationHistory.slice(-8); // Last 8 messages
-              for (let i = recentMessages.length - 1; i >= 0; i--) {
-                const msg = recentMessages[i];
-                if (msg.role === 'user' && msg.content && msg.content.length > 10) {
-                  // Check if previous bot message mentioned pain points
-                  const prevBotMsg = recentMessages[i - 1];
-                  if (prevBotMsg && prevBotMsg.role === 'assistant' && 
-                      (prevBotMsg.content.toLowerCase().includes('pain') || 
-                       prevBotMsg.content.toLowerCase().includes('problems') ||
-                       prevBotMsg.content.toLowerCase().includes('challenges'))) {
-                    discoveryData['question_5'] = msg.content;
-                    console.log(`🔧 FALLBACK: Captured pain points from recent message: "${msg.content}"`);
-                    break;
-                  }
-                }
-              }
-            }
-            
-            // Log final discovery data before sending
-            console.log('=== FINAL DISCOVERY DATA DEBUG ===');
-            console.log('Raw discoveryData object:', JSON.stringify(discoveryData, null, 2));
-            console.log('question_5 value:', discoveryData['question_5']);
-            console.log('All question keys:', Object.keys(discoveryData));
-            console.log('=== END DEBUG ===');
+            // IMMEDIATE webhook send when scheduling detected
+            console.log('🚀 IMMEDIATE WEBHOOK SEND - Scheduling detected');
+            console.log('📋 Final discovery data being sent:', JSON.stringify(discoveryData, null, 2));
             
             const result = await sendSchedulingPreference(
-              bookingInfo.name,
-              bookingInfo.email,
-              bookingInfo.phone,
+              bookingInfo.name || connectionData.customerName || '',
+              bookingInfo.email || connectionData.customerEmail || '',
+              bookingInfo.phone || connectionData.customerPhone || '',
               bookingInfo.preferredDay,
               connectionData.callId,
               discoveryData
             );
             
-            // Mark as sent and continue conversation naturally
-            bookingInfo.schedulingLinkSent = true;
-            conversationState = 'completed';
-            webhookSent = true;
-            
-            // Update conversation state in trigger server
-            if (connectionData.callId) {
-              await updateConversationState(connectionData.callId, true, bookingInfo.preferredDay);
+            if (result.success) {
+              webhookSent = true;
+              conversationState = 'completed';
+              console.log('✅ Webhook sent successfully on scheduling detection');
             }
-            
-            console.log('Data sent to n8n and conversation marked as completed');
           }
         }
 
@@ -1069,39 +995,31 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
           {
             model: 'gpt-4o',
             messages: conversationHistory,
-            temperature: 0.7 // Increased for more natural responses
+            temperature: 0.7
           },
           {
             headers: {
               Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
               'Content-Type': 'application/json'
             },
-            timeout: 8000 // Increased timeout for more reliable responses
+            timeout: 8000
           }
         );
 
-        const botReply = openaiResponse.data.choices[0].message.content || "Haha, could you tell me a bit more about that?";
+        const botReply = openaiResponse.data.choices[0].message.content || "Could you tell me a bit more about that?";
 
         // Add bot reply to conversation history
         conversationHistory.push({ role: 'assistant', content: botReply });
 
-        // Check if discovery is complete based on bot reply
+        // Enhanced discovery tracking based on bot reply
         const discoveryComplete = trackDiscoveryQuestions(botReply, discoveryProgress, discoveryQuestions);
         
-        // Transition state based on content and tracking
+        // Update conversation state
         if (conversationState === 'introduction') {
-          // Move to discovery after introduction
           conversationState = 'discovery';
         } else if (conversationState === 'discovery' && discoveryComplete) {
-          // Transition to booking if all discovery questions are asked
           conversationState = 'booking';
-          
-          // Update conversation state in trigger server
-          if (connectionData.callId) {
-            updateConversationState(connectionData.callId, true, null);
-          }
-          
-          console.log('Transitioning to booking state based on discovery completion');
+          console.log('🔄 Transitioning to booking state');
         }
 
         // Send the AI response
@@ -1112,47 +1030,60 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
           response_id: parsed.response_id
         }));
         
-        // After sending the response, check if this should be our last message
-        if (conversationState === 'completed' && !webhookSent && botReply.toLowerCase().includes('scheduling')) {
-          // If we're in the completed state and talking about scheduling but haven't sent the webhook yet
-          if (bookingInfo.email || connectionData.customerEmail) {
-            console.log('Sending final webhook before conversation end');
+        // ENHANCED: Send webhook immediately if we have sufficient discovery data
+        if (!webhookSent && Object.keys(discoveryData).length >= 3 && 
+            (bookingInfo.email || connectionData.customerEmail)) {
+          
+          // Check if we have at least 3 meaningful answers
+          const meaningfulAnswers = Object.values(discoveryData).filter(answer => 
+            answer && typeof answer === 'string' && answer.trim().length > 2
+          ).length;
+          
+          if (meaningfulAnswers >= 3) {
+            console.log('🚀 PROACTIVE WEBHOOK SEND - Sufficient discovery data collected');
+            console.log('📋 Sending discovery data:', JSON.stringify(discoveryData, null, 2));
+            
             await sendSchedulingPreference(
               bookingInfo.name || connectionData.customerName || '',
               bookingInfo.email || connectionData.customerEmail || '',
               bookingInfo.phone || connectionData.customerPhone || '',
-              bookingInfo.preferredDay || 'Not specified',
+              bookingInfo.preferredDay || 'Continuing conversation',
               connectionData.callId,
               discoveryData
             );
+            
             webhookSent = true;
+            console.log('✅ Proactive webhook sent successfully');
           }
         }
+        
       }
     } catch (error) {
-      console.error('Error handling message:', error.message);
+      console.error('❌ Error handling message:', error.message);
       
-      // Always try to send whatever data we have if an error occurs
-      if (!webhookSent && connectionData.callId && (bookingInfo.email || connectionData.customerEmail)) {
+      // Emergency webhook send with whatever data we have
+      if (!webhookSent && connectionData.callId && 
+          (bookingInfo.email || connectionData.customerEmail)) {
         try {
-          console.log('Sending webhook due to error');
+          console.log('🚨 EMERGENCY WEBHOOK SEND due to error');
           await sendSchedulingPreference(
             bookingInfo.name || connectionData.customerName || '',
             bookingInfo.email || connectionData.customerEmail || '',
             bookingInfo.phone || connectionData.customerPhone || '',
-            bookingInfo.preferredDay || 'Not specified',
+            bookingInfo.preferredDay || 'Error occurred',
             connectionData.callId,
             discoveryData
           );
           webhookSent = true;
+          console.log('✅ Emergency webhook sent');
         } catch (webhookError) {
-          console.error('Failed to send webhook after error:', webhookError);
+          console.error('❌ Emergency webhook also failed:', webhookError.message);
         }
       }
       
       // Send a recovery message
       ws.send(JSON.stringify({
-        content: "Haha oops, I missed that. Could you say it one more time?",
+        content: "I missed that. Could you repeat it?",
         content_complete: true,
         actions: [],
         response_id: 9999
@@ -1161,78 +1092,51 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
   });
 
   ws.on('close', async () => {
-    console.log('Connection closed.');
-    clearTimeout(autoGreetingTimer); // Clear the timer when connection closes
+    console.log('🔌 Connection closed.');
+    clearTimeout(autoGreetingTimer);
     
-    // Enhanced discovery data capture on close
-    console.log('=== CONNECTION CLOSE DISCOVERY RECAP ===');
-    console.log('Final discoveryData object:', JSON.stringify(discoveryData, null, 2));
-    console.log('Total discovery answers captured:', Object.keys(discoveryData).length);
-    
-    // Try to capture any missing pain points from conversation history
-    if (!discoveryData['question_5'] || discoveryData['question_5'].trim() === '') {
-      console.log('🔧 Attempting to capture missing pain points from conversation history');
-      
-      // Look through recent conversation for pain points
-      const recentMessages = conversationHistory.slice(-12); // Last 12 messages
-      for (let i = 0; i < recentMessages.length - 1; i++) {
-        const botMsg = recentMessages[i];
-        const userMsg = recentMessages[i + 1];
-        
-        if (botMsg.role === 'assistant' && userMsg.role === 'user') {
-          const botContent = botMsg.content.toLowerCase();
-          if ((botContent.includes('pain') || botContent.includes('problem') || 
-               botContent.includes('challenge') || botContent.includes('difficult')) &&
-              userMsg.content && userMsg.content.trim().length > 5) {
-            
-            discoveryData['question_5'] = userMsg.content.trim();
-            console.log(`🔧 CAPTURED pain points from conversation: "${userMsg.content.trim()}"`);
-            break;
-          }
-        }
-      }
-    }
-    
-    // Log final extracted data
-    console.log('📊 FINAL EXTRACTED DATA:', {
-      callId: connectionData.callId,
+    console.log('=== FINAL CONNECTION CLOSE ANALYSIS ===');
+    console.log('📋 Final discoveryData:', JSON.stringify(discoveryData, null, 2));
+    console.log('📊 Total answers captured:', Object.keys(discoveryData).length);
+    console.log('👤 Customer info:', {
       email: connectionData.customerEmail || bookingInfo.email,
       name: connectionData.customerName || bookingInfo.name,
       phone: connectionData.customerPhone || bookingInfo.phone
     });
+    console.log('📞 Call ID:', connectionData.callId);
+    console.log('📧 Webhook sent:', webhookSent);
     
-    // ALWAYS send data to trigger server when call ends, regardless of completion status
+    // ALWAYS attempt to send webhook on close if we haven't sent it yet
     if (!webhookSent && connectionData.callId) {
       try {
-        // Get any metadata we can find for this call
-        if (!bookingInfo.name && (connectionData?.customerName || connectionData?.metadata?.customer_name)) {
-          bookingInfo.name = connectionData.customerName || connectionData.metadata.customer_name;
-        }
-        if (!bookingInfo.email && (connectionData?.customerEmail || connectionData?.metadata?.customer_email)) {
-          bookingInfo.email = connectionData.customerEmail || connectionData.metadata.customer_email;
-        }
-        if (!bookingInfo.phone && (connectionData?.customerPhone || connectionData?.metadata?.to_number)) {
-          bookingInfo.phone = connectionData.customerPhone || connectionData.metadata.to_number;
-        }
-
-        console.log('Connection closed - sending final webhook data with discovery info:', discoveryData);
+        // Get final customer info
+        const finalEmail = connectionData.customerEmail || bookingInfo.email || '';
+        const finalName = connectionData.customerName || bookingInfo.name || '';
+        const finalPhone = connectionData.customerPhone || bookingInfo.phone || '';
+        
+        console.log('🚨 FINAL WEBHOOK ATTEMPT on connection close');
+        console.log('📋 Sending final discovery data:', JSON.stringify(discoveryData, null, 2));
+        
         await sendSchedulingPreference(
-          bookingInfo.name || '',
-          bookingInfo.email || '',
-          bookingInfo.phone || '',
+          finalName,
+          finalEmail,
+          finalPhone,
           bookingInfo.preferredDay || 'Call ended early',
           connectionData.callId,
           discoveryData
         );
-        console.log(`Final data sent for call ${connectionData.callId}`);
+        
+        console.log('✅ Final webhook sent successfully on connection close');
         webhookSent = true;
       } catch (finalError) {
-        console.error('Error sending final webhook:', finalError.message);
+        console.error('❌ Final webhook failed:', finalError.message);
       }
-      
-      // Clean up
+    }
+    
+    // Clean up
+    if (connectionData.callId) {
       activeCallsMetadata.delete(connectionData.callId);
-      console.log(`Cleaned up metadata for call ${connectionData.callId}`);
+      console.log(`🧹 Cleaned up metadata for call ${connectionData.callId}`);
     }
   });
 });
