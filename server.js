@@ -838,67 +838,105 @@ Remember: You MUST complete ALL 6 discovery questions before any scheduling disc
         console.log('🔄 Current conversation state:', conversationState);
         console.log('📊 Discovery progress:', discoveryProgress);
 
-        // ENHANCED: Better discovery question tracking
+        // FIXED: Better question detection - only check bot messages, not user responses
         if (conversationHistory.length >= 2) {
           const lastBotMessage = conversationHistory[conversationHistory.length - 1];
           
+          // Only analyze bot messages for question detection
           if (lastBotMessage && lastBotMessage.role === 'assistant') {
             const botContent = lastBotMessage.content.toLowerCase();
             discoveryProgress.lastBotMessage = botContent;
             
-            // Check if bot asked ANY discovery question
-            let questionAsked = false;
+            // Check if bot asked a NEW discovery question (that hasn't been asked yet)
             discoveryQuestions.forEach((q, index) => {
               if (!q.asked) {
-                // More flexible keyword matching for pain points
                 let keywordMatch = false;
-                if (index === 5) { // Pain points question (index 5)
-                  keywordMatch = botContent.includes('pain point') || 
-                                botContent.includes('challenge') || 
-                                botContent.includes('problem') || 
-                                botContent.includes('difficult') ||
-                                botContent.includes('struggle') ||
-                                botContent.includes('biggest') ||
-                                botContent.includes('issue');
-                } else {
-                  keywordMatch = q.keywords.some(keyword => botContent.includes(keyword));
+                
+                // Specific detection for each question type
+                switch(index) {
+                  case 0: // How did you hear about us?
+                    keywordMatch = botContent.includes('hear about') || 
+                                  botContent.includes('find us') || 
+                                  botContent.includes('discover us');
+                    break;
+                  case 1: // What industry or business are you in?
+                    keywordMatch = botContent.includes('industry') || 
+                                  botContent.includes('business are you') ||
+                                  botContent.includes('what do you do');
+                    break;
+                  case 2: // What's your main product or service?
+                    keywordMatch = botContent.includes('main product') || 
+                                  botContent.includes('product or service') ||
+                                  botContent.includes('what do you sell');
+                    break;
+                  case 3: // Are you currently running any ads?
+                    keywordMatch = botContent.includes('running ads') || 
+                                  botContent.includes('running any ads') ||
+                                  botContent.includes('advertising');
+                    break;
+                  case 4: // Are you using any CRM system?
+                    keywordMatch = botContent.includes('crm') || 
+                                  botContent.includes('customer relationship') ||
+                                  botContent.includes('management system');
+                    break;
+                  case 5: // What are your biggest pain points or challenges?
+                    keywordMatch = botContent.includes('pain point') || 
+                                  botContent.includes('challenge') || 
+                                  botContent.includes('biggest problem') ||
+                                  botContent.includes('pain points') ||
+                                  botContent.includes('difficulties');
+                    break;
                 }
                 
                 if (keywordMatch) {
                   console.log(`✅ DETECTED: Question ${index + 1} was asked: "${q.question}"`);
+                  console.log(`   Bot message was: "${botContent}"`);
                   q.asked = true;
                   discoveryProgress.waitingForAnswer = true;
                   discoveryProgress.currentQuestionIndex = index;
                   discoveryProgress.questionOrder.push(index);
-                  questionAsked = true;
+                  
+                  // Reset any previous "waiting" state to ensure clean capture
+                  discoveryQuestions.forEach((otherQ, otherIndex) => {
+                    if (otherIndex !== index && !otherQ.answered) {
+                      // Don't mark as waiting if this is a different question
+                    }
+                  });
                 }
               }
             });
+          }
+        }
+        
+        // FIXED: Only capture answer if we're specifically waiting for one and it's a substantial response
+        if (discoveryProgress.waitingForAnswer && userMessage.trim().length > 1) {
+          const currentQ = discoveryQuestions[discoveryProgress.currentQuestionIndex];
+          if (currentQ && currentQ.asked && !currentQ.answered) {
+            // Additional validation: make sure this isn't a follow-up to a previous question
+            const trimmedAnswer = userMessage.trim();
             
-            // If we were waiting for an answer and user responded, capture it
-            if (discoveryProgress.waitingForAnswer && userMessage.trim().length > 2) {
-              const currentQ = discoveryQuestions[discoveryProgress.currentQuestionIndex];
-              if (currentQ && currentQ.asked && !currentQ.answered) {
-                currentQ.answered = true;
-                currentQ.answer = userMessage.trim();
-                discoveryData[currentQ.field] = userMessage.trim();
-                discoveryData[`question_${discoveryProgress.currentQuestionIndex}`] = userMessage.trim();
-                
-                discoveryProgress.questionsCompleted++;
-                discoveryProgress.waitingForAnswer = false;
-                
-                console.log(`✅ CAPTURED ANSWER ${discoveryProgress.questionsCompleted}/6:`);
-                console.log(`   Question: ${currentQ.question}`);
-                console.log(`   Answer: "${userMessage.trim()}"`);
-                console.log(`   Field: ${currentQ.field}`);
-                
-                // Debug: Show which questions are still unanswered
-                const unanswered = discoveryQuestions.filter(q => !q.answered);
-                console.log(`📋 Remaining questions: ${unanswered.length}`);
-                unanswered.forEach((q, i) => {
-                  console.log(`   ${i + 1}. ${q.question} (asked: ${q.asked})`);
-                });
-              }
+            // Don't capture very short responses that might be acknowledgments
+            if (trimmedAnswer.length > 2) {
+              currentQ.answered = true;
+              currentQ.answer = trimmedAnswer;
+              discoveryData[currentQ.field] = trimmedAnswer;
+              discoveryData[`question_${discoveryProgress.currentQuestionIndex}`] = trimmedAnswer;
+              
+              discoveryProgress.questionsCompleted++;
+              discoveryProgress.waitingForAnswer = false;
+              
+              console.log(`✅ CAPTURED ANSWER ${discoveryProgress.questionsCompleted}/6:`);
+              console.log(`   Question ${discoveryProgress.currentQuestionIndex + 1}: ${currentQ.question}`);
+              console.log(`   Answer: "${trimmedAnswer}"`);
+              console.log(`   Field: ${currentQ.field}`);
+              
+              // Debug: Show which questions are still unanswered
+              const unanswered = discoveryQuestions.filter(q => !q.answered);
+              console.log(`📋 Remaining questions: ${unanswered.length}`);
+              unanswered.forEach((q, i) => {
+                const qIndex = discoveryQuestions.indexOf(q);
+                console.log(`   ${qIndex + 1}. ${q.question} (asked: ${q.asked})`);
+              });
             }
           }
         }
@@ -931,13 +969,21 @@ Remember: You MUST complete ALL 6 discovery questions before any scheduling disc
         // Add user message to conversation history
         conversationHistory.push({ role: 'user', content: userMessage });
 
-        // ENHANCED: Better context for GPT about current question status
+        // ENHANCED: Better context for GPT with explicit question guidance
         let contextPrompt = '';
         if (!discoveryProgress.allQuestionsCompleted) {
           const nextUnanswered = discoveryQuestions.find(q => !q.answered);
           if (nextUnanswered) {
             const questionNumber = discoveryQuestions.indexOf(nextUnanswered) + 1;
-            contextPrompt = `\n\nIMPORTANT: You need to ask question ${questionNumber}: "${nextUnanswered.question}". You have completed ${discoveryProgress.questionsCompleted} out of 6 questions so far. Do NOT skip to scheduling until all 6 questions are answered.`;
+            
+            // Be very explicit about which question to ask
+            contextPrompt = `\n\nIMPORTANT INSTRUCTIONS:
+- You have completed ${discoveryProgress.questionsCompleted} out of 6 questions
+- You must now ask question ${questionNumber}: "${nextUnanswered.question}"
+- Ask this question clearly and wait for the customer's response
+- Do NOT ask multiple questions at once
+- Do NOT skip to scheduling until all 6 questions are answered
+- After they answer, acknowledge their response briefly and then ask the next question`;
           }
         } else {
           contextPrompt = '\n\nAll 6 discovery questions have been completed. You can now proceed to scheduling.';
@@ -954,7 +1000,8 @@ Remember: You MUST complete ALL 6 discovery questions before any scheduling disc
           {
             model: 'gpt-4o',
             messages: messages,
-            temperature: 0.7
+            temperature: 0.6, // Slightly lower temperature for more consistent behavior
+            max_tokens: 150 // Limit response length to keep it focused
           },
           {
             headers: {
