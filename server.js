@@ -615,7 +615,7 @@ wss.on('connection', async (ws, req) => {
     {
       question: 'What are your biggest pain points or challenges?',
       field: 'Pain points',
-      keywords: ['pain points', 'problems', 'challenges', 'issues', 'difficulties', 'struggling', 'biggest challenge'],
+      keywords: ['pain points', 'problems', 'challenges', 'issues', 'difficulties', 'struggling', 'biggest challenge', 'pain point'],
       asked: false,
       answered: false,
       answer: ''
@@ -627,7 +627,8 @@ wss.on('connection', async (ws, req) => {
     questionsCompleted: 0,
     allQuestionsCompleted: false,
     lastBotMessage: '',
-    waitingForAnswer: false
+    waitingForAnswer: false,
+    questionOrder: [] // Track the order questions were asked
   };
 
   // UPDATED: Improved system prompt that ensures all questions are asked
@@ -640,7 +641,7 @@ CRITICAL DISCOVERY REQUIREMENTS:
 - You MUST ask ALL 6 discovery questions in the exact order listed below
 - Ask ONE question at a time and wait for the customer's response
 - Do NOT move to scheduling until ALL 6 questions are answered
-- Number your questions mentally but don't say the numbers out loud
+- After each answer, acknowledge it briefly before asking the next question
 
 DISCOVERY QUESTIONS (ask in this EXACT order):
 1. "How did you hear about us?"
@@ -665,12 +666,12 @@ PERSONALITY & TONE:
 - If you ask a question with a question mark '?' go up in pitch and tone towards the end of the sentence.
 - If you respond with "." always keep an even consistent tone towards the end of the sentence.
 
-KEY REMINDERS:
-- We already have the customer's name and email from their form submission
-- Address the customer by their actual name (NOT a placeholder name like Monica)
-- You don't need to ask for their email
-- Acknowledge their answers positively before moving to the next question
-- Example: "That's great! Thanks for sharing that. Now, [next question]"
+DISCOVERY FLOW:
+- Start with question 1 after greeting
+- After each answer, say something like "That's great, thank you for sharing that."
+- Then immediately ask the next question
+- Do NOT skip questions or assume answers
+- Count your questions mentally: 1, 2, 3, 4, 5, 6
 
 SCHEDULING APPROACH:
 - ONLY after asking ALL 6 discovery questions, ask for scheduling preference
@@ -730,7 +731,7 @@ Remember: You MUST complete ALL 6 discovery questions before any scheduling disc
     }
   }, 5000); // 5 seconds delay as backup
 
-  // FIXED: Enhanced message handling with proper discovery tracking
+  // ENHANCED: Message handling with better discovery tracking
   ws.on('message', async (data) => {
     try {
       clearTimeout(autoGreetingTimer);
@@ -837,7 +838,7 @@ Remember: You MUST complete ALL 6 discovery questions before any scheduling disc
         console.log('🔄 Current conversation state:', conversationState);
         console.log('📊 Discovery progress:', discoveryProgress);
 
-        // ENHANCED: Track discovery question asking and answering
+        // ENHANCED: Better discovery question tracking
         if (conversationHistory.length >= 2) {
           const lastBotMessage = conversationHistory[conversationHistory.length - 1];
           
@@ -845,18 +846,37 @@ Remember: You MUST complete ALL 6 discovery questions before any scheduling disc
             const botContent = lastBotMessage.content.toLowerCase();
             discoveryProgress.lastBotMessage = botContent;
             
-            // Check if bot asked a discovery question
+            // Check if bot asked ANY discovery question
+            let questionAsked = false;
             discoveryQuestions.forEach((q, index) => {
-              if (!q.asked && q.keywords.some(keyword => botContent.includes(keyword))) {
-                console.log(`✅ DETECTED: Question ${index + 1} was asked: "${q.question}"`);
-                q.asked = true;
-                discoveryProgress.waitingForAnswer = true;
-                discoveryProgress.currentQuestionIndex = index;
+              if (!q.asked) {
+                // More flexible keyword matching for pain points
+                let keywordMatch = false;
+                if (index === 5) { // Pain points question (index 5)
+                  keywordMatch = botContent.includes('pain point') || 
+                                botContent.includes('challenge') || 
+                                botContent.includes('problem') || 
+                                botContent.includes('difficult') ||
+                                botContent.includes('struggle') ||
+                                botContent.includes('biggest') ||
+                                botContent.includes('issue');
+                } else {
+                  keywordMatch = q.keywords.some(keyword => botContent.includes(keyword));
+                }
+                
+                if (keywordMatch) {
+                  console.log(`✅ DETECTED: Question ${index + 1} was asked: "${q.question}"`);
+                  q.asked = true;
+                  discoveryProgress.waitingForAnswer = true;
+                  discoveryProgress.currentQuestionIndex = index;
+                  discoveryProgress.questionOrder.push(index);
+                  questionAsked = true;
+                }
               }
             });
             
-            // If we were waiting for an answer, capture it
-            if (discoveryProgress.waitingForAnswer && userMessage.trim().length > 0) {
+            // If we were waiting for an answer and user responded, capture it
+            if (discoveryProgress.waitingForAnswer && userMessage.trim().length > 2) {
               const currentQ = discoveryQuestions[discoveryProgress.currentQuestionIndex];
               if (currentQ && currentQ.asked && !currentQ.answered) {
                 currentQ.answered = true;
@@ -871,23 +891,31 @@ Remember: You MUST complete ALL 6 discovery questions before any scheduling disc
                 console.log(`   Question: ${currentQ.question}`);
                 console.log(`   Answer: "${userMessage.trim()}"`);
                 console.log(`   Field: ${currentQ.field}`);
+                
+                // Debug: Show which questions are still unanswered
+                const unanswered = discoveryQuestions.filter(q => !q.answered);
+                console.log(`📋 Remaining questions: ${unanswered.length}`);
+                unanswered.forEach((q, i) => {
+                  console.log(`   ${i + 1}. ${q.question} (asked: ${q.asked})`);
+                });
               }
             }
           }
         }
 
-        // Check if all discovery questions are completed
-        discoveryProgress.allQuestionsCompleted = discoveryProgress.questionsCompleted >= 6;
+        // FIXED: More accurate completion check
+        discoveryProgress.allQuestionsCompleted = discoveryQuestions.every(q => q.answered);
         
         console.log(`📊 Discovery Status: ${discoveryProgress.questionsCompleted}/6 questions completed`);
+        console.log(`📊 All questions completed: ${discoveryProgress.allQuestionsCompleted}`);
         console.log('📋 Current discovery data:', JSON.stringify(discoveryData, null, 2));
 
-        // Check for scheduling preference (only after all questions are answered)
+        // Check for scheduling preference (only after ALL questions are answered)
         let schedulingDetected = false;
         if (discoveryProgress.allQuestionsCompleted && 
             userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today)\b/)) {
           
-          console.log('🗓️ User mentioned scheduling after completing discovery');
+          console.log('🗓️ User mentioned scheduling after completing ALL discovery questions');
           
           const dayInfo = handleSchedulingPreference(userMessage);
           
@@ -895,17 +923,37 @@ Remember: You MUST complete ALL 6 discovery questions before any scheduling disc
             bookingInfo.preferredDay = dayInfo.dayName;
             schedulingDetected = true;
           }
+        } else if (!discoveryProgress.allQuestionsCompleted && 
+                   userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss)\b/)) {
+          console.log('⚠️ User mentioned scheduling but discovery is not complete. Continuing with questions.');
         }
 
         // Add user message to conversation history
         conversationHistory.push({ role: 'user', content: userMessage });
 
+        // ENHANCED: Better context for GPT about current question status
+        let contextPrompt = '';
+        if (!discoveryProgress.allQuestionsCompleted) {
+          const nextUnanswered = discoveryQuestions.find(q => !q.answered);
+          if (nextUnanswered) {
+            const questionNumber = discoveryQuestions.indexOf(nextUnanswered) + 1;
+            contextPrompt = `\n\nIMPORTANT: You need to ask question ${questionNumber}: "${nextUnanswered.question}". You have completed ${discoveryProgress.questionsCompleted} out of 6 questions so far. Do NOT skip to scheduling until all 6 questions are answered.`;
+          }
+        } else {
+          contextPrompt = '\n\nAll 6 discovery questions have been completed. You can now proceed to scheduling.';
+        }
+
         // Process with GPT
+        const messages = [...conversationHistory];
+        if (contextPrompt) {
+          messages[messages.length - 1].content += contextPrompt;
+        }
+
         const openaiResponse = await axios.post(
           'https://api.openai.com/v1/chat/completions',
           {
             model: 'gpt-4o',
-            messages: conversationHistory,
+            messages: messages,
             temperature: 0.7
           },
           {
@@ -919,7 +967,7 @@ Remember: You MUST complete ALL 6 discovery questions before any scheduling disc
 
         const botReply = openaiResponse.data.choices[0].message.content || "Could you tell me a bit more about that?";
 
-        // Add bot reply to conversation history
+        // Add bot reply to conversation history (without context prompt)
         conversationHistory.push({ role: 'assistant', content: botReply });
 
         // Update conversation state
@@ -927,7 +975,7 @@ Remember: You MUST complete ALL 6 discovery questions before any scheduling disc
           conversationState = 'discovery';
         } else if (conversationState === 'discovery' && discoveryProgress.allQuestionsCompleted) {
           conversationState = 'booking';
-          console.log('🔄 Transitioning to booking state - all discovery questions completed');
+          console.log('🔄 Transitioning to booking state - ALL 6 discovery questions completed');
         }
 
         // Send the AI response
@@ -938,13 +986,23 @@ Remember: You MUST complete ALL 6 discovery questions before any scheduling disc
           response_id: parsed.response_id
         }));
         
-        // FIXED: Only send webhook when ALL discovery questions are completed AND scheduling is detected
+        // FIXED: Enhanced webhook sending logic
         if (schedulingDetected && discoveryProgress.allQuestionsCompleted && !webhookSent) {
           console.log('🚀 SENDING WEBHOOK - All conditions met:');
-          console.log('   ✅ All 6 discovery questions completed');
+          console.log('   ✅ All 6 discovery questions completed and answered');
           console.log('   ✅ Scheduling preference detected');
           console.log('   ✅ Contact info available');
-          console.log('📋 Final discovery data being sent:', JSON.stringify(discoveryData, null, 2));
+          
+          // Final validation of discovery data
+          const finalDiscoveryData = {};
+          discoveryQuestions.forEach((q, index) => {
+            if (q.answered && q.answer) {
+              finalDiscoveryData[q.field] = q.answer;
+              finalDiscoveryData[`question_${index}`] = q.answer;
+            }
+          });
+          
+          console.log('📋 Final discovery data being sent:', JSON.stringify(finalDiscoveryData, null, 2));
           
           const result = await sendSchedulingPreference(
             bookingInfo.name || connectionData.customerName || '',
@@ -952,7 +1010,7 @@ Remember: You MUST complete ALL 6 discovery questions before any scheduling disc
             bookingInfo.phone || connectionData.customerPhone || '',
             bookingInfo.preferredDay,
             connectionData.callId,
-            discoveryData
+            finalDiscoveryData
           );
           
           if (result.success) {
@@ -965,22 +1023,32 @@ Remember: You MUST complete ALL 6 discovery questions before any scheduling disc
     } catch (error) {
       console.error('❌ Error handling message:', error.message);
       
-      // Emergency webhook send only if we have substantial discovery data
+      // Enhanced emergency webhook logic
       if (!webhookSent && connectionData.callId && 
           (bookingInfo.email || connectionData.customerEmail) &&
-          discoveryProgress.questionsCompleted >= 3) {
+          discoveryProgress.questionsCompleted >= 4) { // Reduced threshold but still substantial
         try {
-          console.log('🚨 EMERGENCY WEBHOOK SEND - Partial discovery data available');
+          console.log('🚨 EMERGENCY WEBHOOK SEND - Substantial discovery data available');
+          
+          // Create emergency discovery data from what we have
+          const emergencyDiscoveryData = {};
+          discoveryQuestions.forEach((q, index) => {
+            if (q.answered && q.answer) {
+              emergencyDiscoveryData[q.field] = q.answer;
+              emergencyDiscoveryData[`question_${index}`] = q.answer;
+            }
+          });
+          
           await sendSchedulingPreference(
             bookingInfo.name || connectionData.customerName || '',
             bookingInfo.email || connectionData.customerEmail || '',
             bookingInfo.phone || connectionData.customerPhone || '',
             bookingInfo.preferredDay || 'Error occurred',
             connectionData.callId,
-            discoveryData
+            emergencyDiscoveryData
           );
           webhookSent = true;
-          console.log('✅ Emergency webhook sent');
+          console.log('✅ Emergency webhook sent with available discovery data');
         } catch (webhookError) {
           console.error('❌ Emergency webhook also failed:', webhookError.message);
         }
@@ -1020,13 +1088,22 @@ Remember: You MUST complete ALL 6 discovery questions before any scheduling disc
         console.log('🚨 FINAL WEBHOOK ATTEMPT on connection close');
         console.log(`📊 Sending with ${discoveryProgress.questionsCompleted}/6 questions completed`);
         
+        // Create final discovery data from answered questions
+        const finalDiscoveryData = {};
+        discoveryQuestions.forEach((q, index) => {
+          if (q.answered && q.answer) {
+            finalDiscoveryData[q.field] = q.answer;
+            finalDiscoveryData[`question_${index}`] = q.answer;
+          }
+        });
+        
         await sendSchedulingPreference(
           finalName,
           finalEmail,
           finalPhone,
           bookingInfo.preferredDay || 'Call ended early',
           connectionData.callId,
-          discoveryData
+          finalDiscoveryData
         );
         
         console.log('✅ Final webhook sent successfully on connection close');
