@@ -12,7 +12,7 @@ app.use(express.json());
 
 // Ensure we have the required environment variables
 if (!process.env.TRIGGER_SERVER_URL) {
-  process.env.TRIGGER_SERVER_URL = 'https://trigger-server-qt7u.onrender.com';
+  process.env. TRIGGER_SERVER_URL = 'https://trigger-server-qt7u.onrender.com';
 }
 if (!process.env.N8N_WEBHOOK_URL) {
   process.env.N8N_WEBHOOK_URL = 'https://n8n-clp2.onrender.com/webhook/retell-scheduling';
@@ -335,51 +335,6 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
   }
 }
 
-// ENHANCED: Better detection of discovery questions being asked
-function trackDiscoveryQuestions(botMessage, discoveryProgress, discoveryQuestions) {
-  if (!botMessage) return false;
-  
-  const botMessageLower = botMessage.toLowerCase();
-  
-  // Enhanced key phrases with more specific detection
-  const keyPhrases = [
-    ["hear about us", "find us", "discover us", "found us", "how did you hear"], // How did you hear about us
-    ["business", "company", "industry", "what do you do", "line of business"], // What line of business are you in
-    ["product", "service", "offer", "main product", "what's your main"], // What's your main product
-    ["ads", "advertising", "marketing", "running ads", "ad campaigns"], // Are you running ads
-    ["crm", "gohighlevel", "management system", "customer relationship"], // Are you using a CRM
-    ["problems", "challenges", "issues", "pain points", "difficulties", "struggling with"] // What problems are you facing
-  ];
-  
-  // Check each question's key phrases
-  keyPhrases.forEach((phrases, index) => {
-    if (phrases.some(phrase => botMessageLower.includes(phrase))) {
-      discoveryProgress.questionsAsked.add(index);
-      console.log(`✅ Detected question ${index} was asked: ${discoveryQuestions[index]}`);
-    }
-  });
-  
-  // Check for scheduling phrases
-  const schedulingPhrases = ["schedule", "book a call", "day of the week", "what day works", "good time", "availability", "when would", "time work"];
-  const hasSchedulingPhrase = schedulingPhrases.some(phrase => botMessageLower.includes(phrase));
-  
-  // Log the progress
-  console.log(`📊 Question progress: ${discoveryProgress.questionsAsked.size}/${discoveryQuestions.length}, Scheduling phrase: ${hasSchedulingPhrase}`);
-  console.log(`📋 Questions asked so far: [${Array.from(discoveryProgress.questionsAsked).join(', ')}]`);
-  
-  // Discovery is complete when we have at least 4 questions OR scheduling is mentioned
-  const minimumQuestionsAsked = 4;
-  const hasEnoughQuestions = discoveryProgress.questionsAsked.size >= minimumQuestionsAsked;
-  const discoveryComplete = hasEnoughQuestions || hasSchedulingPhrase;
-  
-  if (discoveryComplete) {
-    console.log('🎉 Discovery process considered complete!');
-  }
-  
-  discoveryProgress.allQuestionsAsked = discoveryComplete;
-  return discoveryComplete;
-}
-
 // IMPROVED: Better detection of scheduling preferences
 function handleSchedulingPreference(userMessage) {
   // Extract day of week with better handling for various formats
@@ -521,7 +476,7 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
   }
 });
 
-// ENHANCED WEBSOCKET CONNECTION HANDLER - EXTRACTS CALL ID, EMAIL, NAME
+// ENHANCED WEBSOCKET CONNECTION HANDLER - FIXED DISCOVERY SYSTEM
 wss.on('connection', async (ws, req) => {
   console.log('🔗 NEW WEBSOCKET CONNECTION ESTABLISHED');
   console.log('Connection URL:', req.url);
@@ -534,7 +489,7 @@ wss.on('connection', async (ws, req) => {
   
   // Store connection data with this WebSocket
   const connectionData = {
-    callId: callId, // ← FIXED: Set the call ID immediately
+    callId: callId,
     metadata: null,
     customerEmail: null,
     customerName: null,
@@ -615,87 +570,119 @@ wss.on('connection', async (ws, req) => {
   
   console.log('Retell connected via WebSocket.');
   
-  // Define discovery questions as a trackable list - MODIFIED to match Airtable field names
+  // FIXED: Discovery questions system with proper tracking
   const discoveryQuestions = [
-    'How did you hear about us?',
-    'What industry or business are you in?',
-    'What\'s your main product?',
-    'Are you running ads right now?',
-    'Are you using a CRM system?',
-    'What pain points are you experiencing?'
+    {
+      question: 'How did you hear about us?',
+      field: 'How did you hear about us',
+      keywords: ['hear about', 'find us', 'found us', 'discover us', 'learn about'],
+      asked: false,
+      answered: false,
+      answer: ''
+    },
+    {
+      question: 'What industry or business are you in?',
+      field: 'Business/Industry',
+      keywords: ['industry', 'business', 'line of business', 'company', 'what do you do', 'work in'],
+      asked: false,
+      answered: false,
+      answer: ''
+    },
+    {
+      question: 'What\'s your main product or service?',
+      field: 'Main product',
+      keywords: ['main product', 'product', 'service', 'sell', 'offer', 'provide'],
+      asked: false,
+      answered: false,
+      answer: ''
+    },
+    {
+      question: 'Are you currently running any ads?',
+      field: 'Running ads',
+      keywords: ['ads', 'advertising', 'marketing', 'running ads', 'meta', 'google', 'facebook'],
+      asked: false,
+      answered: false,
+      answer: ''
+    },
+    {
+      question: 'Are you using any CRM system?',
+      field: 'Using CRM',
+      keywords: ['crm', 'gohighlevel', 'management system', 'customer relationship', 'software'],
+      asked: false,
+      answered: false,
+      answer: ''
+    },
+    {
+      question: 'What are your biggest pain points or challenges?',
+      field: 'Pain points',
+      keywords: ['pain points', 'problems', 'challenges', 'issues', 'difficulties', 'struggling', 'biggest challenge'],
+      asked: false,
+      answered: false,
+      answer: ''
+    }
   ];
   
   let discoveryProgress = {
     currentQuestionIndex: 0,
-    questionsAsked: new Set(),
-    allQuestionsAsked: false
+    questionsCompleted: 0,
+    allQuestionsCompleted: false,
+    lastBotMessage: '',
+    waitingForAnswer: false
   };
-  
-  // UPDATED: Improved system prompt with better pacing and complete sentences
+
+  // UPDATED: Improved system prompt that ensures all questions are asked
   let conversationHistory = [
     {
       role: 'system',
       content: `You are a customer service/sales representative for Nexella.io named "Sarah". Always introduce yourself as Sarah from Nexella.
+
+CRITICAL DISCOVERY REQUIREMENTS:
+- You MUST ask ALL 6 discovery questions in the exact order listed below
+- Ask ONE question at a time and wait for the customer's response
+- Do NOT move to scheduling until ALL 6 questions are answered
+- Number your questions mentally but don't say the numbers out loud
+
+DISCOVERY QUESTIONS (ask in this EXACT order):
+1. "How did you hear about us?"
+2. "What industry or business are you in?"
+3. "What's your main product or service?"
+4. "Are you currently running any ads?"
+5. "Are you using any CRM system?"
+6. "What are your biggest pain points or challenges?"
 
 SPEAKING STYLE & PACING:
 - Speak at a SLOW, measured pace - never rush your words
 - Insert natural pauses between sentences using periods (.)
 - Complete all your sentences fully - never cut off mid-thought
 - Use shorter sentences rather than long, complex ones
-- Add extra spaces between sentences to create natural pauses
-- Never end a response abruptly - always finish your complete thought
 - Keep your statements and questions concise but complete
 
 PERSONALITY & TONE:
 - Be warm and friendly but speak in a calm, measured way
 - Use a consistent, even speaking tone throughout the conversation
 - Use contractions and everyday language that sounds natural
-- Only use exclamation points when truly appropriate
 - Maintain a calm, professional demeanor at all times
-- Never go up in tone or pitch at the end of sentences unless it is a question.
-- Always keep and even consistent tonality unless it is a question.
+- If you ask a question with a question mark '?' go up in pitch and tone towards the end of the sentence.
+- If you respond with "." always keep an even consistent tone towards the end of the sentence.
 
 KEY REMINDERS:
 - We already have the customer's name and email from their form submission
 - Address the customer by their actual name (NOT a placeholder name like Monica)
-- DO NOT refer to the customer as Monica - use their actual name from metadata
-- If you know the customer's name is Jaden, use "Jaden" throughout the conversation
 - You don't need to ask for their email
-- Ask one question at a time and pause for answers
-- Acknowledge their answers before moving to the next question
-
-IMPORTANT ABOUT DISCOVERY:
-- You must ask all six discovery questions in order before scheduling
-- Keep each question short and direct
-- Add a brief pause after each question by ending with a period (.)
-- Listen to their answers and respond accordingly, make a positive comment about their answer or compliment them confirming and validating their answer
-
-DISCOVERY QUESTIONS (ask ALL of these IN ORDER):
-1. "How did you hear about us?" (Maps to field: "How did you hear about us")
-2. "What industry or business are you in?" (Maps to field: "Business/Industry")
-3. "What's your main product?" (Maps to field: "Main product")
-4. "Are you running ads right now?" (Maps to field: "Running ads")
-5. "Are you using a CRM system?" (Maps to field: "Using CRM")
-6. "What pain points are you experiencing?" (Maps to field: "Pain points")
+- Acknowledge their answers positively before moving to the next question
+- Example: "That's great! Thanks for sharing that. Now, [next question]"
 
 SCHEDULING APPROACH:
-- After asking ALL discovery questions, ask for what day works for a call
-- Say: "Great. Let's schedule a call to discuss how we can help. What day would work best for you?"
-- When they mention a day, acknowledge it calmly with a complete sentence
-- Say: "Perfect. I'll send you a scheduling link for [day]. You can pick whatever time works best for you."
-- Keep it simple and straightforward with clear pauses between sentences
+- ONLY after asking ALL 6 discovery questions, ask for scheduling preference
+- Say: "Perfect! I have all the information I need. Let's schedule a call to discuss how we can help. What day would work best for you?"
+- When they mention a day, acknowledge it and confirm scheduling
 
-NATURAL RESPONSES WITH PAUSES:
-- If they say "Monday": "Monday works great. [pause] I'll send you a link for Monday. [pause] You can choose any time that's convenient for you."
-- If they say "next week": "Next week works well. [pause] I'll send you a scheduling link. [pause] You can select any day that fits your schedule."
-- If they're vague: "No problem. [pause] I'll send you our scheduling link. [pause] You can pick whatever day and time works best."
-
-Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete each sentence fully, speak slowly, and add natural pauses between thoughts. NEVER cut off your sentences abruptly. NEVER call the customer Monica - always use their actual name if available.`
+Remember: You MUST complete ALL 6 discovery questions before any scheduling discussion. This is critical for our process.`
     }
   ];
 
   // States for conversation flow
-  let conversationState = 'introduction';  // introduction -> discovery -> booking -> completed
+  let conversationState = 'introduction';
   let bookingInfo = {
     name: connectionData.customerName || '',
     email: connectionData.customerEmail || '',
@@ -704,10 +691,10 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
     schedulingLinkSent: false,
     userId: `user_${Date.now()}`
   };
-  let discoveryData = {}; // Store answers to discovery questions
-  let collectedContactInfo = !!connectionData.customerEmail; // True if we have email
+  let discoveryData = {}; // This will store the final answers
+  let collectedContactInfo = !!connectionData.customerEmail;
   let userHasSpoken = false;
-  let webhookSent = false; // Track if we've sent the webhook
+  let webhookSent = false;
 
   // Send connecting message
   ws.send(JSON.stringify({
@@ -743,14 +730,13 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
     }
   }, 5000); // 5 seconds delay as backup
 
+  // FIXED: Enhanced message handling with proper discovery tracking
   ws.on('message', async (data) => {
     try {
-      // Clear auto-greeting timer if user speaks first
       clearTimeout(autoGreetingTimer);
       userHasSpoken = true;
       
       const parsed = JSON.parse(data);
-
       console.log('📥 Raw WebSocket Message:', JSON.stringify(parsed, null, 2));
       
       // Debug logging to see what we're receiving
@@ -849,140 +835,65 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
 
         console.log('🗣️ User said:', userMessage);
         console.log('🔄 Current conversation state:', conversationState);
-        console.log('📊 Current discovery data before processing:', JSON.stringify(discoveryData, null, 2));
+        console.log('📊 Discovery progress:', discoveryProgress);
 
-        // ENHANCED: Capture discovery answers IMMEDIATELY when user responds
+        // ENHANCED: Track discovery question asking and answering
         if (conversationHistory.length >= 2) {
           const lastBotMessage = conversationHistory[conversationHistory.length - 1];
-          const secondLastMessage = conversationHistory[conversationHistory.length - 2];
-          
-          // Check the most recent bot message for discovery questions
-          let questionDetected = false;
-          let questionIndex = -1;
           
           if (lastBotMessage && lastBotMessage.role === 'assistant') {
             const botContent = lastBotMessage.content.toLowerCase();
-            console.log(`🔍 Analyzing bot message: "${lastBotMessage.content}"`);
+            discoveryProgress.lastBotMessage = botContent;
             
-            // Enhanced question detection with more specific patterns
-            const questionPatterns = [
-              // Question 0: How did you hear about us?
-              {
-                keywords: ['hear about', 'find us', 'found us', 'discover us'],
-                index: 0,
-                field: 'How did you hear about us'
-              },
-              // Question 1: What business/industry?
-              {
-                keywords: ['industry', 'business', 'line of business', 'company', 'what do you do'],
-                index: 1,
-                field: 'Business/Industry'
-              },
-              // Question 2: Main product?
-              {
-                keywords: ['main product', 'product', 'service', 'sell', 'offer', 'price point'],
-                index: 2,
-                field: 'Main product'
-              },
-              // Question 3: Running ads?
-              {
-                keywords: ['ads', 'advertising', 'marketing', 'running ads', 'meta', 'google'],
-                index: 3,
-                field: 'Running ads'
-              },
-              // Question 4: Using CRM?
-              {
-                keywords: ['crm', 'gohighlevel', 'management system', 'customer relationship'],
-                index: 4,
-                field: 'Using CRM'
-              },
-              // Question 5: Pain points?
-              {
-                keywords: ['pain points', 'problems', 'challenges', 'issues', 'difficulties', 'struggling', 'biggest challenge'],
-                index: 5,
-                field: 'Pain points'
+            // Check if bot asked a discovery question
+            discoveryQuestions.forEach((q, index) => {
+              if (!q.asked && q.keywords.some(keyword => botContent.includes(keyword))) {
+                console.log(`✅ DETECTED: Question ${index + 1} was asked: "${q.question}"`);
+                q.asked = true;
+                discoveryProgress.waitingForAnswer = true;
+                discoveryProgress.currentQuestionIndex = index;
               }
-            ];
+            });
             
-            // Check each pattern
-            questionPatterns.forEach(pattern => {
-              if (pattern.keywords.some(keyword => botContent.includes(keyword))) {
-                questionDetected = true;
-                questionIndex = pattern.index;
+            // If we were waiting for an answer, capture it
+            if (discoveryProgress.waitingForAnswer && userMessage.trim().length > 0) {
+              const currentQ = discoveryQuestions[discoveryProgress.currentQuestionIndex];
+              if (currentQ && currentQ.asked && !currentQ.answered) {
+                currentQ.answered = true;
+                currentQ.answer = userMessage.trim();
+                discoveryData[currentQ.field] = userMessage.trim();
+                discoveryData[`question_${discoveryProgress.currentQuestionIndex}`] = userMessage.trim();
                 
-                // IMMEDIATELY store the user's response
-                discoveryData[`question_${pattern.index}`] = userMessage.trim();
-                discoveryData[pattern.field] = userMessage.trim();
+                discoveryProgress.questionsCompleted++;
+                discoveryProgress.waitingForAnswer = false;
                 
-                console.log(`✅ CAPTURED ANSWER TO QUESTION ${pattern.index}:`);
-                console.log(`   Question: ${discoveryQuestions[pattern.index]}`);
+                console.log(`✅ CAPTURED ANSWER ${discoveryProgress.questionsCompleted}/6:`);
+                console.log(`   Question: ${currentQ.question}`);
                 console.log(`   Answer: "${userMessage.trim()}"`);
-                console.log(`   Field: ${pattern.field}`);
-                
-                // Mark question as asked
-                discoveryProgress.questionsAsked.add(pattern.index);
+                console.log(`   Field: ${currentQ.field}`);
               }
-            });
-          }
-          
-          // Also check if the second-to-last message was a question (in case of rapid responses)
-          if (!questionDetected && secondLastMessage && secondLastMessage.role === 'assistant') {
-            const botContent = secondLastMessage.content.toLowerCase();
-            console.log(`🔍 Also checking previous bot message: "${secondLastMessage.content}"`);
-            
-            const questionPatterns = [
-              {keywords: ['hear about', 'find us', 'found us'], index: 0, field: 'How did you hear about us'},
-              {keywords: ['industry', 'business', 'line of business'], index: 1, field: 'Business/Industry'},
-              {keywords: ['main product', 'product', 'service'], index: 2, field: 'Main product'},
-              {keywords: ['ads', 'advertising', 'marketing'], index: 3, field: 'Running ads'},
-              {keywords: ['crm', 'management system'], index: 4, field: 'Using CRM'},
-              {keywords: ['pain points', 'problems', 'challenges'], index: 5, field: 'Pain points'}
-            ];
-            
-            questionPatterns.forEach(pattern => {
-              if (pattern.keywords.some(keyword => botContent.includes(keyword))) {
-                discoveryData[`question_${pattern.index}`] = userMessage.trim();
-                discoveryData[pattern.field] = userMessage.trim();
-                discoveryProgress.questionsAsked.add(pattern.index);
-                console.log(`✅ CAPTURED DELAYED ANSWER TO QUESTION ${pattern.index}: "${userMessage.trim()}"`);
-              }
-            });
+            }
           }
         }
-        
-        // Log current state after capture attempt
-        console.log('📊 Discovery data after capture attempt:', JSON.stringify(discoveryData, null, 2));
-        console.log('📊 Questions asked so far:', Array.from(discoveryProgress.questionsAsked));
-        console.log('📊 Total questions captured:', Object.keys(discoveryData).length);
 
-        // Check for scheduling preference
-        if (userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today)\b/)) {
-          console.log('🗓️ User mentioned scheduling');
+        // Check if all discovery questions are completed
+        discoveryProgress.allQuestionsCompleted = discoveryProgress.questionsCompleted >= 6;
+        
+        console.log(`📊 Discovery Status: ${discoveryProgress.questionsCompleted}/6 questions completed`);
+        console.log('📋 Current discovery data:', JSON.stringify(discoveryData, null, 2));
+
+        // Check for scheduling preference (only after all questions are answered)
+        let schedulingDetected = false;
+        if (discoveryProgress.allQuestionsCompleted && 
+            userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today)\b/)) {
+          
+          console.log('🗓️ User mentioned scheduling after completing discovery');
           
           const dayInfo = handleSchedulingPreference(userMessage);
           
           if (dayInfo && !webhookSent) {
             bookingInfo.preferredDay = dayInfo.dayName;
-            console.log('🗓️ Detected preferred day:', bookingInfo.preferredDay);
-            
-            // IMMEDIATE webhook send when scheduling detected
-            console.log('🚀 IMMEDIATE WEBHOOK SEND - Scheduling detected');
-            console.log('📋 Final discovery data being sent:', JSON.stringify(discoveryData, null, 2));
-            
-            const result = await sendSchedulingPreference(
-              bookingInfo.name || connectionData.customerName || '',
-              bookingInfo.email || connectionData.customerEmail || '',
-              bookingInfo.phone || connectionData.customerPhone || '',
-              bookingInfo.preferredDay,
-              connectionData.callId,
-              discoveryData
-            );
-            
-            if (result.success) {
-              webhookSent = true;
-              conversationState = 'completed';
-              console.log('✅ Webhook sent successfully on scheduling detection');
-            }
+            schedulingDetected = true;
           }
         }
 
@@ -1011,15 +922,12 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
         // Add bot reply to conversation history
         conversationHistory.push({ role: 'assistant', content: botReply });
 
-        // Enhanced discovery tracking based on bot reply
-        const discoveryComplete = trackDiscoveryQuestions(botReply, discoveryProgress, discoveryQuestions);
-        
         // Update conversation state
         if (conversationState === 'introduction') {
           conversationState = 'discovery';
-        } else if (conversationState === 'discovery' && discoveryComplete) {
+        } else if (conversationState === 'discovery' && discoveryProgress.allQuestionsCompleted) {
           conversationState = 'booking';
-          console.log('🔄 Transitioning to booking state');
+          console.log('🔄 Transitioning to booking state - all discovery questions completed');
         }
 
         // Send the AI response
@@ -1030,42 +938,39 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
           response_id: parsed.response_id
         }));
         
-        // ENHANCED: Send webhook immediately if we have sufficient discovery data
-        if (!webhookSent && Object.keys(discoveryData).length >= 3 && 
-            (bookingInfo.email || connectionData.customerEmail)) {
+        // FIXED: Only send webhook when ALL discovery questions are completed AND scheduling is detected
+        if (schedulingDetected && discoveryProgress.allQuestionsCompleted && !webhookSent) {
+          console.log('🚀 SENDING WEBHOOK - All conditions met:');
+          console.log('   ✅ All 6 discovery questions completed');
+          console.log('   ✅ Scheduling preference detected');
+          console.log('   ✅ Contact info available');
+          console.log('📋 Final discovery data being sent:', JSON.stringify(discoveryData, null, 2));
           
-          // Check if we have at least 3 meaningful answers
-          const meaningfulAnswers = Object.values(discoveryData).filter(answer => 
-            answer && typeof answer === 'string' && answer.trim().length > 2
-          ).length;
+          const result = await sendSchedulingPreference(
+            bookingInfo.name || connectionData.customerName || '',
+            bookingInfo.email || connectionData.customerEmail || '',
+            bookingInfo.phone || connectionData.customerPhone || '',
+            bookingInfo.preferredDay,
+            connectionData.callId,
+            discoveryData
+          );
           
-          if (meaningfulAnswers >= 3) {
-            console.log('🚀 PROACTIVE WEBHOOK SEND - Sufficient discovery data collected');
-            console.log('📋 Sending discovery data:', JSON.stringify(discoveryData, null, 2));
-            
-            await sendSchedulingPreference(
-              bookingInfo.name || connectionData.customerName || '',
-              bookingInfo.email || connectionData.customerEmail || '',
-              bookingInfo.phone || connectionData.customerPhone || '',
-              bookingInfo.preferredDay || 'Continuing conversation',
-              connectionData.callId,
-              discoveryData
-            );
-            
+          if (result.success) {
             webhookSent = true;
-            console.log('✅ Proactive webhook sent successfully');
+            conversationState = 'completed';
+            console.log('✅ Webhook sent successfully with all discovery data');
           }
         }
-        
       }
     } catch (error) {
       console.error('❌ Error handling message:', error.message);
       
-      // Emergency webhook send with whatever data we have
+      // Emergency webhook send only if we have substantial discovery data
       if (!webhookSent && connectionData.callId && 
-          (bookingInfo.email || connectionData.customerEmail)) {
+          (bookingInfo.email || connectionData.customerEmail) &&
+          discoveryProgress.questionsCompleted >= 3) {
         try {
-          console.log('🚨 EMERGENCY WEBHOOK SEND due to error');
+          console.log('🚨 EMERGENCY WEBHOOK SEND - Partial discovery data available');
           await sendSchedulingPreference(
             bookingInfo.name || connectionData.customerName || '',
             bookingInfo.email || connectionData.customerEmail || '',
@@ -1097,25 +1002,23 @@ Remember: You MUST ask ALL SIX discovery questions before scheduling. Complete e
     
     console.log('=== FINAL CONNECTION CLOSE ANALYSIS ===');
     console.log('📋 Final discoveryData:', JSON.stringify(discoveryData, null, 2));
-    console.log('📊 Total answers captured:', Object.keys(discoveryData).length);
-    console.log('👤 Customer info:', {
-      email: connectionData.customerEmail || bookingInfo.email,
-      name: connectionData.customerName || bookingInfo.name,
-      phone: connectionData.customerPhone || bookingInfo.phone
-    });
-    console.log('📞 Call ID:', connectionData.callId);
-    console.log('📧 Webhook sent:', webhookSent);
+    console.log('📊 Questions completed:', discoveryProgress.questionsCompleted);
+    console.log('📊 All questions completed:', discoveryProgress.allQuestionsCompleted);
     
-    // ALWAYS attempt to send webhook on close if we haven't sent it yet
-    if (!webhookSent && connectionData.callId) {
+    // Detailed breakdown of each question
+    discoveryQuestions.forEach((q, index) => {
+      console.log(`Question ${index + 1}: Asked=${q.asked}, Answered=${q.answered}, Answer="${q.answer}"`);
+    });
+    
+    // FINAL webhook attempt only if we have meaningful data and haven't sent yet
+    if (!webhookSent && connectionData.callId && discoveryProgress.questionsCompleted >= 2) {
       try {
-        // Get final customer info
         const finalEmail = connectionData.customerEmail || bookingInfo.email || '';
         const finalName = connectionData.customerName || bookingInfo.name || '';
         const finalPhone = connectionData.customerPhone || bookingInfo.phone || '';
         
         console.log('🚨 FINAL WEBHOOK ATTEMPT on connection close');
-        console.log('📋 Sending final discovery data:', JSON.stringify(discoveryData, null, 2));
+        console.log(`📊 Sending with ${discoveryProgress.questionsCompleted}/6 questions completed`);
         
         await sendSchedulingPreference(
           finalName,
