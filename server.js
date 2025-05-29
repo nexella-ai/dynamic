@@ -863,7 +863,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
         console.log('🔄 Current conversation state:', conversationState);
         console.log('📊 Discovery progress:', discoveryProgress);
 
-        // FIXED: Better discovery question tracking (minimal changes to keep original logic)
+        // FIXED: More accurate question detection to prevent repeats
         if (conversationHistory.length >= 2) {
           const lastBotMessage = conversationHistory[conversationHistory.length - 1];
           
@@ -871,37 +871,49 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
             const botContent = lastBotMessage.content.toLowerCase();
             discoveryProgress.lastBotMessage = botContent;
             
-            // Check if bot asked ANY discovery question
-            let questionAsked = false;
+            // Check if bot asked ANY discovery question that hasn't been asked yet
             discoveryQuestions.forEach((q, index) => {
               if (!q.asked) {
-                // Enhanced keyword matching - especially for CRM and pain points
                 let keywordMatch = false;
-                if (index === 4) { // CRM question (index 4)
-                  keywordMatch = botContent.includes('crm') || 
-                                botContent.includes('customer relationship') ||
-                                botContent.includes('management system') ||
-                                botContent.includes('using any') ||
-                                botContent.includes('system');
-                } else if (index === 5) { // Pain points question (index 5)
-                  keywordMatch = botContent.includes('pain point') || 
-                                botContent.includes('challenge') || 
-                                botContent.includes('problem') || 
-                                botContent.includes('difficult') ||
-                                botContent.includes('struggle') ||
-                                botContent.includes('biggest') ||
-                                botContent.includes('issue');
-                } else {
-                  keywordMatch = q.keywords.some(keyword => botContent.includes(keyword));
+                
+                // More specific keyword matching to avoid false positives
+                switch(index) {
+                  case 0: // How did you hear about us?
+                    keywordMatch = (botContent.includes('hear about') && botContent.includes('us')) ||
+                                  (botContent.includes('find') && botContent.includes('us')) ||
+                                  (botContent.includes('discover') && botContent.includes('us'));
+                    break;
+                  case 1: // What industry or business are you in?
+                    keywordMatch = (botContent.includes('industry') || botContent.includes('business')) &&
+                                  (botContent.includes('are you') || botContent.includes('do you'));
+                    break;
+                  case 2: // What's your main product or service?
+                    keywordMatch = (botContent.includes('main product') || botContent.includes('product or service')) ||
+                                  (botContent.includes('what') && (botContent.includes('sell') || botContent.includes('offer')));
+                    break;
+                  case 3: // Are you currently running any ads?
+                    keywordMatch = (botContent.includes('running') && botContent.includes('ads')) ||
+                                  (botContent.includes('advertising') && botContent.includes('currently'));
+                    break;
+                  case 4: // Are you using any CRM system?
+                    keywordMatch = (botContent.includes('crm') || 
+                                   (botContent.includes('using') && botContent.includes('system')) ||
+                                   botContent.includes('customer relationship'));
+                    break;
+                  case 5: // What are your biggest pain points or challenges?
+                    keywordMatch = (botContent.includes('pain point') || botContent.includes('pain points')) ||
+                                  (botContent.includes('challenge') && botContent.includes('biggest')) ||
+                                  (botContent.includes('problem') && botContent.includes('biggest'));
+                    break;
                 }
                 
                 if (keywordMatch) {
                   console.log(`✅ DETECTED: Question ${index + 1} was asked: "${q.question}"`);
+                  console.log(`   Bot message: "${botContent}"`);
                   q.asked = true;
                   discoveryProgress.waitingForAnswer = true;
                   discoveryProgress.currentQuestionIndex = index;
                   discoveryProgress.questionOrder.push(index);
-                  questionAsked = true;
                 }
               }
             });
@@ -923,11 +935,10 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
                 console.log(`   Answer: "${userMessage.trim()}"`);
                 console.log(`   Field: ${currentQ.field}`);
                 
-                // Debug: Show which questions are still unanswered
-                const unanswered = discoveryQuestions.filter(q => !q.answered);
-                console.log(`📋 Remaining questions: ${unanswered.length}`);
-                unanswered.forEach((q, i) => {
-                  console.log(`   ${i + 1}. ${q.question} (asked: ${q.asked})`);
+                // Debug: Show current status of all questions
+                console.log(`📋 QUESTION STATUS:`);
+                discoveryQuestions.forEach((q, i) => {
+                  console.log(`   Q${i + 1}: Asked=${q.asked}, Answered=${q.answered} - "${q.question}"`);
                 });
               }
             }
