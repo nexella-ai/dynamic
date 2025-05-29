@@ -187,20 +187,31 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
           formattedDiscoveryData['How did you hear about us'] = trimmedValue;
           console.log(`✅ Direct mapping: How did you hear about us = "${trimmedValue}"`);
         } else if (key === 'Business/Industry' || key.includes('business') || key.includes('industry')) {
-          formattedDiscoveryData['Business/Industry'] = trimmedValue;
-          console.log(`✅ Direct mapping: Business/Industry = "${trimmedValue}"`);
+          // Only map if we don't already have it from question_1
+          if (!formattedDiscoveryData['Business/Industry']) {
+            formattedDiscoveryData['Business/Industry'] = trimmedValue;
+            console.log(`✅ Direct mapping: Business/Industry = "${trimmedValue}"`);
+          }
         } else if (key === 'Main product' || key.includes('product')) {
-          formattedDiscoveryData['Main product'] = trimmedValue;
-          console.log(`✅ Direct mapping: Main product = "${trimmedValue}"`);
+          if (!formattedDiscoveryData['Main product']) {
+            formattedDiscoveryData['Main product'] = trimmedValue;
+            console.log(`✅ Direct mapping: Main product = "${trimmedValue}"`);
+          }
         } else if (key === 'Running ads' || key.includes('ads') || key.includes('advertising')) {
-          formattedDiscoveryData['Running ads'] = trimmedValue;
-          console.log(`✅ Direct mapping: Running ads = "${trimmedValue}"`);
+          if (!formattedDiscoveryData['Running ads']) {
+            formattedDiscoveryData['Running ads'] = trimmedValue;
+            console.log(`✅ Direct mapping: Running ads = "${trimmedValue}"`);
+          }
         } else if (key === 'Using CRM' || key.includes('crm')) {
-          formattedDiscoveryData['Using CRM'] = trimmedValue;
-          console.log(`✅ Direct mapping: Using CRM = "${trimmedValue}"`);
+          if (!formattedDiscoveryData['Using CRM']) {
+            formattedDiscoveryData['Using CRM'] = trimmedValue;
+            console.log(`✅ Direct mapping: Using CRM = "${trimmedValue}"`);
+          }
         } else if (key === 'Pain points' || key.includes('pain') || key.includes('problem') || key.includes('challenge')) {
-          formattedDiscoveryData['Pain points'] = trimmedValue;
-          console.log(`✅ Direct mapping: Pain points = "${trimmedValue}"`);
+          if (!formattedDiscoveryData['Pain points']) {
+            formattedDiscoveryData['Pain points'] = trimmedValue;
+            console.log(`✅ Direct mapping: Pain points = "${trimmedValue}"`);
+          }
         } else {
           // Keep original key if it doesn't match any pattern
           formattedDiscoveryData[key] = trimmedValue;
