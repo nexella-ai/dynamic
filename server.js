@@ -12,7 +12,7 @@ app.use(express.json());
 
 // Ensure we have the required environment variables
 if (!process.env.TRIGGER_SERVER_URL) {
-  process.env. TRIGGER_SERVER_URL = 'https://trigger-server-qt7u.onrender.com';
+  process.env.TRIGGER_SERVER_URL = 'https://trigger-server-qt7u.onrender.com';
 }
 if (!process.env.N8N_WEBHOOK_URL) {
   process.env.N8N_WEBHOOK_URL = 'https://n8n-clp2.onrender.com/webhook/retell-scheduling';
@@ -32,7 +32,6 @@ const activeCallsMetadata = new Map();
 function storeContactInfoGlobally(name, email, phone, source = 'Unknown') {
   console.log(`📝 Storing contact info globally from ${source}:`, { name, email, phone });
   
-  // Always update if we have an email
   if (email && email.trim() !== '') {
     global.lastTypeformSubmission = {
       timestamp: new Date().toISOString(),
@@ -49,427 +48,76 @@ function storeContactInfoGlobally(name, email, phone, source = 'Unknown') {
   }
 }
 
-// For checking slot availability with our trigger server
-async function checkAvailability(startTime, endTime) {
+// Send final data to webhook
+async function sendFinalData(name, email, phone, preferredDay, callId, discoveryAnswers) {
   try {
-    const response = await axios.get(`${process.env.TRIGGER_SERVER_URL}/check-availability`, {
-      params: { startTime, endTime }
-    });
-    return response.data.available;
-  } catch (error) {
-    console.error('Error checking availability:', error.message);
-    return false;
-  }
-}
-
-// For getting available time slots from Calendly (through your trigger server)
-async function getAvailableTimeSlots(date) {
-  try {
-    const formattedDate = new Date(date).toISOString().split('T')[0];
-    const response = await axios.get(`${process.env.TRIGGER_SERVER_URL}/available-slots`, {
-      params: { date: formattedDate }
-    });
-    return response.data.availableSlots || [];
-  } catch (error) {
-    console.error('Error getting available slots:', error.message);
-    return [];
-  }
-}
-
-// Update conversation state in trigger server
-async function updateConversationState(callId, discoveryComplete, preferredDay) {
-  try {
-    const response = await axios.post(`${process.env.TRIGGER_SERVER_URL}/update-conversation`, {
-      call_id: callId,
-      discoveryComplete,
-      preferredDay
-    });
-    console.log(`Updated conversation state for call ${callId}:`, response.data);
-    return response.data.success;
-  } catch (error) {
-    console.error('Error updating conversation state:', error);
-    return false;
-  }
-}
-
-// ENHANCED: Send scheduling data with proper email handling - MULTIPLE SOURCES
-async function sendSchedulingPreference(name, email, phone, preferredDay, callId, discoveryData = {}) {
-  try {
-    console.log('=== ENHANCED WEBHOOK SENDING DEBUG ===');
-    console.log('Input parameters:', { name, email, phone, preferredDay, callId });
-    console.log('Raw discovery data input:', JSON.stringify(discoveryData, null, 2));
-    console.log('Discovery data keys:', Object.keys(discoveryData));
-    console.log('Global Typeform submission:', global.lastTypeformSubmission);
+    console.log('📤 Sending final data to webhook');
+    console.log('Discovery answers:', discoveryAnswers);
     
-    // ENHANCED: Try multiple methods to get email
-    let finalEmail = email;
-    let finalName = name;
-    let finalPhone = phone;
-    
-    // Method 1: Use provided email if valid
-    if (finalEmail && finalEmail.trim() !== '') {
-      console.log(`Using provided email: ${finalEmail}`);
-    }
-    // Method 2: Get from global Typeform submission
-    else if (global.lastTypeformSubmission && global.lastTypeformSubmission.email) {
-      finalEmail = global.lastTypeformSubmission.email;
-      console.log(`Using email from global Typeform: ${finalEmail}`);
-    }
-    // Method 3: Get from call metadata if available
-    else if (callId && activeCallsMetadata.has(callId)) {
-      const callMetadata = activeCallsMetadata.get(callId);
-      if (callMetadata && callMetadata.customer_email) {
-        finalEmail = callMetadata.customer_email;
-        console.log(`Using email from call metadata: ${finalEmail}`);
-      }
-    }
-    
-    // Enhanced name and phone retrieval
-    if (!finalName || finalName.trim() === '') {
-      if (global.lastTypeformSubmission && global.lastTypeformSubmission.name) {
-        finalName = global.lastTypeformSubmission.name;
-      } else if (callId && activeCallsMetadata.has(callId)) {
-        const callMetadata = activeCallsMetadata.get(callId);
-        if (callMetadata && callMetadata.customer_name) {
-          finalName = callMetadata.customer_name;
-        }
-      }
-    }
-    
-    if (!finalPhone || finalPhone.trim() === '') {
-      if (global.lastTypeformSubmission && global.lastTypeformSubmission.phone) {
-        finalPhone = global.lastTypeformSubmission.phone;
-      } else if (callId && activeCallsMetadata.has(callId)) {
-        const callMetadata = activeCallsMetadata.get(callId);
-        if (callMetadata && (callMetadata.phone || callMetadata.to_number)) {
-          finalPhone = callMetadata.phone || callMetadata.to_number;
-        }
-      }
-    }
-    
-    console.log(`Final contact info - Email: "${finalEmail}", Name: "${finalName}", Phone: "${finalPhone}"`);
-    
-    // CRITICAL: Don't proceed if we still don't have an email
-    if (!finalEmail || finalEmail.trim() === '') {
-      console.error('❌ CRITICAL: No email found from any source. Cannot send webhook.');
-      return { success: false, error: 'No email address available' };
-    }
-    
-    // ENHANCED: Process discovery data with better field mapping
-    console.log('🔧 PROCESSING DISCOVERY DATA:');
-    console.log('Raw discoveryData input:', JSON.stringify(discoveryData, null, 2));
-    
-    // Initialize formatted discovery data
-    const formattedDiscoveryData = {};
-    
-    // FIXED: Define field mappings from question keys to Airtable field names
-    const fieldMappings = {
-      'question_0': 'How did you hear about us',     // INDEX 0 = How did you hear about us
-      'question_1': 'Business/Industry',             // INDEX 1 = Business/Industry  
-      'question_2': 'Main product',                  // INDEX 2 = Main product
-      'question_3': 'Running ads',                   // INDEX 3 = Running ads
-      'question_4': 'Using CRM',                     // INDEX 4 = Using CRM
-      'question_5': 'Pain points'                    // INDEX 5 = Pain points
-    };
-    
-    // Process all discovery data
-    Object.entries(discoveryData).forEach(([key, value]) => {
-      console.log(`🔧 Processing key: "${key}" with value: "${value}"`);
-      
-      if (value && typeof value === 'string' && value.trim() !== '') {
-        const trimmedValue = value.trim();
-        
-        if (key.startsWith('question_') && fieldMappings[key]) {
-          // FIXED: Map question_X to the correct Airtable field name based on index
-          formattedDiscoveryData[fieldMappings[key]] = trimmedValue;
-          console.log(`✅ Mapped ${key} -> "${fieldMappings[key]}" = "${trimmedValue}"`);
-        } else if (key === 'How did you hear about us' || key.includes('hear about')) {
-          formattedDiscoveryData['How did you hear about us'] = trimmedValue;
-          console.log(`✅ Direct mapping: How did you hear about us = "${trimmedValue}"`);
-        } else if (key === 'Business/Industry' || key.includes('business') || key.includes('industry')) {
-          // Only map if we don't already have it from question_1
-          if (!formattedDiscoveryData['Business/Industry']) {
-            formattedDiscoveryData['Business/Industry'] = trimmedValue;
-            console.log(`✅ Direct mapping: Business/Industry = "${trimmedValue}"`);
-          }
-        } else if (key === 'Main product' || key.includes('product')) {
-          if (!formattedDiscoveryData['Main product']) {
-            formattedDiscoveryData['Main product'] = trimmedValue;
-            console.log(`✅ Direct mapping: Main product = "${trimmedValue}"`);
-          }
-        } else if (key === 'Running ads' || key.includes('ads') || key.includes('advertising')) {
-          if (!formattedDiscoveryData['Running ads']) {
-            formattedDiscoveryData['Running ads'] = trimmedValue;
-            console.log(`✅ Direct mapping: Running ads = "${trimmedValue}"`);
-          }
-        } else if (key === 'Using CRM' || key.includes('crm')) {
-          if (!formattedDiscoveryData['Using CRM']) {
-            formattedDiscoveryData['Using CRM'] = trimmedValue;
-            console.log(`✅ Direct mapping: Using CRM = "${trimmedValue}"`);
-          }
-        } else if (key === 'Pain points' || key.includes('pain') || key.includes('problem') || key.includes('challenge')) {
-          if (!formattedDiscoveryData['Pain points']) {
-            formattedDiscoveryData['Pain points'] = trimmedValue;
-            console.log(`✅ Direct mapping: Pain points = "${trimmedValue}"`);
-          }
-        } else {
-          // Keep original key if it doesn't match any pattern
-          formattedDiscoveryData[key] = trimmedValue;
-          console.log(`📝 Keeping original key: ${key} = "${trimmedValue}"`);
-        }
-      }
-    });
-    
-    console.log('🔧 FINAL FORMATTED DISCOVERY DATA:', JSON.stringify(formattedDiscoveryData, null, 2));
-    console.log('📊 Total discovery fields captured:', Object.keys(formattedDiscoveryData).length);
-    
-    // Validate the mapping worked correctly
-    console.log('🔍 VALIDATION - Expected answers:');
-    console.log(`  - How did you hear about us: "${formattedDiscoveryData['How did you hear about us'] || 'MISSING'}"`);
-    console.log(`  - Business/Industry: "${formattedDiscoveryData['Business/Industry'] || 'MISSING'}"`);
-    console.log(`  - Main product: "${formattedDiscoveryData['Main product'] || 'MISSING'}"`);
-    console.log(`  - Running ads: "${formattedDiscoveryData['Running ads'] || 'MISSING'}"`);
-    console.log(`  - Using CRM: "${formattedDiscoveryData['Using CRM'] || 'MISSING'}"`);
-    console.log(`  - Pain points: "${formattedDiscoveryData['Pain points'] || 'MISSING'}"`);
-    
-    // Ensure phone number is formatted properly
-    if (finalPhone && !finalPhone.startsWith('+')) {
-      finalPhone = '+1' + finalPhone.replace(/[^0-9]/g, '');
-    }
-    
-    // Create the webhook payload
     const webhookData = {
-      name: finalName || '',
-      email: finalEmail, // This is now guaranteed to have a value
-      phone: finalPhone || '',
+      name: name || '',
+      email: email || '',
+      phone: phone || '',
       preferredDay: preferredDay || '',
       call_id: callId || '',
       schedulingComplete: true,
-      discovery_data: formattedDiscoveryData,
-      formatted_discovery: formattedDiscoveryData, // Send both for compatibility
-      // Also include individual fields for direct access
-      "How did you hear about us": formattedDiscoveryData["How did you hear about us"] || '',
-      "Business/Industry": formattedDiscoveryData["Business/Industry"] || '',
-      "Main product": formattedDiscoveryData["Main product"] || '',
-      "Running ads": formattedDiscoveryData["Running ads"] || '',
-      "Using CRM": formattedDiscoveryData["Using CRM"] || '',
-      "Pain points": formattedDiscoveryData["Pain points"] || ''
+      "How did you hear about us": discoveryAnswers[0] || '',
+      "Business/Industry": discoveryAnswers[1] || '',
+      "Main product": discoveryAnswers[2] || '',
+      "Running ads": discoveryAnswers[3] || '',
+      "Using CRM": discoveryAnswers[4] || '',
+      "Pain points": discoveryAnswers[5] || ''
     };
     
-    console.log('📤 COMPLETE WEBHOOK PAYLOAD:', JSON.stringify(webhookData, null, 2));
-    console.log('✅ Sending scheduling preference to trigger server');
+    console.log('📤 Webhook payload:', JSON.stringify(webhookData, null, 2));
     
-    const response = await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, webhookData, {
+    const response = await axios.post(`${process.env.TRIGGER_SERVER_URL}/process-scheduling-preference`, webhookData, {
       headers: { 'Content-Type': 'application/json' },
       timeout: 10000
     });
     
-    console.log('✅ Scheduling preference sent successfully:', response.data);
+    console.log('✅ Webhook sent successfully:', response.data);
     return { success: true, data: response.data };
     
   } catch (error) {
-    console.error('❌ Error sending scheduling preference:', error);
-    
-    // Enhanced fallback to n8n with same data processing
-    try {
-      console.log('🔄 Attempting to send directly to n8n webhook as fallback');
-      const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL || 'https://n8n-clp2.onrender.com/webhook/retell-scheduling';
-      
-      // Use the same processing logic for fallback
-      let fallbackEmail = email || (global.lastTypeformSubmission && global.lastTypeformSubmission.email) || '';
-      let fallbackName = name || (global.lastTypeformSubmission && global.lastTypeformSubmission.name) || '';
-      let fallbackPhone = phone || (global.lastTypeformSubmission && global.lastTypeformSubmission.phone) || '';
-      
-      if (callId && activeCallsMetadata.has(callId)) {
-        const callMetadata = activeCallsMetadata.get(callId);
-        fallbackEmail = fallbackEmail || callMetadata?.customer_email || '';
-        fallbackName = fallbackName || callMetadata?.customer_name || '';
-        fallbackPhone = fallbackPhone || callMetadata?.phone || callMetadata?.to_number || '';
-      }
-      
-      // Process discovery data for fallback (same logic)
-      const formattedDiscoveryData = {};
-      const fieldMappings = {
-        'question_0': 'How did you hear about us',
-        'question_1': 'Business/Industry',
-        'question_2': 'Main product',
-        'question_3': 'Running ads',
-        'question_4': 'Using CRM',
-        'question_5': 'Pain points'
-      };
-      
-      Object.entries(discoveryData).forEach(([key, value]) => {
-        if (value && typeof value === 'string' && value.trim() !== '') {
-          const trimmedValue = value.trim();
-          if (key.startsWith('question_') && fieldMappings[key]) {
-            formattedDiscoveryData[fieldMappings[key]] = trimmedValue;
-          } else if (key === 'How did you hear about us' || key.includes('hear about')) {
-            formattedDiscoveryData['How did you hear about us'] = trimmedValue;
-          } else if (key === 'Business/Industry' || key.includes('business') || key.includes('industry')) {
-            formattedDiscoveryData['Business/Industry'] = trimmedValue;
-          } else if (key === 'Main product' || key.includes('product')) {
-            formattedDiscoveryData['Main product'] = trimmedValue;
-          } else if (key === 'Running ads' || key.includes('ads')) {
-            formattedDiscoveryData['Running ads'] = trimmedValue;
-          } else if (key === 'Using CRM' || key.includes('crm')) {
-            formattedDiscoveryData['Using CRM'] = trimmedValue;
-          } else if (key === 'Pain points' || key.includes('pain') || key.includes('problem')) {
-            formattedDiscoveryData['Pain points'] = trimmedValue;
-          } else {
-            formattedDiscoveryData[key] = trimmedValue;
-          }
-        }
-      });
-      
-      const fallbackWebhookData = {
-        name: fallbackName,
-        email: fallbackEmail,
-        phone: fallbackPhone,
-        preferredDay: preferredDay || '',
-        call_id: callId || '',
-        schedulingComplete: true,
-        discovery_data: formattedDiscoveryData,
-        formatted_discovery: formattedDiscoveryData,
-        "How did you hear about us": formattedDiscoveryData["How did you hear about us"] || '',
-        "Business/Industry": formattedDiscoveryData["Business/Industry"] || '',
-        "Main product": formattedDiscoveryData["Main product"] || '',
-        "Running ads": formattedDiscoveryData["Running ads"] || '',
-        "Using CRM": formattedDiscoveryData["Using CRM"] || '',
-        "Pain points": formattedDiscoveryData["Pain points"] || ''
-      };
-      
-      console.log('🔄 Fallback webhook data:', JSON.stringify(fallbackWebhookData, null, 2));
-      
-      const n8nResponse = await axios.post(n8nWebhookUrl, fallbackWebhookData, {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 10000
-      });
-      
-      console.log('✅ Successfully sent directly to n8n:', n8nResponse.data);
-      return { success: true, fallback: true };
-      
-    } catch (n8nError) {
-      console.error('❌ Error sending directly to n8n:', n8nError);
-      return { success: false, error: error.message };
-    }
+    console.error('❌ Error sending webhook:', error.message);
+    return { success: false, error: error.message };
   }
-}
-
-// IMPROVED: Better detection of scheduling preferences
-function handleSchedulingPreference(userMessage) {
-  // Extract day of week with better handling for various formats
-  const dayMatch = userMessage.match(/monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today/i);
-  const nextWeekMatch = userMessage.match(/next week/i);
-  
-  if (nextWeekMatch) {
-    // Handle "next week" specifically
-    let targetDate = new Date();
-    // Add 7 days to get to next week, then adjust to Monday
-    targetDate.setDate(targetDate.getDate() + 7);
-    
-    // Get next Monday (if we're already past Monday this week)
-    const dayOfWeek = targetDate.getDay();
-    const daysUntilMonday = (dayOfWeek === 0) ? 1 : (8 - dayOfWeek);
-    targetDate.setDate(targetDate.getDate() + daysUntilMonday - 7);
-    
-    return {
-      dayName: 'next week',
-      date: targetDate,
-      isSpecific: false
-    };
-  } else if (dayMatch) {
-    const preferredDay = dayMatch[0].toLowerCase();
-    
-    let targetDate = new Date();
-    
-    // Handle relative day references
-    if (preferredDay === 'tomorrow') {
-      targetDate.setDate(targetDate.getDate() + 1);
-      return {
-        dayName: 'tomorrow',
-        date: targetDate,
-        isSpecific: true
-      };
-    } else if (preferredDay === 'today') {
-      return {
-        dayName: 'today',
-        date: targetDate,
-        isSpecific: true
-      };
-    } else {
-      // Handle specific day of week
-      const daysOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-      const requestedDayIndex = daysOfWeek.findIndex(d => d === preferredDay);
-      
-      if (requestedDayIndex !== -1) {
-        const currentDay = targetDate.getDay();
-        let daysToAdd = requestedDayIndex - currentDay;
-        
-        // If the requested day is earlier in the week than today, go to next week
-        if (daysToAdd <= 0) {
-          daysToAdd += 7;
-        }
-        
-        targetDate.setDate(targetDate.getDate() + daysToAdd);
-        
-        return {
-          dayName: preferredDay,
-          date: targetDate,
-          isSpecific: true
-        };
-      }
-    }
-  }
-  
-  return null;
 }
 
 // HTTP Request - Trigger Retell Call
-// This endpoint initiates the call with Retell
 app.post('/trigger-retell-call', express.json(), async (req, res) => {
   try {
     const { name, email, phone, userId } = req.body;
     console.log(`Received request to trigger Retell call for ${name} (${email})`);
     
-    // Check if we have all required fields
     if (!email) {
       return res.status(400).json({ success: false, error: 'Email is required' });
     }
     
-    // Ensure we have a unique user ID
     const userIdentifier = userId || `user_${phone || Date.now()}`;
-    
-    // Log the incoming request data
     console.log('Call request data:', { name, email, phone, userIdentifier });
     
-    // ENHANCED: Store the data globally immediately
     storeContactInfoGlobally(name, email, phone, 'API Call');
     
-    // Set up metadata for the Retell call
-    // This is how we'll pass customer information to the voice agent
     const metadata = {
-      customer_name: name || '',  // Ensure name is passed to agent
-      customer_email: email,      // Always include email
-      customer_phone: phone || '' // Include phone if available
+      customer_name: name || '',
+      customer_email: email,
+      customer_phone: phone || ''
     };
     
-    // Log the metadata we're sending to Retell
     console.log('Setting up call with metadata:', metadata);
     
-    // Prevent fallback to "Monica" by setting a variable directly in the agent
     const initialVariables = {
       customer_name: name || '',
       customer_email: email
     };
     
-    // Make call to Retell API
     const response = await axios.post('https://api.retellai.com/v1/calls', 
       {
         agent_id: process.env.RETELL_AGENT_ID,
         customer_number: phone,
-        // Set LLM variables to pass customer info (may need Retell update to use)
         variables: initialVariables,
-        // Pass metadata which will be available in WebSocket connection
         metadata
       },
       {
@@ -496,1268 +144,200 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
   }
 });
 
-// Function to generate recap of all answers
-function generateDiscoveryRecap(discoveryData, discoveryQuestions) {
-  const answers = [];
-  
-  discoveryQuestions.forEach((q, index) => {
-    if (q.answered && q.answer) {
-      answers.push(`${index + 1}. ${q.question} - "${q.answer}"`);
-    } else {
-      answers.push(`${index + 1}. ${q.question} - No answer recorded`);
-    }
-  });
-  
-  const recap = `Perfect. Let me quickly recap what you've shared to make sure I have everything correct.
-
-${answers.join('\n')}
-
-Does all of that sound right to you.`;
-
-  return recap;
-}
-
-// Function to parse correction requests
-function parseCorrection(userMessage, discoveryQuestions) {
-  const msg = userMessage.toLowerCase();
-  
-  // Look for question numbers being referenced
-  const questionNumbers = ['1', '2', '3', '4', '5', '6', 'first', 'second', 'third', 'fourth', 'fifth', 'sixth'];
-  const wordToNumber = {
-    'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5, 'sixth': 6
-  };
-  
-  for (let i = 0; i < questionNumbers.length; i++) {
-    const num = questionNumbers[i];
-    if (msg.includes(num)) {
-      let questionIndex;
-      if (isNaN(num)) {
-        questionIndex = wordToNumber[num] - 1;
-      } else {
-        questionIndex = parseInt(num) - 1;
-      }
-      
-      if (questionIndex >= 0 && questionIndex < 6) {
-        return {
-          questionIndex: questionIndex,
-          question: discoveryQuestions[questionIndex].question,
-          field: discoveryQuestions[questionIndex].field
-        };
-      }
-    }
-  }
-  
-  // Look for field names being referenced
-  const fieldKeywords = {
-    'hear': 0, 'found': 0, 'instagram': 0, 'facebook': 0, 'google': 0,
-    'industry': 1, 'business': 1, 'company': 1,
-    'product': 2, 'service': 2, 'sell': 2,
-    'ads': 3, 'advertising': 3, 'marketing': 3,
-    'crm': 4, 'system': 4, 'software': 4,
-    'pain': 5, 'problem': 5, 'challenge': 5, 'issue': 5
-  };
-  
-  for (const [keyword, index] of Object.entries(fieldKeywords)) {
-    if (msg.includes(keyword)) {
-      return {
-        questionIndex: index,
-        question: discoveryQuestions[index].question,
-        field: discoveryQuestions[index].field
-      };
-    }
-  }
-  
-  return null;
-}
-
-// Enhanced greeting detection and response system
-function analyzeUserGreeting(userMessage) {
-  const msg = userMessage.toLowerCase().trim().replace('?', ''); // Remove question mark for analysis
-  
-  // Pattern 1: Simple greetings - ask how they're doing
-  const simpleGreetings = ['hi', 'hello', 'hey there', 'good morning', 'good afternoon', 'good evening'];
-  if (simpleGreetings.some(greeting => msg === greeting || msg.startsWith(greeting + ' '))) {
-    return {
-      type: 'simple',
-      response: "Hi there. This is Sarah from Nexella AI. How are you doing today."
-    };
-  }
-  
-  // Pattern 2: User asks how we're doing - respond positively then ask about them
-  const howAreYouPatterns = [
-    'how are you', 'how\'s it going', 'how are things', 'what\'s up', 
-    'how you doing', 'how\'s everything', 'how are you doing'
-  ];
-  if (howAreYouPatterns.some(pattern => msg.includes(pattern))) {
-    return {
-      type: 'asking_how_we_are',
-      response: "I'm doing great, thank you for asking. How are you doing today."
-    };
-  }
-  
-  // Pattern 3: Casual greetings - match their energy
-  const casualGreetings = ['hey', 'yo', 'sup', 'what\'s up'];
-  if (casualGreetings.some(greeting => msg.startsWith(greeting))) {
-    return {
-      type: 'casual',
-      response: "Hey. This is Sarah from Nexella AI. How's everything going with you."
-    };
-  }
-  
-  // Pattern 4: Business/direct start - skip pleasantries
-  const businessKeywords = [
-    'i need', 'i want', 'can you help', 'looking for', 'interested in',
-    'tell me about', 'i heard about', 'someone told me'
-  ];
-  if (businessKeywords.some(keyword => msg.includes(keyword))) {
-    return {
-      type: 'business_direct',
-      response: "Absolutely. I'm Sarah from Nexella AI and I'd be happy to help. Let me learn a bit about you and your business first. How did you hear about us."
-    };
-  }
-  
-  // Default: Friendly but unsure
-  return {
-    type: 'default',
-    response: "Hi there. This is Sarah from Nexella AI. How are you doing today."
-  };
-}
-
-// ENHANCED WEBSOCKET CONNECTION HANDLER - FIXED DISCOVERY SYSTEM WITH RECAP
+// SIMPLE WebSocket handler
 wss.on('connection', async (ws, req) => {
-  console.log('🔗 NEW WEBSOCKET CONNECTION ESTABLISHED');
-  console.log('Connection URL:', req.url);
+  console.log('🔗 NEW WEBSOCKET CONNECTION');
   
   // Extract call ID from URL
   const callIdMatch = req.url.match(/\/call_([a-f0-9]+)/);
   const callId = callIdMatch ? `call_${callIdMatch[1]}` : null;
+  console.log('📞 Call ID:', callId);
   
-  console.log('📞 Extracted Call ID:', callId);
-  
-  // Store connection data with this WebSocket
-  const connectionData = {
-    callId: callId,
-    metadata: null,
-    customerEmail: null,
-    customerName: null,
-    customerPhone: null,
-    isOutboundCall: false,
-    isAppointmentConfirmation: false
-  };
-
-  // Try to fetch call metadata but don't block if it fails
-  if (callId) {
-    try {
-      console.log('🔍 Fetching metadata for call:', callId);
-      const TRIGGER_SERVER_URL = process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com';
-      
-      // Try multiple possible endpoints
-      const possibleEndpoints = [
-        `${TRIGGER_SERVER_URL}/api/get-call-data/${callId}`,
-        `${TRIGGER_SERVER_URL}/get-call-info/${callId}`,
-        `${TRIGGER_SERVER_URL}/call-data/${callId}`,
-        `${TRIGGER_SERVER_URL}/api/call/${callId}`
-      ];
-      
-      let metadataFetched = false;
-      for (const endpoint of possibleEndpoints) {
-        try {
-          console.log(`Trying endpoint: ${endpoint}`);
-          const response = await fetch(endpoint, { 
-            timeout: 3000,
-            headers: {
-              'Content-Type': 'application/json'
-            }
-          });
-          if (response.ok) {
-            const callData = await response.json();
-            console.log('📋 Retrieved call metadata:', callData);
-            
-            // Handle nested response structure
-            const actualData = callData.data || callData;
-            connectionData.metadata = actualData;
-            
-            // Extract data from metadata - handle both direct and nested structure
-            connectionData.customerEmail = actualData.email || actualData.customer_email || actualData.user_email || 
-                                         (actualData.metadata && actualData.metadata.customer_email);
-            connectionData.customerName = actualData.name || actualData.customer_name || actualData.user_name ||
-                                        (actualData.metadata && actualData.metadata.customer_name);
-            connectionData.customerPhone = actualData.phone || actualData.customer_phone || actualData.to_number ||
-                                         (actualData.metadata && actualData.metadata.customer_phone);
-            
-            console.log('📧 Extracted from metadata:', {
-              email: connectionData.customerEmail,
-              name: connectionData.customerName,
-              phone: connectionData.customerPhone
-            });
-            
-            // Check if this is an appointment confirmation call
-            if (callData.call_type === 'appointment_confirmation') {
-              connectionData.isAppointmentConfirmation = true;
-              console.log('📅 This is an APPOINTMENT CONFIRMATION call');
-            }
-            
-            metadataFetched = true;
-            break;
-          }
-        } catch (endpointError) {
-          console.log(`Endpoint ${endpoint} failed:`, endpointError.message);
-        }
-      }
-      
-      if (!metadataFetched) {
-        console.log('⚠️ Could not fetch metadata from any endpoint - will try to get from WebSocket messages');
-      }
-      
-    } catch (error) {
-      console.log('❌ Error fetching call metadata:', error.message);
-      console.log('🔄 Will extract data from WebSocket messages instead');
-    }
-  }
-  
-  console.log('Retell connected via WebSocket.');
-  
-  // FIXED: Discovery questions system with proper tracking
-  const discoveryQuestions = [
-    {
-      question: 'How did you hear about us?',
-      field: 'How did you hear about us',
-      keywords: ['hear about', 'find us', 'found us', 'discover us', 'learn about', 'how did you hear'],
-      asked: false,
-      answered: false,
-      answer: ''
-    },
-    {
-      question: 'What industry or business are you in?',
-      field: 'Business/Industry',
-      keywords: ['industry', 'business', 'line of business', 'company', 'what do you do', 'work in'],
-      asked: false,
-      answered: false,
-      answer: ''
-    },
-    {
-      question: 'What\'s your main product or service?',
-      field: 'Main product',
-      keywords: ['main product', 'product', 'service', 'sell', 'offer', 'provide'],
-      asked: false,
-      answered: false,
-      answer: ''
-    },
-    {
-      question: 'Are you currently running any ads?',
-      field: 'Running ads',
-      keywords: ['ads', 'advertising', 'marketing', 'running ads', 'meta', 'google', 'facebook'],
-      asked: false,
-      answered: false,
-      answer: ''
-    },
-    {
-      question: 'Are you using any CRM system?',
-      field: 'Using CRM',
-      keywords: ['crm', 'gohighlevel', 'management system', 'customer relationship', 'software'],
-      asked: false,
-      answered: false,
-      answer: ''
-    },
-    {
-      question: 'What are your biggest pain points or challenges?',
-      field: 'Pain points',
-      keywords: ['pain points', 'problems', 'challenges', 'issues', 'difficulties', 'struggling', 'biggest challenge', 'pain point'],
-      asked: false,
-      answered: false,
-      answer: ''
-    }
-  ];
-  
-  let discoveryProgress = {
-    currentQuestionIndex: -1, // Start at -1 so first question becomes 0
-    questionsCompleted: 0,
-    allQuestionsCompleted: false,
-    lastBotMessage: '',
-    waitingForAnswer: false,
-    questionOrder: [], // Track the order questions were asked
-    recapPresented: false,
-    recapConfirmed: false,
-    needsCorrection: false,
-    correctingQuestionIndex: -1
-  };
-
-  // Enhanced conversation states
-  let conversationState = 'greeting'; // greeting -> discovery -> recap -> correction -> booking -> completed
-  let greetingPhase = 'initial'; // initial -> how_are_you -> transition -> discovery_start
-  let recapPhase = 'presenting'; // presenting -> awaiting_confirmation -> correcting
-  let lastProcessedMessage = ''; // Track last processed message to prevent duplicates
-
-  // UPDATED: Improved system prompt with better greeting flow and recap
-  let conversationHistory = [
-    {
-      role: 'system',
-      content: `You are a customer service/sales representative for Nexella.io named "Sarah". Always introduce yourself as Sarah from Nexella.
-
-CONVERSATION FLOW:
-1. GREETING PHASE: Respond naturally to their greeting style
-2. BRIEF CHAT: Engage in 1-2 exchanges about how they're doing  
-3. DISCOVERY PHASE: Ask all 6 discovery questions systematically
-4. RECAP PHASE: Repeat all answers back and ask for confirmation
-5. CORRECTION PHASE: If needed, correct any wrong answers
-6. SCHEDULING PHASE: Only after confirmation is complete
-
-GREETING GUIDELINES - RESPOND NATURALLY TO USER'S GREETING:
-1. If user says simple greetings like "hi", "hello", "hey there":
-   - Respond: "Hi there. This is Sarah from Nexella AI. How are you doing today."
-
-2. If user asks how you're doing ("hey how's it going", "how are you", "what's up"):
-   - Respond: "I'm doing great, thank you for asking. How are you doing today."
-
-3. If user gives a casual greeting with context ("hey", "what's up", "yo"):
-   - Respond: "Hey. This is Sarah from Nexella AI. How's everything going with you."
-
-4. If user immediately starts talking business:
-   - Skip pleasantries and engage with their topic, then transition to discovery
-
-TRANSITION GUIDELINES:
-- After greeting exchange, transition naturally with:
-  "That's great to hear! I'd love to learn a bit more about you and your business so I can better help you today."
-- Then start with the first discovery question
-
-DISCOVERY QUESTIONS (ask in this EXACT order - use periods, not question marks):
-1. "How did you hear about us."
-2. "What industry or business are you in."
-3. "What's your main product or service."
-4. "Are you currently running any ads."
-5. "Are you using any CRM system."
-6. "What are your biggest pain points or challenges."
-
-RECAP PHASE GUIDELINES:
-- After all 6 questions are answered, present a numbered recap
-- List each question with their exact answer
-- Ask "Does all of that sound right to you." (use period, not question mark)
-- Wait for their confirmation before proceeding
-
-CORRECTION PHASE GUIDELINES:
-- If they say answers are wrong, ask which specific question needs correction
-- Re-ask only the question(s) that need correction
-- Update your records with the new answer
-- Present a new recap to confirm all changes
-- Only proceed to scheduling after final confirmation
-
-SPEAKING STYLE & PACING:
-- Speak at a SLOW, measured pace - never rush your words
-- Insert natural pauses between sentences using periods (.)
-- Complete all your sentences fully - never cut off mid-thought
-- Use shorter sentences rather than long, complex ones
-- Keep your statements and questions concise but complete
-- CRITICAL: Only use question marks (?) for actual questions that require an answer
-- Use periods (.) for statements, even if they're about asking questions
-- When ending with a period, maintain an even, calm tone throughout
-
-PERSONALITY & TONE:
-- Be warm and friendly but speak in a calm, measured way
-- Use a consistent, even speaking tone throughout the conversation
-- Use contractions and everyday language that sounds natural
-- Maintain a calm, professional demeanor at all times
-- IMPORTANT: Do NOT use exclamation marks (!) - they make you sound robotic
-- Keep tone even and measured, avoid dramatic emphasis
-- When making statements (ending with .), keep tone flat and professional
-- Only raise pitch/tone at the very end if ending with a question mark (?)
-
-SCHEDULING APPROACH:
-- ONLY after they confirm all answers are correct
-- Say: "Perfect. Now that I have all your information, let's schedule a call to discuss how we can help. What day would work best for you."
-
-Remember: Respond naturally to their greeting style, have brief pleasant conversation, then systematically complete ALL 6 discovery questions, do the recap and confirmation, before any scheduling discussion.`
-    }
-  ];
-
-  // States for conversation flow
-  let bookingInfo = {
-    name: connectionData.customerName || '',
-    email: connectionData.customerEmail || '',
-    phone: connectionData.customerPhone || '',
-    preferredDay: '',
-    schedulingLinkSent: false,
-    userId: `user_${Date.now()}`
-  };
-  let discoveryData = {}; // This will store the final answers
-  let collectedContactInfo = !!connectionData.customerEmail;
+  // Simple conversation state
+  let currentState = 'greeting'; // greeting -> discovery -> recap -> scheduling -> complete
+  let currentQuestionIndex = 0;
   let userHasSpoken = false;
+  let discoveryAnswers = ['', '', '', '', '', ''];
+  let customerName = '';
+  let customerEmail = '';
+  let customerPhone = '';
   let webhookSent = false;
+  
+  const questions = [
+    "How did you hear about us?",
+    "What industry or business are you in?", 
+    "What's your main product or service?",
+    "Are you currently running any ads?",
+    "Are you using any CRM system?",
+    "What are your biggest pain points or challenges?"
+  ];
 
-  // Send connecting message
-  ws.send(JSON.stringify({
-    content: "Hi there",
-    content_complete: true,
-    actions: [],
-    response_id: 0
-  }));
-
-  // Send auto-greeting after a short delay
+  // Auto-greeting
   setTimeout(() => {
     if (!userHasSpoken) {
-      console.log('🎙️ Sending auto-greeting message');
+      console.log('🎙️ Sending auto-greeting');
       ws.send(JSON.stringify({
-        content: "Hi there. This is Sarah from Nexella AI. How are you doing today.",
+        content: "Hi there. This is Sarah from Nexella AI. How are you doing today?",
         content_complete: true,
         actions: [],
         response_id: 1
       }));
     }
-  }, 2000); // Reduced to 2 seconds for faster response
+  }, 2000);
 
-  // Set a timer for auto-greeting if user doesn't speak first
-  const autoGreetingTimer = setTimeout(() => {
-    if (!userHasSpoken) {
-      console.log('🎙️ Sending backup auto-greeting');
-      ws.send(JSON.stringify({
-        content: "Hello. This is Sarah from Nexella AI. I'm here to help you today. How's everything going.",
-        content_complete: true,
-        actions: [],
-        response_id: 2
-      }));
-    }
-  }, 5000); // 5 seconds delay as backup
-
-  // ENHANCED: Message handling with better discovery tracking and recap system
   ws.on('message', async (data) => {
     try {
-      clearTimeout(autoGreetingTimer);
       userHasSpoken = true;
-      
       const parsed = JSON.parse(data);
-      console.log('📥 Raw WebSocket Message:', JSON.stringify(parsed, null, 2));
       
-      // Debug logging to see what we're receiving
-      console.log('WebSocket message type:', parsed.interaction_type || 'unknown');
-      if (parsed.call) {
-        console.log('Call data structure:', JSON.stringify(parsed.call, null, 2));
+      // Only process messages that need a response
+      if (parsed.interaction_type !== 'response_required') {
+        return;
       }
       
-      // Extract call info from WebSocket messages first
-      if (parsed.call && parsed.call.call_id) {
-        if (!connectionData.callId) {
-          connectionData.callId = parsed.call.call_id;
-          console.log(`🔗 Got call ID from WebSocket: ${connectionData.callId}`);
-        }
-        
-        // Extract metadata from call object
-        if (parsed.call.metadata) {
-          console.log('📞 Call metadata from WebSocket:', JSON.stringify(parsed.call.metadata, null, 2));
-          
-          if (!connectionData.customerEmail && parsed.call.metadata.customer_email) {
-            connectionData.customerEmail = parsed.call.metadata.customer_email;
-            bookingInfo.email = connectionData.customerEmail;
-            console.log(`✅ Got email from WebSocket metadata: ${connectionData.customerEmail}`);
-          }
-          
-          if (!connectionData.customerName && parsed.call.metadata.customer_name) {
-            connectionData.customerName = parsed.call.metadata.customer_name;
-            bookingInfo.name = connectionData.customerName;
-            console.log(`✅ Got name from WebSocket metadata: ${connectionData.customerName}`);
-          }
-          
-          if (!connectionData.customerPhone && (parsed.call.metadata.customer_phone || parsed.call.to_number)) {
-            connectionData.customerPhone = parsed.call.metadata.customer_phone || parsed.call.to_number;
-            bookingInfo.phone = connectionData.customerPhone;
-            console.log(`✅ Got phone from WebSocket metadata: ${connectionData.customerPhone}`);
-          }
-        }
-        
-        // Extract phone from call object if not in metadata
-        if (!connectionData.customerPhone && parsed.call.to_number) {
-          connectionData.customerPhone = parsed.call.to_number;
-          bookingInfo.phone = connectionData.customerPhone;
-          console.log(`✅ Got phone from call object: ${connectionData.customerPhone}`);
-        }
-        
-        // Store in active calls metadata map
-        activeCallsMetadata.set(connectionData.callId, {
-          customer_email: connectionData.customerEmail,
-          customer_name: connectionData.customerName,
-          phone: connectionData.customerPhone,
-          to_number: connectionData.customerPhone
-        });
-        
-        collectedContactInfo = !!connectionData.customerEmail;
-      }
+      const userMessage = parsed.transcript[parsed.transcript.length - 1]?.content || "";
+      if (!userMessage) return;
       
-      // ENHANCED: Get contact info when we connect to a call (BACKUP METHOD)
-      if (parsed.call && parsed.call.call_id && !collectedContactInfo) {
-        // FIRST: Try to get contact info from trigger server using call_id
-        try {
-          console.log('📞 Fetching contact info from trigger server...');
-          const triggerResponse = await axios.get(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/get-call-info/${connectionData.callId}`, {
-            timeout: 5000
-          });
-          
-          if (triggerResponse.data && triggerResponse.data.success) {
-            const callInfo = triggerResponse.data.data;
-            if (!bookingInfo.email) bookingInfo.email = callInfo.email || '';
-            if (!bookingInfo.name) bookingInfo.name = callInfo.name || '';
-            if (!bookingInfo.phone) bookingInfo.phone = callInfo.phone || '';
-            collectedContactInfo = true;
-            
-            console.log('✅ Got contact info from trigger server:', {
-              name: bookingInfo.name,
-              email: bookingInfo.email,
-              phone: bookingInfo.phone
-            });
-            
-            // Update system prompt with the actual customer name if we have it
-            if (bookingInfo.name) {
-              const systemPrompt = conversationHistory[0].content;
-              conversationHistory[0].content = systemPrompt
-                .replace(/\[Name\]/g, bookingInfo.name)
-                .replace(/Monica/g, bookingInfo.name);
-              console.log(`Updated system prompt with customer name: ${bookingInfo.name}`);
-            }
-          }
-        } catch (triggerError) {
-          console.log('⚠️ Could not fetch contact info from trigger server:', triggerError.message);
-        }
-      }
-
-      // PRIORITY: Handle user input immediately when detected
-      if (parsed.interaction_type === 'response_required' || (parsed.interaction_type === 'update_only' && parsed.transcript)) {
-        // For update_only messages, check if there's a new user utterance we haven't processed
-        let userMessage = "";
-        let shouldProcess = false;
+      console.log(`🗣️ User: "${userMessage}" | State: ${currentState} | Question: ${currentQuestionIndex}`);
+      
+      let botReply = "";
+      
+      // GREETING STATE
+      if (currentState === 'greeting') {
+        const msg = userMessage.toLowerCase();
         
-        if (parsed.interaction_type === 'response_required') {
-          const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
-          userMessage = latestUserUtterance?.content || "";
-          shouldProcess = true;
-          console.log('📥 Processing response_required message');
-        } else if (parsed.interaction_type === 'update_only') {
-          // Check if there's a user message we haven't processed yet
-          const userUtterances = parsed.transcript.filter(t => t.role === 'user');
-          if (userUtterances.length > 0) {
-            const lastUserMessage = userUtterances[userUtterances.length - 1];
-            // Process ANY user message in update_only if we're in greeting state
-            if (lastUserMessage && lastUserMessage.content && lastUserMessage.content.trim().length > 0) {
-              userMessage = lastUserMessage.content;
-              shouldProcess = true;
-              console.log('📥 Processing user message from update_only:', userMessage);
-            } else {
-              console.log('📥 update_only message - no valid user content');
-            }
+        // First greeting
+        if (msg.includes('hello') || msg.includes('hi') || msg.includes('hey')) {
+          botReply = "Hi there. This is Sarah from Nexella AI. How are you doing today?";
+        }
+        // Response to how are you
+        else if (msg.includes('good') || msg.includes('great') || msg.includes('fine') || msg.includes('well')) {
+          if (msg.includes('how are you')) {
+            botReply = "I'm doing great, thank you for asking! I'd love to learn about your business. " + questions[0];
           } else {
-            console.log('📥 update_only message - no user utterances found');
+            botReply = "That's wonderful to hear! I'd love to learn about your business. " + questions[0];
           }
+          currentState = 'discovery';
         }
+        // Other responses
+        else {
+          botReply = "Thanks for sharing! I'd love to learn about your business. " + questions[0];
+          currentState = 'discovery';
+        }
+      }
+      
+      // DISCOVERY STATE
+      else if (currentState === 'discovery') {
+        // Save the answer
+        discoveryAnswers[currentQuestionIndex] = userMessage.trim();
+        console.log(`✅ Saved answer ${currentQuestionIndex + 1}: "${userMessage}"`);
         
-        if (!shouldProcess || !userMessage || userMessage.trim().length === 0) {
-          console.log('📥 No valid user message to process, skipping');
-          return;
-        }
-
-        // CRITICAL: Prevent processing the same message multiple times
-        if (userMessage === lastProcessedMessage) {
-          console.log('📥 Duplicate message detected, skipping:', userMessage);
-          return;
-        }
-        lastProcessedMessage = userMessage;
-
-        console.log('🗣️ User said:', userMessage);
-        console.log('🔄 Current conversation state:', conversationState);
-        console.log('🔄 Current greeting phase:', greetingPhase);
-        console.log('🔄 Current recap phase:', recapPhase);
-        console.log('📊 Discovery progress:', discoveryProgress);
-
-        let botReply = ""; // Initialize botReply first!
-        console.log('🤖 About to set botReply, current value:', botReply);
-
-        // CRITICAL: If user says greeting words while in discovery state, reset to greeting
-        const msg = userMessage.toLowerCase().trim().replace('?', '');
-        const isGreeting = ['hi', 'hello', 'hey', 'hey there'].includes(msg);
+        // Move to next question
+        currentQuestionIndex++;
         
-        if (isGreeting && conversationState === 'discovery' && discoveryProgress.questionsCompleted === 0) {
-          console.log('🔄 RESETTING: User said greeting while in discovery state, resetting to greeting');
-          conversationState = 'greeting';
-          greetingPhase = 'initial';
-          // Reset discovery progress
-          discoveryProgress = {
-            currentQuestionIndex: -1,
-            questionsCompleted: 0,
-            allQuestionsCompleted: false,
-            lastBotMessage: '',
-            waitingForAnswer: false,
-            questionOrder: [],
-            recapPresented: false,
-            recapConfirmed: false,
-            needsCorrection: false,
-            correctingQuestionIndex: -1
-          };
-          // Reset discovery questions
-          discoveryQuestions.forEach(q => {
-            q.asked = false;
-            q.answered = false;
-            q.answer = '';
-          });
-          discoveryData = {};
-        }
-        
-        // Handle greeting phase with enhanced logic
-        if (conversationState === 'greeting') {
-          if (greetingPhase === 'initial') {
-            // This is their first real message - analyze and respond appropriately
-            const greetingAnalysis = analyzeUserGreeting(userMessage);
-            botReply = greetingAnalysis.response;
-            
-            console.log(`🎭 Greeting type detected: ${greetingAnalysis.type}`);
-            console.log(`🎭 Response: ${botReply}`);
-            
-            // Move to next phase based on greeting type
-            if (greetingAnalysis.type === 'business_direct') {
-              // Skip pleasantries, go straight to discovery
-              conversationState = 'discovery';
-              greetingPhase = 'discovery_start';
-              
-              // Mark first question as being asked
-              discoveryQuestions[0].asked = true;
-              discoveryProgress.waitingForAnswer = true;
-              discoveryProgress.currentQuestionIndex = 0;
-              discoveryProgress.questionOrder.push(0);
-            } else {
-              // Normal flow - wait for their response about how they're doing
-              greetingPhase = 'how_are_you';
-            }
-            
-          } else if (greetingPhase === 'how_are_you') {
-            // They responded to "how are you doing" - acknowledge and respond to their question if they asked
-            const msg = userMessage.toLowerCase();
-            
-            // Check if they asked how we're doing back
-            const askedHowWeAre = msg.includes('how are you') || msg.includes('how about you') || msg.includes('and you');
-            
-            // Acknowledge their response and potentially answer their question
-            if (msg.includes('good') || msg.includes('great') || msg.includes('fine') || msg.includes('well')) {
-              if (askedHowWeAre) {
-                botReply = "That's wonderful to hear. I'm doing great too, thank you for asking. I'd love to learn a bit more about you and your business so I can better help you today. How did you hear about us.";
-              } else {
-                botReply = "That's wonderful to hear. I'd love to learn a bit more about you and your business so I can better help you today. How did you hear about us.";
-              }
-            } else if (msg.includes('bad') || msg.includes('not good') || msg.includes('rough') || msg.includes('tough')) {
-              if (askedHowWeAre) {
-                botReply = "I'm sorry to hear that. I'm doing well, thank you for asking. Well, hopefully I can help brighten your day. Let me learn a bit about you and your business. How did you hear about us.";
-              } else {
-                botReply = "I'm sorry to hear that. Well, hopefully I can help brighten your day. Let me learn a bit about you and your business. How did you hear about us.";
-              }
-            } else if (msg.includes('busy') || msg.includes('hectic') || msg.includes('crazy')) {
-              if (askedHowWeAre) {
-                botReply = "I totally understand, life can get hectic. I'm doing well, thank you for asking. I'll keep this brief. Let me just learn a bit about your business. How did you hear about us.";
-              } else {
-                botReply = "I totally understand, life can get hectic. I'll keep this brief. Let me just learn a bit about your business. How did you hear about us.";
-              }
-            } else {
-              // Generic acknowledgment
-              if (askedHowWeAre) {
-                botReply = "Thanks for sharing. I'm doing great, thank you for asking. I'd love to learn a bit more about you and your business so I can better help you today. How did you hear about us.";
-              } else {
-                botReply = "Thanks for sharing. I'd love to learn a bit more about you and your business so I can better help you today. How did you hear about us.";
-              }
-            }
-            
-            // Transition to discovery
-            conversationState = 'discovery';
-            greetingPhase = 'discovery_start';
-            
-            // Mark first question as being asked
-            discoveryQuestions[0].asked = true;
-            discoveryProgress.waitingForAnswer = true;
-            discoveryProgress.currentQuestionIndex = 0;
-            discoveryProgress.questionOrder.push(0);
-            
-            console.log('🔄 Transitioning to discovery phase - first question asked');
+        if (currentQuestionIndex < questions.length) {
+          // Ask next question
+          botReply = "Thank you. " + questions[currentQuestionIndex];
+        } else {
+          // All questions done, show recap
+          currentState = 'recap';
+          botReply = "Perfect! Let me recap what you shared:\n\n";
+          for (let i = 0; i < questions.length; i++) {
+            botReply += `${i + 1}. ${questions[i]} - "${discoveryAnswers[i]}"\n`;
           }
-        } 
+          botReply += "\nDoes all of that sound correct?";
+        }
+      }
+      
+      // RECAP STATE  
+      else if (currentState === 'recap') {
+        const msg = userMessage.toLowerCase();
         
-        // Handle discovery phase
-        else if (conversationState === 'discovery') {
-          // FIXED: Better discovery question tracking with correct index mapping
-          if (conversationHistory.length >= 2) {
-            const lastBotMessage = conversationHistory[conversationHistory.length - 1];
-            
-            if (lastBotMessage && lastBotMessage.role === 'assistant') {
-              const botContent = lastBotMessage.content.toLowerCase();
-              discoveryProgress.lastBotMessage = botContent;
-              
-              // Check if bot asked ANY discovery question that hasn't been asked yet
-              discoveryQuestions.forEach((q, index) => {
-                if (!q.asked) {
-                  let keywordMatch = false;
-                  
-                  // Enhanced keyword matching for each specific question
-                  if (index === 0) { // How did you hear about us - question_0
-                    keywordMatch = botContent.includes('how did you hear') || 
-                                  botContent.includes('hear about') ||
-                                  botContent.includes('find us') ||
-                                  botContent.includes('found us') ||
-                                  botContent.includes('discover us');
-                  } else if (index === 1) { // Business/Industry - question_1
-                    keywordMatch = botContent.includes('industry') || 
-                                  botContent.includes('business') ||
-                                  botContent.includes('what do you do') ||
-                                  botContent.includes('line of business') ||
-                                  botContent.includes('work in');
-                  } else if (index === 2) { // Main product - question_2
-                    keywordMatch = botContent.includes('main product') || 
-                                  botContent.includes('product') || 
-                                  botContent.includes('service') ||
-                                  botContent.includes('what do you sell') ||
-                                  botContent.includes('what do you offer');
-                  } else if (index === 3) { // Running ads - question_3
-                    keywordMatch = botContent.includes('running ads') || 
-                                  botContent.includes('ads') || 
-                                  botContent.includes('advertising') ||
-                                  botContent.includes('marketing') ||
-                                  botContent.includes('facebook') ||
-                                  botContent.includes('google') ||
-                                  botContent.includes('meta');
-                  } else if (index === 4) { // Using CRM - question_4
-                    keywordMatch = botContent.includes('crm') || 
-                                  botContent.includes('customer relationship') ||
-                                  botContent.includes('management system') ||
-                                  botContent.includes('using any') ||
-                                  botContent.includes('software') ||
-                                  botContent.includes('gohighlevel');
-                  } else if (index === 5) { // Pain points - question_5
-                    keywordMatch = botContent.includes('pain point') || 
-                                  botContent.includes('challenge') || 
-                                  botContent.includes('problem') || 
-                                  botContent.includes('difficult') ||
-                                  botContent.includes('struggle') ||
-                                  botContent.includes('biggest') ||
-                                  botContent.includes('issue');
-                  }
-                  
-                  if (keywordMatch) {
-                    console.log(`✅ DETECTED: Question ${index} (${q.field}) was asked: "${q.question}"`);
-                    q.asked = true;
-                    discoveryProgress.waitingForAnswer = true;
-                    discoveryProgress.currentQuestionIndex = index; // This will be 0, 1, 2, 3, 4, or 5
-                    discoveryProgress.questionOrder.push(index);
-                  }
-                }
-              });
-              
-              // If we were waiting for an answer and user responded, capture it
-              if (discoveryProgress.waitingForAnswer && userMessage.trim().length > 2) {
-                const currentQ = discoveryQuestions[discoveryProgress.currentQuestionIndex];
-                if (currentQ && currentQ.asked && !currentQ.answered) {
-                  // Enhanced answer validation - check for negative responses that might be misunderstood
-                  let userAnswer = userMessage.trim();
-                  
-                  // Special handling for pain points question to avoid capturing "No" when they mean something else
-                  if (discoveryProgress.currentQuestionIndex === 5) { // Pain points question
-                    const msg = userMessage.toLowerCase();
-                    // If they say just "no" but their full response is longer, capture the full response
-                    if (msg.includes('no') && userMessage.length > 5) {
-                      // They likely said "No, but..." or explained something - capture full response
-                      userAnswer = userMessage.trim();
-                    } else if (msg === 'no' || msg === 'no.' || msg === 'none' || msg === 'none.') {
-                      // They truly meant no pain points
-                      userAnswer = "No pain points";
-                    }
-                  }
-                  
-                  // Enhanced answer validation for other questions too
-                  if (discoveryProgress.currentQuestionIndex === 0) { // How did you hear about us
-                    // Make sure we're not capturing a greeting or unrelated response
-                    const msg = userMessage.toLowerCase();
-                    if (msg.includes('good') || msg.includes('fine') || msg.includes('how are you') || msg.includes('great') || 
-                        msg.includes('doing well') || msg.includes('i\'m doing') || msg.includes('im doing') ||
-                        msg === 'hello' || msg === 'hi' || msg === 'hey') {
-                      // This might be a greeting response, not an answer to our question
-                      console.log('⚠️ Possible greeting response captured as answer, skipping...');
-                      discoveryProgress.waitingForAnswer = false; // Reset waiting state
-                      currentQ.asked = false; // Mark question as not asked so it can be asked again
-                      return; // Don't capture this as an answer
-                    }
-                  }
-                  
-                  currentQ.answered = true;
-                  currentQ.answer = userAnswer;
-                  
-                  // FIXED: Correct mapping - use the actual index from the array
-                  discoveryData[currentQ.field] = userAnswer;
-                  discoveryData[`question_${discoveryProgress.currentQuestionIndex}`] = userAnswer;
-                  
-                  discoveryProgress.questionsCompleted++;
-                  discoveryProgress.waitingForAnswer = false;
-                  
-                  console.log(`✅ CAPTURED ANSWER ${discoveryProgress.questionsCompleted}/6:`);
-                  console.log(`   Question Index: ${discoveryProgress.currentQuestionIndex}`);
-                  console.log(`   Question: ${currentQ.question}`);
-                  console.log(`   Answer: "${userAnswer}"`);
-                  console.log(`   Field: ${currentQ.field}`);
-                  console.log(`   Question Key: question_${discoveryProgress.currentQuestionIndex}`);
-                  
-                  // Debug: Show current discovery data
-                  console.log('📋 Current discovery data:', JSON.stringify(discoveryData, null, 2));
-                  
-                  // Debug: Show which questions are still unanswered
-                  const unanswered = discoveryQuestions.filter(q => !q.answered);
-                  console.log(`📋 Remaining questions: ${unanswered.length}`);
-                  unanswered.forEach((q, i) => {
-                    const originalIndex = discoveryQuestions.indexOf(q);
-                    console.log(`   ${originalIndex}. ${q.question} (asked: ${q.asked})`);
-                  });
-                }
-              }
-            }
-          }
-
-          // FIXED: More accurate completion check
-          discoveryProgress.allQuestionsCompleted = discoveryQuestions.every(q => q.answered);
+        if (msg.includes('yes') || msg.includes('correct') || msg.includes('right') || msg.includes('good')) {
+          // User confirmed, send webhook and schedule
+          currentState = 'scheduling';
+          botReply = "Perfect! I'll send you a scheduling link shortly. What day works best for you?";
           
-          console.log(`📊 Discovery Status: ${discoveryProgress.questionsCompleted}/6 questions completed`);
-          console.log(`📊 All questions completed: ${discoveryProgress.allQuestionsCompleted}`);
-          console.log('📋 Current discovery data:', JSON.stringify(discoveryData, null, 2));
-
-          // NEW: If all questions are done, move to recap phase
-          if (discoveryProgress.allQuestionsCompleted && !discoveryProgress.recapPresented) {
-            console.log('🔄 All discovery questions completed! Moving to recap phase.');
-            conversationState = 'recap';
-            recapPhase = 'presenting';
-            discoveryProgress.recapPresented = true;
-            
-            // Generate the recap
-            botReply = generateDiscoveryRecap(discoveryData, discoveryQuestions);
-            console.log('📋 Generated recap:', botReply);
-          } else if (!discoveryProgress.allQuestionsCompleted) {
-            // Continue with normal discovery flow using GPT
-            conversationHistory.push({ role: 'user', content: userMessage });
-            
-            const nextUnanswered = discoveryQuestions.find(q => !q.answered);
-            if (nextUnanswered) {
-              const questionNumber = discoveryQuestions.indexOf(nextUnanswered) + 1;
-              const contextPrompt = `\n\nIMPORTANT: You need to ask question ${questionNumber}: "${nextUnanswered.question}". You have completed ${discoveryProgress.questionsCompleted} out of 6 questions so far. Do NOT skip to scheduling until all 6 questions are answered.`;
-              
-              const messages = [...conversationHistory];
-              messages[messages.length - 1].content += contextPrompt;
-
-              const openaiResponse = await axios.post(
-                'https://api.openai.com/v1/chat/completions',
-                {
-                  model: 'gpt-4o',
-                  messages: messages,
-                  temperature: 0.7
-                },
-                {
-                  headers: {
-                    Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-                    'Content-Type': 'application/json'
-                  },
-                  timeout: 8000
-                }
-              );
-
-              botReply = openaiResponse.data.choices[0].message.content || "Could you tell me a bit more about that?";
-            }
-          }
-        }
-        
-        // NEW: Handle recap phase
-        else if (conversationState === 'recap') {
-          if (recapPhase === 'presenting') {
-            // We just presented the recap, now waiting for their confirmation
-            recapPhase = 'awaiting_confirmation';
-            
-            const msg = userMessage.toLowerCase();
-            
-            // Check if they confirm everything is correct
-            if (msg.includes('yes') || msg.includes('correct') || msg.includes('right') || 
-                msg.includes('that\'s right') || msg.includes('sounds good') || msg.includes('perfect')) {
-              
-              console.log('✅ User confirmed all answers are correct');
-              discoveryProgress.recapConfirmed = true;
-              conversationState = 'booking';
-              
-              botReply = "Perfect. Now that I have all your information, let's schedule a call to discuss how we can help. What day would work best for you.";
-              
-            } else if (msg.includes('no') || msg.includes('wrong') || msg.includes('incorrect') || 
-                       msg.includes('not right') || msg.includes('fix') || msg.includes('change')) {
-              
-              console.log('❌ User says something is wrong - moving to correction phase');
-              conversationState = 'correction';
-              recapPhase = 'correcting';
-              discoveryProgress.needsCorrection = true;
-              
-              botReply = "No problem! Which question would you like me to correct? You can tell me the question number (1-6) or just mention what needs to be changed.";
-              
-            } else {
-              // Unclear response - ask for clarification
-              botReply = "I want to make sure I have everything right. Is all the information I just shared correct, or would you like me to change something?";
-            }
-          }
-        }
-        
-        // NEW: Handle correction phase
-        else if (conversationState === 'correction') {
-          const correctionInfo = parseCorrection(userMessage, discoveryQuestions);
-          
-          if (correctionInfo) {
-            console.log(`🔧 User wants to correct question ${correctionInfo.questionIndex + 1}: ${correctionInfo.question}`);
-            discoveryProgress.correctingQuestionIndex = correctionInfo.questionIndex;
-            
-            botReply = "Got it. Let me re-ask that question. ${correctionInfo.question}";
-            
-          } else if (discoveryProgress.correctingQuestionIndex >= 0) {
-            // They're providing the new answer
-            const questionToCorrect = discoveryQuestions[discoveryProgress.correctingQuestionIndex];
-            
-            console.log(`🔧 Updating answer for question ${discoveryProgress.correctingQuestionIndex + 1}`);
-            console.log(`   Old answer: "${questionToCorrect.answer}"`);
-            console.log(`   New answer: "${userMessage.trim()}"`);
-            
-            // Update the answer
-            questionToCorrect.answer = userMessage.trim();
-            discoveryData[questionToCorrect.field] = userMessage.trim();
-            discoveryData[`question_${discoveryProgress.correctingQuestionIndex}`] = userMessage.trim();
-            
-            // Reset correction state
-            discoveryProgress.correctingQuestionIndex = -1;
-            
-            // Generate new recap with updated information
-            conversationState = 'recap';
-            recapPhase = 'presenting';
-            
-            botReply = `Perfect. Here's the updated information.\n\n${generateDiscoveryRecap(discoveryData, discoveryQuestions)}`;
-            
-          } else {
-            // Couldn't understand what they want to correct
-            botReply = "I'm not sure which question you'd like me to correct. Could you tell me the question number (1 through 6) or describe which topic you'd like to change?";
-          }
-        }
-        
-        // Handle booking phase (existing scheduling logic)
-        else if (conversationState === 'booking') {
-          // Check for scheduling preference only after ALL questions are answered AND confirmed
-          let schedulingDetected = false;
-          if (discoveryProgress.recapConfirmed && 
-              userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today)\b/)) {
-            
-            console.log('🗓️ User mentioned scheduling after completing ALL discovery questions AND confirmation');
-            
-            const dayInfo = handleSchedulingPreference(userMessage);
-            
-            if (dayInfo && !webhookSent) {
-              bookingInfo.preferredDay = dayInfo.dayName;
-              schedulingDetected = true;
-              
-              // Send webhook with all confirmed discovery data
-              const result = await sendSchedulingPreference(
-                bookingInfo.name || connectionData.customerName || '',
-                bookingInfo.email || connectionData.customerEmail || '',
-                bookingInfo.phone || connectionData.customerPhone || '',
-                bookingInfo.preferredDay,
-                connectionData.callId,
-                discoveryData
-              );
-              
-              if (result.success) {
-                webhookSent = true;
-                conversationState = 'completed';
-                console.log('✅ Webhook sent successfully with confirmed discovery data');
-              }
-            }
-          } else if (!discoveryProgress.recapConfirmed && 
-                     userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss)\b/)) {
-            console.log('⚠️ User mentioned scheduling but discovery recap is not confirmed yet. Continuing with booking conversation.');
-          }
-
-          // Add user message to conversation history
-          conversationHistory.push({ role: 'user', content: userMessage });
-
-          // Use GPT to handle the booking conversation if no specific reply is set
-          if (!botReply) {
-            const openaiResponse = await axios.post(
-              'https://api.openai.com/v1/chat/completions',
-              {
-                model: 'gpt-4o',
-                messages: conversationHistory,
-                temperature: 0.7
-              },
-              {
-                headers: {
-                  Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-                  'Content-Type': 'application/json'
-                },
-                timeout: 8000
-              }
+          // Send webhook
+          if (!webhookSent) {
+            const result = await sendFinalData(
+              customerName, 
+              customerEmail, 
+              customerPhone, 
+              'User confirmed answers', 
+              callId, 
+              discoveryAnswers
             );
-
-            botReply = openaiResponse.data.choices[0].message.content || "What day would work best for you?";
-          }
-        }
-
-        // Send the AI response IMMEDIATELY if we have one
-        if (botReply) {
-          console.log(`🤖 SENDING BOT REPLY IMMEDIATELY: "${botReply}"`);
-          ws.send(JSON.stringify({
-            content: botReply,
-            content_complete: true,
-            actions: [],
-            response_id: parsed.response_id || 999
-          }));
-          
-          // Add to conversation history after sending
-          if (conversationState !== 'booking') {
-            conversationHistory.push({ role: 'user', content: userMessage });
-            conversationHistory.push({ role: 'assistant', content: botReply });
-          } else if (conversationState === 'booking' && conversationHistory[conversationHistory.length - 1].role !== 'assistant') {
-            conversationHistory.push({ role: 'assistant', content: botReply });
+            webhookSent = result.success;
           }
         } else {
-          console.log(`❌ NO BOT REPLY SET - this is the problem!`);
-          console.log(`   conversationState: ${conversationState}`);
-          console.log(`   greetingPhase: ${greetingPhase}`);
-          console.log(`   userMessage: "${userMessage}"`);
-          
-          // Emergency fallback
-          const fallbackReply = "Hi there. This is Sarah from Nexella AI. How are you doing today.";
-          console.log(`🚨 SENDING FALLBACK REPLY: "${fallbackReply}"`);
-          ws.send(JSON.stringify({
-            content: fallbackReply,
-            content_complete: true,
-            actions: [],
-            response_id: parsed.response_id || 999
-          }));
+          // User wants to correct something
+          botReply = "No problem! Which question would you like me to correct? Just tell me the number (1-6).";
         }
       }
+      
+      // SCHEDULING STATE
+      else if (currentState === 'scheduling') {
+        botReply = "Great! I'll send you the scheduling link via email. Thank you for your time!";
+        currentState = 'complete';
+      }
+      
+      // Send response
+      if (botReply) {
+        console.log(`🤖 Bot: "${botReply}"`);
+        ws.send(JSON.stringify({
+          content: botReply,
+          content_complete: true,
+          actions: [],
+          response_id: parsed.response_id
+        }));
+      }
+      
     } catch (error) {
-      console.error('❌ Error handling message:', error.message);
-      
-      // Enhanced emergency webhook logic
-      if (!webhookSent && connectionData.callId && 
-          (bookingInfo.email || connectionData.customerEmail) &&
-          discoveryProgress.questionsCompleted >= 4) { // Reduced threshold but still substantial
-        try {
-          console.log('🚨 EMERGENCY WEBHOOK SEND - Substantial discovery data available');
-          
-          // Create emergency discovery data from what we have
-          const emergencyDiscoveryData = {};
-          discoveryQuestions.forEach((q, index) => {
-            if (q.answered && q.answer) {
-              emergencyDiscoveryData[q.field] = q.answer;
-              emergencyDiscoveryData[`question_${index}`] = q.answer;
-            }
-          });
-          
-          await sendSchedulingPreference(
-            bookingInfo.name || connectionData.customerName || '',
-            bookingInfo.email || connectionData.customerEmail || '',
-            bookingInfo.phone || connectionData.customerPhone || '',
-            bookingInfo.preferredDay || 'Error occurred',
-            connectionData.callId,
-            emergencyDiscoveryData
-          );
-          webhookSent = true;
-          console.log('✅ Emergency webhook sent with available discovery data');
-        } catch (webhookError) {
-          console.error('❌ Emergency webhook also failed:', webhookError.message);
-        }
-      }
-      
-      // Send a recovery message
+      console.error('❌ Error:', error.message);
       ws.send(JSON.stringify({
-        content: "I missed that. Could you repeat it?",
+        content: "I'm sorry, could you repeat that?",
         content_complete: true,
         actions: [],
-        response_id: 9999
+        response_id: 999
       }));
     }
   });
 
   ws.on('close', async () => {
-    console.log('🔌 Connection closed.');
-    clearTimeout(autoGreetingTimer);
+    console.log('🔌 Connection closed');
     
-    console.log('=== FINAL CONNECTION CLOSE ANALYSIS ===');
-    console.log('📋 Final discoveryData:', JSON.stringify(discoveryData, null, 2));
-    console.log('📊 Questions completed:', discoveryProgress.questionsCompleted);
-    console.log('📊 All questions completed:', discoveryProgress.allQuestionsCompleted);
-    console.log('📊 Recap confirmed:', discoveryProgress.recapConfirmed);
-    
-    // Detailed breakdown of each question
-    discoveryQuestions.forEach((q, index) => {
-      console.log(`Question ${index}: Asked=${q.asked}, Answered=${q.answered}, Answer="${q.answer}"`);
-    });
-    
-    // FINAL webhook attempt only if we have meaningful data and haven't sent yet
-    if (!webhookSent && connectionData.callId && discoveryProgress.questionsCompleted >= 2) {
-      try {
-        const finalEmail = connectionData.customerEmail || bookingInfo.email || '';
-        const finalName = connectionData.customerName || bookingInfo.name || '';
-        const finalPhone = connectionData.customerPhone || bookingInfo.phone || '';
-        
-        console.log('🚨 FINAL WEBHOOK ATTEMPT on connection close');
-        console.log(`📊 Sending with ${discoveryProgress.questionsCompleted}/6 questions completed`);
-        console.log(`📊 Recap confirmed: ${discoveryProgress.recapConfirmed}`);
-        
-        // Create final discovery data from answered questions
-        const finalDiscoveryData = {};
-        discoveryQuestions.forEach((q, index) => {
-          if (q.answered && q.answer) {
-            finalDiscoveryData[q.field] = q.answer;
-            finalDiscoveryData[`question_${index}`] = q.answer;
-          }
-        });
-        
-        await sendSchedulingPreference(
-          finalName,
-          finalEmail,
-          finalPhone,
-          bookingInfo.preferredDay || 'Call ended early',
-          connectionData.callId,
-          finalDiscoveryData
-        );
-        
-        console.log('✅ Final webhook sent successfully on connection close');
-        webhookSent = true;
-      } catch (finalError) {
-        console.error('❌ Final webhook failed:', finalError.message);
-      }
-    }
-    
-    // Clean up
-    if (connectionData.callId) {
-      activeCallsMetadata.delete(connectionData.callId);
-      console.log(`🧹 Cleaned up metadata for call ${connectionData.callId}`);
+    // Send final webhook if we have some answers
+    if (!webhookSent && discoveryAnswers.some(a => a.trim() !== '')) {
+      console.log('🚨 Sending final webhook on close');
+      await sendFinalData(
+        customerName, 
+        customerEmail, 
+        customerPhone, 
+        'Call ended early', 
+        callId, 
+        discoveryAnswers
+      );
     }
   });
-});
-
-// Add error handling for WebSocket server
-wss.on('error', (error) => {
-  console.error('❌ WebSocket Server Error:', error);
-});
-
-server.on('error', (error) => {
-  console.error('❌ HTTP Server Error:', error);
 });
 
 // Endpoint to receive Retell webhook call events
 app.post('/retell-webhook', express.json(), async (req, res) => {
   try {
     const { event, call } = req.body;
-    
     console.log(`Received Retell webhook event: ${event}`);
     
     if (call && call.call_id) {
       console.log(`Call ID: ${call.call_id}, Status: ${call.call_status}`);
       
-      // Extract important call information
       const email = call.metadata?.customer_email || '';
       const name = call.metadata?.customer_name || '';
       const phone = call.to_number || '';
-      let preferredDay = '';
-      let discoveryData = {};
       
-      // Store this info globally as well
       if (email) {
         storeContactInfoGlobally(name, email, phone, 'Retell Webhook');
       }
-      
-      // Look for preferred day in various locations
-      if (call.variables && call.variables.preferredDay) {
-        preferredDay = call.variables.preferredDay;
-      } else if (call.custom_data && call.custom_data.preferredDay) {
-        preferredDay = call.custom_data.preferredDay;
-      } else if (call.analysis && call.analysis.custom_data) {
-        try {
-          const customData = typeof call.analysis.custom_data === 'string'
-            ? JSON.parse(call.analysis.custom_data)
-            : call.analysis.custom_data;
-            
-          if (customData.preferredDay) {
-            preferredDay = customData.preferredDay;
-          }
-        } catch (error) {
-          console.error('Error parsing custom data:', error);
-        }
-      }
-      
-      // Extract discovery data from variables, transcript, and custom data
-      if (call.variables) {
-        // Extract discovery-related variables
-        Object.entries(call.variables).forEach(([key, value]) => {
-          if (key.startsWith('discovery_') || key.includes('question_')) {
-            discoveryData[key] = value;
-          }
-        });
-      }
-      
-      // Extract from custom_data if any
-      if (call.custom_data && call.custom_data.discovery_data) {
-        try {
-          const parsedData = typeof call.custom_data.discovery_data === 'string' 
-            ? JSON.parse(call.custom_data.discovery_data)
-            : call.custom_data.discovery_data;
-            
-          discoveryData = { ...discoveryData, ...parsedData };
-        } catch (error) {
-          console.error('Error parsing discovery data from custom_data:', error);
-        }
-      }
-      
-      // If no discovery data found yet, try to extract from transcript
-      if (Object.keys(discoveryData).length === 0 && call.transcript && call.transcript.length > 0) {
-        // Use the discovery questions to match answers in the transcript
-        const discoveryQuestions = [
-          'How did you hear about us?',
-          'What industry or business are you in?',
-          'What\'s your main product?',
-          'Are you running ads right now?',
-          'Are you using a CRM system?',
-          'What pain points are you experiencing?'
-        ];
-        
-        // Find questions and their answers in the transcript
-        call.transcript.forEach((item, index) => {
-          if (item.role === 'assistant') {
-            const botMessage = item.content.toLowerCase();
-            
-            // Try to match with our known discovery questions
-            discoveryQuestions.forEach((question, qIndex) => {
-              // If this bot message contains a discovery question
-              if (botMessage.includes(question.toLowerCase().substring(0, 15))) {
-                // Check if next message is from the user (the answer)
-                if (call.transcript[index + 1] && call.transcript[index + 1].role === 'user') {
-                  const answer = call.transcript[index + 1].content;
-                  discoveryData[`question_${qIndex}`] = answer;
-                }
-              }
-            });
-          }
-        });
-      }
-      
-      // Send webhook for call ending events
-      if ((event === 'call_ended' || event === 'call_analyzed') && email) {
-        console.log(`Sending webhook for ${event} event with discovery data:`, discoveryData);
-        
-        try {
-          // Use the trigger server to route the webhook
-          await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, {
-            name,
-            email,
-            phone,
-            preferredDay: preferredDay || 'Not specified',
-            call_id: call.call_id,
-            call_status: call.call_status,
-            discovery_data: discoveryData,
-            schedulingComplete: true
-          });
-          
-          console.log(`Successfully sent webhook for ${event}`);
-        } catch (error) {
-          console.error(`Error sending webhook for ${event}:`, error);
-        }
-      }
-      
-      // Clean up any stored data
-      activeCallsMetadata.delete(call.call_id);
     }
     
     res.status(200).json({ success: true });
@@ -1769,5 +349,5 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Nexella WebSocket Server with Calendly scheduling link integration is listening on port ${PORT}`);
+  console.log(`Simple Nexella WebSocket Server listening on port ${PORT}`);
 });
