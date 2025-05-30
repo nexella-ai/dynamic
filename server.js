@@ -162,14 +162,14 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     // Initialize formatted discovery data
     const formattedDiscoveryData = {};
     
-    // Define field mappings from question keys to Airtable field names
+    // FIXED: Define field mappings from question keys to Airtable field names
     const fieldMappings = {
-      'question_0': 'How did you hear about us',
-      'question_1': 'Business/Industry', 
-      'question_2': 'Main product',
-      'question_3': 'Running ads',
-      'question_4': 'Using CRM',
-      'question_5': 'Pain points'
+      'question_0': 'How did you hear about us',     // INDEX 0 = How did you hear about us
+      'question_1': 'Business/Industry',             // INDEX 1 = Business/Industry  
+      'question_2': 'Main product',                  // INDEX 2 = Main product
+      'question_3': 'Running ads',                   // INDEX 3 = Running ads
+      'question_4': 'Using CRM',                     // INDEX 4 = Using CRM
+      'question_5': 'Pain points'                    // INDEX 5 = Pain points
     };
     
     // Process all discovery data
@@ -180,7 +180,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
         const trimmedValue = value.trim();
         
         if (key.startsWith('question_') && fieldMappings[key]) {
-          // Map question_X to the exact Airtable field name
+          // FIXED: Map question_X to the correct Airtable field name based on index
           formattedDiscoveryData[fieldMappings[key]] = trimmedValue;
           console.log(`✅ Mapped ${key} -> "${fieldMappings[key]}" = "${trimmedValue}"`);
         } else if (key === 'How did you hear about us' || key.includes('hear about')) {
@@ -222,6 +222,15 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     
     console.log('🔧 FINAL FORMATTED DISCOVERY DATA:', JSON.stringify(formattedDiscoveryData, null, 2));
     console.log('📊 Total discovery fields captured:', Object.keys(formattedDiscoveryData).length);
+    
+    // Validate the mapping worked correctly
+    console.log('🔍 VALIDATION - Expected answers:');
+    console.log(`  - How did you hear about us: "${formattedDiscoveryData['How did you hear about us'] || 'MISSING'}"`);
+    console.log(`  - Business/Industry: "${formattedDiscoveryData['Business/Industry'] || 'MISSING'}"`);
+    console.log(`  - Main product: "${formattedDiscoveryData['Main product'] || 'MISSING'}"`);
+    console.log(`  - Running ads: "${formattedDiscoveryData['Running ads'] || 'MISSING'}"`);
+    console.log(`  - Using CRM: "${formattedDiscoveryData['Using CRM'] || 'MISSING'}"`);
+    console.log(`  - Pain points: "${formattedDiscoveryData['Pain points'] || 'MISSING'}"`);
     
     // Ensure phone number is formatted properly
     if (finalPhone && !finalPhone.startsWith('+')) {
@@ -487,7 +496,134 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
   }
 });
 
-// ENHANCED WEBSOCKET CONNECTION HANDLER - FIXED DISCOVERY SYSTEM
+// Function to generate recap of all answers
+function generateDiscoveryRecap(discoveryData, discoveryQuestions) {
+  const answers = [];
+  
+  discoveryQuestions.forEach((q, index) => {
+    if (q.answered && q.answer) {
+      answers.push(`${index + 1}. ${q.question} - "${q.answer}"`);
+    } else {
+      answers.push(`${index + 1}. ${q.question} - No answer recorded`);
+    }
+  });
+  
+  const recap = `Perfect! Let me quickly recap what you've shared to make sure I have everything correct:
+
+${answers.join('\n')}
+
+Does all of that sound right to you?`;
+
+  return recap;
+}
+
+// Function to parse correction requests
+function parseCorrection(userMessage, discoveryQuestions) {
+  const msg = userMessage.toLowerCase();
+  
+  // Look for question numbers being referenced
+  const questionNumbers = ['1', '2', '3', '4', '5', '6', 'first', 'second', 'third', 'fourth', 'fifth', 'sixth'];
+  const wordToNumber = {
+    'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5, 'sixth': 6
+  };
+  
+  for (let i = 0; i < questionNumbers.length; i++) {
+    const num = questionNumbers[i];
+    if (msg.includes(num)) {
+      let questionIndex;
+      if (isNaN(num)) {
+        questionIndex = wordToNumber[num] - 1;
+      } else {
+        questionIndex = parseInt(num) - 1;
+      }
+      
+      if (questionIndex >= 0 && questionIndex < 6) {
+        return {
+          questionIndex: questionIndex,
+          question: discoveryQuestions[questionIndex].question,
+          field: discoveryQuestions[questionIndex].field
+        };
+      }
+    }
+  }
+  
+  // Look for field names being referenced
+  const fieldKeywords = {
+    'hear': 0, 'found': 0, 'instagram': 0, 'facebook': 0, 'google': 0,
+    'industry': 1, 'business': 1, 'company': 1,
+    'product': 2, 'service': 2, 'sell': 2,
+    'ads': 3, 'advertising': 3, 'marketing': 3,
+    'crm': 4, 'system': 4, 'software': 4,
+    'pain': 5, 'problem': 5, 'challenge': 5, 'issue': 5
+  };
+  
+  for (const [keyword, index] of Object.entries(fieldKeywords)) {
+    if (msg.includes(keyword)) {
+      return {
+        questionIndex: index,
+        question: discoveryQuestions[index].question,
+        field: discoveryQuestions[index].field
+      };
+    }
+  }
+  
+  return null;
+}
+
+// Enhanced greeting detection and response system
+function analyzeUserGreeting(userMessage) {
+  const msg = userMessage.toLowerCase().trim();
+  
+  // Pattern 1: Simple greetings - ask how they're doing
+  const simpleGreetings = ['hi', 'hello', 'hey there', 'good morning', 'good afternoon', 'good evening'];
+  if (simpleGreetings.some(greeting => msg === greeting || msg.startsWith(greeting + ' '))) {
+    return {
+      type: 'simple',
+      response: "Hi there! This is Sarah from Nexella AI. How are you doing today?"
+    };
+  }
+  
+  // Pattern 2: User asks how we're doing - respond positively then ask about them
+  const howAreYouPatterns = [
+    'how are you', 'how\'s it going', 'how are things', 'what\'s up', 
+    'how you doing', 'how\'s everything', 'how are you doing'
+  ];
+  if (howAreYouPatterns.some(pattern => msg.includes(pattern))) {
+    return {
+      type: 'asking_how_we_are',
+      response: "I'm doing great, thank you for asking! How are you doing today?"
+    };
+  }
+  
+  // Pattern 3: Casual greetings - match their energy
+  const casualGreetings = ['hey', 'yo', 'sup', 'what\'s up'];
+  if (casualGreetings.some(greeting => msg.startsWith(greeting))) {
+    return {
+      type: 'casual',
+      response: "Hey! This is Sarah from Nexella AI. How's everything going with you?"
+    };
+  }
+  
+  // Pattern 4: Business/direct start - skip pleasantries
+  const businessKeywords = [
+    'i need', 'i want', 'can you help', 'looking for', 'interested in',
+    'tell me about', 'i heard about', 'someone told me'
+  ];
+  if (businessKeywords.some(keyword => msg.includes(keyword))) {
+    return {
+      type: 'business_direct',
+      response: "Absolutely! I'm Sarah from Nexella AI and I'd be happy to help. Let me learn a bit about you and your business first. How did you hear about us?"
+    };
+  }
+  
+  // Default: Friendly but unsure
+  return {
+    type: 'default',
+    response: "Hi there! This is Sarah from Nexella AI. How are you doing today?"
+  };
+}
+
+// ENHANCED WEBSOCKET CONNECTION HANDLER - FIXED DISCOVERY SYSTEM WITH RECAP
 wss.on('connection', async (ws, req) => {
   console.log('🔗 NEW WEBSOCKET CONNECTION ESTABLISHED');
   console.log('Connection URL:', req.url);
@@ -586,7 +722,7 @@ wss.on('connection', async (ws, req) => {
     {
       question: 'How did you hear about us?',
       field: 'How did you hear about us',
-      keywords: ['hear about', 'find us', 'found us', 'discover us', 'learn about'],
+      keywords: ['hear about', 'find us', 'found us', 'discover us', 'learn about', 'how did you hear'],
       asked: false,
       answered: false,
       answer: ''
@@ -634,39 +770,54 @@ wss.on('connection', async (ws, req) => {
   ];
   
   let discoveryProgress = {
-    currentQuestionIndex: 0,
+    currentQuestionIndex: -1, // Start at -1 so first question becomes 0
     questionsCompleted: 0,
     allQuestionsCompleted: false,
     lastBotMessage: '',
     waitingForAnswer: false,
-    questionOrder: [] // Track the order questions were asked
+    questionOrder: [], // Track the order questions were asked
+    recapPresented: false,
+    recapConfirmed: false,
+    needsCorrection: false,
+    correctingQuestionIndex: -1
   };
 
-  // UPDATED: Improved system prompt with better greeting flow
+  // Enhanced conversation states
+  let conversationState = 'greeting'; // greeting -> discovery -> recap -> correction -> booking -> completed
+  let greetingPhase = 'initial'; // initial -> how_are_you -> transition -> discovery_start
+  let recapPhase = 'presenting'; // presenting -> awaiting_confirmation -> correcting
+
+  // UPDATED: Improved system prompt with better greeting flow and recap
   let conversationHistory = [
     {
       role: 'system',
       content: `You are a customer service/sales representative for Nexella.io named "Sarah". Always introduce yourself as Sarah from Nexella.
 
 CONVERSATION FLOW:
-1. GREETING PHASE: Start with a warm greeting and ask how they're doing
-2. BRIEF CHAT: Engage in 1-2 exchanges of pleasantries before discovery
-3. TRANSITION: Naturally transition to discovery questions
-4. DISCOVERY PHASE: Ask all 6 discovery questions systematically
-5. SCHEDULING PHASE: Only after all 6 questions are complete
+1. GREETING PHASE: Respond naturally to their greeting style
+2. BRIEF CHAT: Engage in 1-2 exchanges about how they're doing  
+3. DISCOVERY PHASE: Ask all 6 discovery questions systematically
+4. RECAP PHASE: Repeat all answers back and ask for confirmation
+5. CORRECTION PHASE: If needed, correct any wrong answers
+6. SCHEDULING PHASE: Only after confirmation is complete
 
-GREETING & TRANSITION GUIDELINES:
-- Always start with: "Hi there! This is Sarah from Nexella AI. How are you doing today?"
-- When they respond to how they're doing, acknowledge it warmly
-- After 1-2 friendly exchanges, transition naturally with something like:
+GREETING GUIDELINES - RESPOND NATURALLY TO USER'S GREETING:
+1. If user says simple greetings like "hi", "hello", "hey there":
+   - Respond: "Hi there! This is Sarah from Nexella AI. How are you doing today?"
+
+2. If user asks how you're doing ("hey how's it going", "how are you", "what's up"):
+   - Respond: "I'm doing great, thank you for asking! How are you doing today?"
+
+3. If user gives a casual greeting with context ("hey", "what's up", "yo"):
+   - Respond: "Hey! This is Sarah from Nexella AI. How's everything going with you?"
+
+4. If user immediately starts talking business:
+   - Skip pleasantries and engage with their topic, then transition to discovery
+
+TRANSITION GUIDELINES:
+- After greeting exchange, transition naturally with:
   "That's great to hear! I'd love to learn a bit more about you and your business so I can better help you today."
 - Then start with the first discovery question
-
-CRITICAL DISCOVERY REQUIREMENTS:
-- You MUST ask ALL 6 discovery questions in the exact order listed below
-- Ask ONE question at a time and wait for the customer's response
-- Do NOT move to scheduling until ALL 6 questions are answered
-- After each answer, acknowledge it briefly before asking the next question
 
 DISCOVERY QUESTIONS (ask in this EXACT order):
 1. "How did you hear about us?"
@@ -675,6 +826,19 @@ DISCOVERY QUESTIONS (ask in this EXACT order):
 4. "Are you currently running any ads?"
 5. "Are you using any CRM system?"
 6. "What are your biggest pain points or challenges?"
+
+RECAP PHASE GUIDELINES:
+- After all 6 questions are answered, present a numbered recap
+- List each question with their exact answer
+- Ask "Does all of that sound right to you?"
+- Wait for their confirmation before proceeding
+
+CORRECTION PHASE GUIDELINES:
+- If they say answers are wrong, ask which specific question needs correction
+- Re-ask only the question(s) that need correction
+- Update your records with the new answer
+- Present a new recap to confirm all changes
+- Only proceed to scheduling after final confirmation
 
 SPEAKING STYLE & PACING:
 - Speak at a SLOW, measured pace - never rush your words
@@ -691,24 +855,15 @@ PERSONALITY & TONE:
 - If you ask a question with a question mark '?' go up in pitch and tone towards the end of the sentence.
 - If you respond with "." always keep an even consistent tone towards the end of the sentence.
 
-DISCOVERY FLOW:
-- Only start discovery questions AFTER greeting exchange is complete
-- After each answer, say something like "That's great, thank you for sharing that."
-- Then immediately ask the next question
-- Do NOT skip questions or assume answers
-- Count your questions mentally: 1, 2, 3, 4, 5, 6
-
 SCHEDULING APPROACH:
-- ONLY after asking ALL 6 discovery questions, ask for scheduling preference
-- Say: "Perfect! I have all the information I need. Let's schedule a call to discuss how we can help. What day would work best for you?"
-- When they mention a day, acknowledge it and confirm scheduling
+- ONLY after they confirm all answers are correct
+- Say: "Perfect! Now that I have all your information, let's schedule a call to discuss how we can help. What day would work best for you?"
 
-Remember: Start with greeting, have brief pleasant conversation, then systematically complete ALL 6 discovery questions before any scheduling discussion.`
+Remember: Respond naturally to their greeting style, have brief pleasant conversation, then systematically complete ALL 6 discovery questions, do the recap and confirmation, before any scheduling discussion.`
     }
   ];
 
   // States for conversation flow
-  let conversationState = 'introduction';
   let bookingInfo = {
     name: connectionData.customerName || '',
     email: connectionData.customerEmail || '',
@@ -756,7 +911,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     }
   }, 5000); // 5 seconds delay as backup
 
-  // ENHANCED: Message handling with better discovery tracking
+  // ENHANCED: Message handling with better discovery tracking and recap system
   ws.on('message', async (data) => {
     try {
       clearTimeout(autoGreetingTimer);
@@ -861,194 +1016,373 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
 
         console.log('🗣️ User said:', userMessage);
         console.log('🔄 Current conversation state:', conversationState);
+        console.log('🔄 Current greeting phase:', greetingPhase);
+        console.log('🔄 Current recap phase:', recapPhase);
         console.log('📊 Discovery progress:', discoveryProgress);
 
-        // FIXED: Better discovery question tracking (keeping original working logic)
-        if (conversationHistory.length >= 2) {
-          const lastBotMessage = conversationHistory[conversationHistory.length - 1];
-          
-          if (lastBotMessage && lastBotMessage.role === 'assistant') {
-            const botContent = lastBotMessage.content.toLowerCase();
-            discoveryProgress.lastBotMessage = botContent;
+        let botReply = "";
+        
+        // Handle greeting phase with enhanced logic
+        if (conversationState === 'greeting') {
+          if (greetingPhase === 'initial') {
+            // This is their first real message - analyze and respond appropriately
+            const greetingAnalysis = analyzeUserGreeting(userMessage);
+            botReply = greetingAnalysis.response;
             
-            // Check if bot asked ANY discovery question that hasn't been asked yet
-            discoveryQuestions.forEach((q, index) => {
-              if (!q.asked) {
-                // Enhanced keyword matching - especially for CRM and pain points
-                let keywordMatch = false;
-                if (index === 0) { // How did you hear about us
-                  keywordMatch = q.keywords.some(keyword => botContent.includes(keyword));
-                } else if (index === 4) { // CRM question (index 4)
-                  keywordMatch = botContent.includes('crm') || 
-                                botContent.includes('customer relationship') ||
-                                botContent.includes('management system') ||
-                                botContent.includes('using any') ||
-                                botContent.includes('system');
-                } else if (index === 5) { // Pain points question (index 5)
-                  keywordMatch = botContent.includes('pain point') || 
-                                botContent.includes('challenge') || 
-                                botContent.includes('problem') || 
-                                botContent.includes('difficult') ||
-                                botContent.includes('struggle') ||
-                                botContent.includes('biggest') ||
-                                botContent.includes('issue');
-                } else {
-                  keywordMatch = q.keywords.some(keyword => botContent.includes(keyword));
-                }
-                
-                if (keywordMatch) {
-                  console.log(`✅ DETECTED: Question ${index + 1} was asked: "${q.question}"`);
-                  q.asked = true;
-                  discoveryProgress.waitingForAnswer = true;
-                  discoveryProgress.currentQuestionIndex = index;
-                  discoveryProgress.questionOrder.push(index);
-                }
-              }
-            });
+            console.log(`🎭 Greeting type detected: ${greetingAnalysis.type}`);
+            console.log(`🎭 Response: ${botReply}`);
             
-            // If we were waiting for an answer and user responded, capture it
-            if (discoveryProgress.waitingForAnswer && userMessage.trim().length > 2) {
-              const currentQ = discoveryQuestions[discoveryProgress.currentQuestionIndex];
-              if (currentQ && currentQ.asked && !currentQ.answered) {
-                currentQ.answered = true;
-                currentQ.answer = userMessage.trim();
-                discoveryData[currentQ.field] = userMessage.trim();
-                discoveryData[`question_${discoveryProgress.currentQuestionIndex}`] = userMessage.trim();
-                
-                discoveryProgress.questionsCompleted++;
-                discoveryProgress.waitingForAnswer = false;
-                
-                console.log(`✅ CAPTURED ANSWER ${discoveryProgress.questionsCompleted}/6:`);
-                console.log(`   Question: ${currentQ.question}`);
-                console.log(`   Answer: "${userMessage.trim()}"`);
-                console.log(`   Field: ${currentQ.field}`);
-                
-                // Debug: Show which questions are still unanswered
-                const unanswered = discoveryQuestions.filter(q => !q.answered);
-                console.log(`📋 Remaining questions: ${unanswered.length}`);
-                unanswered.forEach((q, i) => {
-                  console.log(`   ${i + 1}. ${q.question} (asked: ${q.asked})`);
-                });
+            // Move to next phase based on greeting type
+            if (greetingAnalysis.type === 'business_direct') {
+              // Skip pleasantries, go straight to discovery
+              conversationState = 'discovery';
+              greetingPhase = 'discovery_start';
+              
+              // Mark first question as being asked
+              discoveryQuestions[0].asked = true;
+              discoveryProgress.waitingForAnswer = true;
+              discoveryProgress.currentQuestionIndex = 0;
+              discoveryProgress.questionOrder.push(0);
+            } else {
+              // Normal flow - wait for their response about how they're doing
+              greetingPhase = 'how_are_you';
+            }
+            
+          } else if (greetingPhase === 'how_are_you') {
+            // They responded to "how are you doing" - acknowledge and transition
+            const msg = userMessage.toLowerCase();
+            
+            // Acknowledge their response
+            if (msg.includes('good') || msg.includes('great') || msg.includes('fine') || msg.includes('well')) {
+              botReply = "That's wonderful to hear! I'd love to learn a bit more about you and your business so I can better help you today. How did you hear about us?";
+            } else if (msg.includes('bad') || msg.includes('not good') || msg.includes('rough') || msg.includes('tough')) {
+              botReply = "I'm sorry to hear that. Well, hopefully I can help brighten your day! Let me learn a bit about you and your business. How did you hear about us?";
+            } else if (msg.includes('busy') || msg.includes('hectic') || msg.includes('crazy')) {
+              botReply = "I totally understand, life can get hectic! I'll keep this brief. Let me just learn a bit about your business. How did you hear about us?";
+            } else {
+              // Generic acknowledgment
+              botReply = "Thanks for sharing! I'd love to learn a bit more about you and your business so I can better help you today. How did you hear about us?";
+            }
+            
+            // Transition to discovery
+            conversationState = 'discovery';
+            greetingPhase = 'discovery_start';
+            
+            // Mark first question as being asked
+            discoveryQuestions[0].asked = true;
+            discoveryProgress.waitingForAnswer = true;
+            discoveryProgress.currentQuestionIndex = 0;
+            discoveryProgress.questionOrder.push(0);
+            
+            console.log('🔄 Transitioning to discovery phase - first question asked');
+          }
+        } 
+        
+        // Handle discovery phase
+        else if (conversationState === 'discovery') {
+          // FIXED: Better discovery question tracking with correct index mapping
+          if (conversationHistory.length >= 2) {
+            const lastBotMessage = conversationHistory[conversationHistory.length - 1];
+            
+            if (lastBotMessage && lastBotMessage.role === 'assistant') {
+              const botContent = lastBotMessage.content.toLowerCase();
+              discoveryProgress.lastBotMessage = botContent;
+              
+              // Check if bot asked ANY discovery question that hasn't been asked yet
+              discoveryQuestions.forEach((q, index) => {
+                if (!q.asked) {
+                  let keywordMatch = false;
+                  
+                  // Enhanced keyword matching for each specific question
+                  if (index === 0) { // How did you hear about us - question_0
+                    keywordMatch = botContent.includes('how did you hear') || 
+                                  botContent.includes('hear about') ||
+                                  botContent.includes('find us') ||
+                                  botContent.includes('found us') ||
+                                  botContent.includes('discover us');
+                  } else if (index === 1) { // Business/Industry - question_1
+                    keywordMatch = botContent.includes('industry') || 
+                                  botContent.includes('business') ||
+                                  botContent.includes('what do you do') ||
+                                  botContent.includes('line of business') ||
+                                  botContent.includes('work in');
+                  } else if (index === 2) { // Main product - question_2
+                    keywordMatch = botContent.includes('main product') || 
+                                  botContent.includes('product') || 
+                                  botContent.includes('service') ||
+                                  botContent.includes('what do you sell') ||
+                                  botContent.includes('what do you offer');
+                  } else if (index === 3) { // Running ads - question_3
+                    keywordMatch = botContent.includes('running ads') || 
+                                  botContent.includes('ads') || 
+                                  botContent.includes('advertising') ||
+                                  botContent.includes('marketing') ||
+                                  botContent.includes('facebook') ||
+                                  botContent.includes('google') ||
+                                  botContent.includes('meta');
+                  } else if (index === 4) { // Using CRM - question_4
+                    keywordMatch = botContent.includes('crm') || 
+                                  botContent.includes('customer relationship') ||
+                                  botContent.includes('management system') ||
+                                  botContent.includes('using any') ||
+                                  botContent.includes('software') ||
+                                  botContent.includes('gohighlevel');
+                  } else if (index === 5) { // Pain points - question_5
+                    keywordMatch = botContent.includes('pain point') || 
+                                  botContent.includes('challenge') || 
+                                  botContent.includes('problem') || 
+                                  botContent.includes('difficult') ||
+                                  botContent.includes('struggle') ||
+                                  botContent.includes('biggest') ||
+                                  botContent.includes('issue');
+                  }
+                  
+                  if (keywordMatch) {
+                    console.log(`✅ DETECTED: Question ${index} (${q.field}) was asked: "${q.question}"`);
+                    q.asked = true;
+                    discoveryProgress.waitingForAnswer = true;
+                    discoveryProgress.currentQuestionIndex = index; // This will be 0, 1, 2, 3, 4, or 5
+                    discoveryProgress.questionOrder.push(index);
+                  }
+                }
+              });
+              
+              // If we were waiting for an answer and user responded, capture it
+              if (discoveryProgress.waitingForAnswer && userMessage.trim().length > 2) {
+                const currentQ = discoveryQuestions[discoveryProgress.currentQuestionIndex];
+                if (currentQ && currentQ.asked && !currentQ.answered) {
+                  currentQ.answered = true;
+                  currentQ.answer = userMessage.trim();
+                  
+                  // FIXED: Correct mapping - use the actual index from the array
+                  discoveryData[currentQ.field] = userMessage.trim();
+                  discoveryData[`question_${discoveryProgress.currentQuestionIndex}`] = userMessage.trim();
+                  
+                  discoveryProgress.questionsCompleted++;
+                  discoveryProgress.waitingForAnswer = false;
+                  
+                  console.log(`✅ CAPTURED ANSWER ${discoveryProgress.questionsCompleted}/6:`);
+                  console.log(`   Question Index: ${discoveryProgress.currentQuestionIndex}`);
+                  console.log(`   Question: ${currentQ.question}`);
+                  console.log(`   Answer: "${userMessage.trim()}"`);
+                  console.log(`   Field: ${currentQ.field}`);
+                  console.log(`   Question Key: question_${discoveryProgress.currentQuestionIndex}`);
+                  
+                  // Debug: Show current discovery data
+                  console.log('📋 Current discovery data:', JSON.stringify(discoveryData, null, 2));
+                  
+                  // Debug: Show which questions are still unanswered
+                  const unanswered = discoveryQuestions.filter(q => !q.answered);
+                  console.log(`📋 Remaining questions: ${unanswered.length}`);
+                  unanswered.forEach((q, i) => {
+                    const originalIndex = discoveryQuestions.indexOf(q);
+                    console.log(`   ${originalIndex}. ${q.question} (asked: ${q.asked})`);
+                  });
+                }
               }
             }
           }
-        }
 
-        // FIXED: More accurate completion check
-        discoveryProgress.allQuestionsCompleted = discoveryQuestions.every(q => q.answered);
+          // FIXED: More accurate completion check
+          discoveryProgress.allQuestionsCompleted = discoveryQuestions.every(q => q.answered);
+          
+          console.log(`📊 Discovery Status: ${discoveryProgress.questionsCompleted}/6 questions completed`);
+          console.log(`📊 All questions completed: ${discoveryProgress.allQuestionsCompleted}`);
+          console.log('📋 Current discovery data:', JSON.stringify(discoveryData, null, 2));
+
+          // NEW: If all questions are done, move to recap phase
+          if (discoveryProgress.allQuestionsCompleted && !discoveryProgress.recapPresented) {
+            console.log('🔄 All discovery questions completed! Moving to recap phase.');
+            conversationState = 'recap';
+            recapPhase = 'presenting';
+            discoveryProgress.recapPresented = true;
+            
+            // Generate the recap
+            botReply = generateDiscoveryRecap(discoveryData, discoveryQuestions);
+            console.log('📋 Generated recap:', botReply);
+          } else if (!discoveryProgress.allQuestionsCompleted) {
+            // Continue with normal discovery flow using GPT
+            conversationHistory.push({ role: 'user', content: userMessage });
+            
+            const nextUnanswered = discoveryQuestions.find(q => !q.answered);
+            if (nextUnanswered) {
+              const questionNumber = discoveryQuestions.indexOf(nextUnanswered) + 1;
+              const contextPrompt = `\n\nIMPORTANT: You need to ask question ${questionNumber}: "${nextUnanswered.question}". You have completed ${discoveryProgress.questionsCompleted} out of 6 questions so far. Do NOT skip to scheduling until all 6 questions are answered.`;
+              
+              const messages = [...conversationHistory];
+              messages[messages.length - 1].content += contextPrompt;
+
+              const openaiResponse = await axios.post(
+                'https://api.openai.com/v1/chat/completions',
+                {
+                  model: 'gpt-4o',
+                  messages: messages,
+                  temperature: 0.7
+                },
+                {
+                  headers: {
+                    Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+                    'Content-Type': 'application/json'
+                  },
+                  timeout: 8000
+                }
+              );
+
+              botReply = openaiResponse.data.choices[0].message.content || "Could you tell me a bit more about that?";
+            }
+          }
+        }
         
-        console.log(`📊 Discovery Status: ${discoveryProgress.questionsCompleted}/6 questions completed`);
-        console.log(`📊 All questions completed: ${discoveryProgress.allQuestionsCompleted}`);
-        console.log('📋 Current discovery data:', JSON.stringify(discoveryData, null, 2));
-
-        // Check for scheduling preference (only after ALL questions are answered)
-        let schedulingDetected = false;
-        if (discoveryProgress.allQuestionsCompleted && 
-            userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today)\b/)) {
-          
-          console.log('🗓️ User mentioned scheduling after completing ALL discovery questions');
-          
-          const dayInfo = handleSchedulingPreference(userMessage);
-          
-          if (dayInfo && !webhookSent) {
-            bookingInfo.preferredDay = dayInfo.dayName;
-            schedulingDetected = true;
+        // NEW: Handle recap phase
+        else if (conversationState === 'recap') {
+          if (recapPhase === 'presenting') {
+            // We just presented the recap, now waiting for their confirmation
+            recapPhase = 'awaiting_confirmation';
+            
+            const msg = userMessage.toLowerCase();
+            
+            // Check if they confirm everything is correct
+            if (msg.includes('yes') || msg.includes('correct') || msg.includes('right') || 
+                msg.includes('that\'s right') || msg.includes('sounds good') || msg.includes('perfect')) {
+              
+              console.log('✅ User confirmed all answers are correct');
+              discoveryProgress.recapConfirmed = true;
+              conversationState = 'booking';
+              
+              botReply = "Perfect! Now that I have all your information, let's schedule a call to discuss how we can help. What day would work best for you?";
+              
+            } else if (msg.includes('no') || msg.includes('wrong') || msg.includes('incorrect') || 
+                       msg.includes('not right') || msg.includes('fix') || msg.includes('change')) {
+              
+              console.log('❌ User says something is wrong - moving to correction phase');
+              conversationState = 'correction';
+              recapPhase = 'correcting';
+              discoveryProgress.needsCorrection = true;
+              
+              botReply = "No problem! Which question would you like me to correct? You can tell me the question number (1-6) or just mention what needs to be changed.";
+              
+            } else {
+              // Unclear response - ask for clarification
+              botReply = "I want to make sure I have everything right. Is all the information I just shared correct, or would you like me to change something?";
+            }
           }
-        } else if (!discoveryProgress.allQuestionsCompleted && 
-                   userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss)\b/)) {
-          console.log('⚠️ User mentioned scheduling but discovery is not complete. Continuing with questions.');
+        }
+        
+        // NEW: Handle correction phase
+        else if (conversationState === 'correction') {
+          const correctionInfo = parseCorrection(userMessage, discoveryQuestions);
+          
+          if (correctionInfo) {
+            console.log(`🔧 User wants to correct question ${correctionInfo.questionIndex + 1}: ${correctionInfo.question}`);
+            discoveryProgress.correctingQuestionIndex = correctionInfo.questionIndex;
+            
+            botReply = `Got it! Let me re-ask that question. ${correctionInfo.question}`;
+            
+          } else if (discoveryProgress.correctingQuestionIndex >= 0) {
+            // They're providing the new answer
+            const questionToCorrect = discoveryQuestions[discoveryProgress.correctingQuestionIndex];
+            
+            console.log(`🔧 Updating answer for question ${discoveryProgress.correctingQuestionIndex + 1}`);
+            console.log(`   Old answer: "${questionToCorrect.answer}"`);
+            console.log(`   New answer: "${userMessage.trim()}"`);
+            
+            // Update the answer
+            questionToCorrect.answer = userMessage.trim();
+            discoveryData[questionToCorrect.field] = userMessage.trim();
+            discoveryData[`question_${discoveryProgress.correctingQuestionIndex}`] = userMessage.trim();
+            
+            // Reset correction state
+            discoveryProgress.correctingQuestionIndex = -1;
+            
+            // Generate new recap with updated information
+            conversationState = 'recap';
+            recapPhase = 'presenting';
+            
+            botReply = `Perfect! Here's the updated information:\n\n${generateDiscoveryRecap(discoveryData, discoveryQuestions)}`;
+            
+          } else {
+            // Couldn't understand what they want to correct
+            botReply = "I'm not sure which question you'd like me to correct. Could you tell me the question number (1 through 6) or describe which topic you'd like to change?";
+          }
+        }
+        
+        // Handle booking phase (existing scheduling logic)
+        else if (conversationState === 'booking') {
+          // Check for scheduling preference only after ALL questions are answered AND confirmed
+          let schedulingDetected = false;
+          if (discoveryProgress.recapConfirmed && 
+              userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today)\b/)) {
+            
+            console.log('🗓️ User mentioned scheduling after completing ALL discovery questions AND confirmation');
+            
+            const dayInfo = handleSchedulingPreference(userMessage);
+            
+            if (dayInfo && !webhookSent) {
+              bookingInfo.preferredDay = dayInfo.dayName;
+              schedulingDetected = true;
+              
+              // Send webhook with all confirmed discovery data
+              const result = await sendSchedulingPreference(
+                bookingInfo.name || connectionData.customerName || '',
+                bookingInfo.email || connectionData.customerEmail || '',
+                bookingInfo.phone || connectionData.customerPhone || '',
+                bookingInfo.preferredDay,
+                connectionData.callId,
+                discoveryData
+              );
+              
+              if (result.success) {
+                webhookSent = true;
+                conversationState = 'completed';
+                console.log('✅ Webhook sent successfully with confirmed discovery data');
+              }
+            }
+          } else if (!discoveryProgress.recapConfirmed && 
+                     userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss)\b/)) {
+            console.log('⚠️ User mentioned scheduling but discovery recap is not confirmed yet. Continuing with booking conversation.');
+          }
+
+          // Add user message to conversation history
+          conversationHistory.push({ role: 'user', content: userMessage });
+
+          // Use GPT to handle the booking conversation if no specific reply is set
+          if (!botReply) {
+            const openaiResponse = await axios.post(
+              'https://api.openai.com/v1/chat/completions',
+              {
+                model: 'gpt-4o',
+                messages: conversationHistory,
+                temperature: 0.7
+              },
+              {
+                headers: {
+                  Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+                  'Content-Type': 'application/json'
+                },
+                timeout: 8000
+              }
+            );
+
+            botReply = openaiResponse.data.choices[0].message.content || "What day would work best for you?";
+          }
         }
 
-        // Add user message to conversation history
-        conversationHistory.push({ role: 'user', content: userMessage });
-
-        // ENHANCED: Better context for GPT about current question status (keeping original approach)
-        let contextPrompt = '';
-        if (!discoveryProgress.allQuestionsCompleted) {
-          const nextUnanswered = discoveryQuestions.find(q => !q.answered);
-          if (nextUnanswered) {
-            const questionNumber = discoveryQuestions.indexOf(nextUnanswered) + 1;
-            contextPrompt = `\n\nIMPORTANT: You need to ask question ${questionNumber}: "${nextUnanswered.question}". You have completed ${discoveryProgress.questionsCompleted} out of 6 questions so far. Do NOT skip to scheduling until all 6 questions are answered.`;
-          }
-        } else {
-          contextPrompt = '\n\nAll 6 discovery questions have been completed. You can now proceed to scheduling.';
-        }
-
-        // Process with GPT
-        const messages = [...conversationHistory];
-        if (contextPrompt) {
-          messages[messages.length - 1].content += contextPrompt;
-        }
-
-        const openaiResponse = await axios.post(
-          'https://api.openai.com/v1/chat/completions',
-          {
-            model: 'gpt-4o',
-            messages: messages,
-            temperature: 0.7
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-              'Content-Type': 'application/json'
-            },
-            timeout: 8000
-          }
-        );
-
-        const botReply = openaiResponse.data.choices[0].message.content || "Could you tell me a bit more about that?";
-
-        // Add bot reply to conversation history (without context prompt)
-        conversationHistory.push({ role: 'assistant', content: botReply });
-
-        // Update conversation state
-        if (conversationState === 'introduction') {
-          conversationState = 'discovery';
-        } else if (conversationState === 'discovery' && discoveryProgress.allQuestionsCompleted) {
-          conversationState = 'booking';
-          console.log('🔄 Transitioning to booking state - ALL 6 discovery questions completed');
+        // Add bot reply to conversation history (if not already added)
+        if (botReply && conversationState !== 'booking') {
+          conversationHistory.push({ role: 'user', content: userMessage });
+          conversationHistory.push({ role: 'assistant', content: botReply });
+        } else if (botReply && conversationState === 'booking' && conversationHistory[conversationHistory.length - 1].role !== 'assistant') {
+          conversationHistory.push({ role: 'assistant', content: botReply });
         }
 
         // Send the AI response
-        ws.send(JSON.stringify({
-          content: botReply,
-          content_complete: true,
-          actions: [],
-          response_id: parsed.response_id
-        }));
-        
-        // FIXED: Enhanced webhook sending logic
-        if (schedulingDetected && discoveryProgress.allQuestionsCompleted && !webhookSent) {
-          console.log('🚀 SENDING WEBHOOK - All conditions met:');
-          console.log('   ✅ All 6 discovery questions completed and answered');
-          console.log('   ✅ Scheduling preference detected');
-          console.log('   ✅ Contact info available');
-          
-          // Final validation of discovery data
-          const finalDiscoveryData = {};
-          discoveryQuestions.forEach((q, index) => {
-            if (q.answered && q.answer) {
-              finalDiscoveryData[q.field] = q.answer;
-              finalDiscoveryData[`question_${index}`] = q.answer;
-            }
-          });
-          
-          console.log('📋 Final discovery data being sent:', JSON.stringify(finalDiscoveryData, null, 2));
-          
-          const result = await sendSchedulingPreference(
-            bookingInfo.name || connectionData.customerName || '',
-            bookingInfo.email || connectionData.customerEmail || '',
-            bookingInfo.phone || connectionData.customerPhone || '',
-            bookingInfo.preferredDay,
-            connectionData.callId,
-            finalDiscoveryData
-          );
-          
-          if (result.success) {
-            webhookSent = true;
-            conversationState = 'completed';
-            console.log('✅ Webhook sent successfully with all discovery data');
-          }
+        if (botReply) {
+          ws.send(JSON.stringify({
+            content: botReply,
+            content_complete: true,
+            actions: [],
+            response_id: parsed.response_id
+          }));
         }
       }
     } catch (error) {
@@ -1103,10 +1437,11 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     console.log('📋 Final discoveryData:', JSON.stringify(discoveryData, null, 2));
     console.log('📊 Questions completed:', discoveryProgress.questionsCompleted);
     console.log('📊 All questions completed:', discoveryProgress.allQuestionsCompleted);
+    console.log('📊 Recap confirmed:', discoveryProgress.recapConfirmed);
     
     // Detailed breakdown of each question
     discoveryQuestions.forEach((q, index) => {
-      console.log(`Question ${index + 1}: Asked=${q.asked}, Answered=${q.answered}, Answer="${q.answer}"`);
+      console.log(`Question ${index}: Asked=${q.asked}, Answered=${q.answered}, Answer="${q.answer}"`);
     });
     
     // FINAL webhook attempt only if we have meaningful data and haven't sent yet
@@ -1118,6 +1453,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
         
         console.log('🚨 FINAL WEBHOOK ATTEMPT on connection close');
         console.log(`📊 Sending with ${discoveryProgress.questionsCompleted}/6 questions completed`);
+        console.log(`📊 Recap confirmed: ${discoveryProgress.recapConfirmed}`);
         
         // Create final discovery data from answered questions
         const finalDiscoveryData = {};
