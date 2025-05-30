@@ -1015,34 +1015,37 @@ Remember: Respond naturally to their greeting style, have brief pleasant convers
         }
       }
 
+      // PRIORITY: Handle user input immediately when detected
       if (parsed.interaction_type === 'response_required' || (parsed.interaction_type === 'update_only' && parsed.transcript)) {
         // For update_only messages, check if there's a new user utterance we haven't processed
         let userMessage = "";
+        let shouldProcess = false;
         
         if (parsed.interaction_type === 'response_required') {
           const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
           userMessage = latestUserUtterance?.content || "";
+          shouldProcess = true;
+          console.log('📥 Processing response_required message');
         } else if (parsed.interaction_type === 'update_only') {
           // Check if there's a user message we haven't processed yet
           const userUtterances = parsed.transcript.filter(t => t.role === 'user');
           if (userUtterances.length > 0) {
             const lastUserMessage = userUtterances[userUtterances.length - 1];
-            // Only process if this is a new message we haven't seen
-            if (lastUserMessage && !conversationHistory.some(h => h.role === 'user' && h.content === lastUserMessage.content)) {
+            // Process ANY user message in update_only if we're in greeting state
+            if (lastUserMessage && lastUserMessage.content && lastUserMessage.content.trim().length > 0) {
               userMessage = lastUserMessage.content;
+              shouldProcess = true;
               console.log('📥 Processing user message from update_only:', userMessage);
             } else {
-              console.log('📥 update_only message - no new user input to process');
-              return; // No new user input to process
+              console.log('📥 update_only message - no valid user content');
             }
           } else {
             console.log('📥 update_only message - no user utterances found');
-            return; // No user input in this message
           }
         }
         
-        if (!userMessage || userMessage.trim().length === 0) {
-          console.log('📥 Empty or invalid user message, skipping');
+        if (!shouldProcess || !userMessage || userMessage.trim().length === 0) {
+          console.log('📥 No valid user message to process, skipping');
           return;
         }
 
@@ -1450,23 +1453,23 @@ Remember: Respond naturally to their greeting style, have brief pleasant convers
           }
         }
 
-        // Add bot reply to conversation history (if not already added)
-        if (botReply && conversationState !== 'booking') {
-          conversationHistory.push({ role: 'user', content: userMessage });
-          conversationHistory.push({ role: 'assistant', content: botReply });
-        } else if (botReply && conversationState === 'booking' && conversationHistory[conversationHistory.length - 1].role !== 'assistant') {
-          conversationHistory.push({ role: 'assistant', content: botReply });
-        }
-
-        // Send the AI response
+        // Send the AI response IMMEDIATELY if we have one
         if (botReply) {
-          console.log(`🤖 SENDING BOT REPLY: "${botReply}"`);
+          console.log(`🤖 SENDING BOT REPLY IMMEDIATELY: "${botReply}"`);
           ws.send(JSON.stringify({
             content: botReply,
             content_complete: true,
             actions: [],
-            response_id: parsed.response_id
+            response_id: parsed.response_id || 999
           }));
+          
+          // Add to conversation history after sending
+          if (conversationState !== 'booking') {
+            conversationHistory.push({ role: 'user', content: userMessage });
+            conversationHistory.push({ role: 'assistant', content: botReply });
+          } else if (conversationState === 'booking' && conversationHistory[conversationHistory.length - 1].role !== 'assistant') {
+            conversationHistory.push({ role: 'assistant', content: botReply });
+          }
         } else {
           console.log(`❌ NO BOT REPLY SET - this is the problem!`);
           console.log(`   conversationState: ${conversationState}`);
@@ -1474,11 +1477,13 @@ Remember: Respond naturally to their greeting style, have brief pleasant convers
           console.log(`   userMessage: "${userMessage}"`);
           
           // Emergency fallback
+          const fallbackReply = "Hi there. This is Sarah from Nexella AI. How are you doing today.";
+          console.log(`🚨 SENDING FALLBACK REPLY: "${fallbackReply}"`);
           ws.send(JSON.stringify({
-            content: "Hi there. This is Sarah from Nexella AI. How are you doing today.",
+            content: fallbackReply,
             content_complete: true,
             actions: [],
-            response_id: parsed.response_id
+            response_id: parsed.response_id || 999
           }));
         }
       }
