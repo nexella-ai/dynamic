@@ -579,7 +579,7 @@ function analyzeUserGreeting(userMessage) {
   if (simpleGreetings.some(greeting => msg === greeting || msg.startsWith(greeting + ' '))) {
     return {
       type: 'simple',
-      response: "Hi there! This is Sarah from Nexella AI. How are you doing today?"
+      response: "Hi there. This is Sarah from Nexella AI. How are you doing today."
     };
   }
   
@@ -591,7 +591,7 @@ function analyzeUserGreeting(userMessage) {
   if (howAreYouPatterns.some(pattern => msg.includes(pattern))) {
     return {
       type: 'asking_how_we_are',
-      response: "I'm doing great, thank you for asking! How are you doing today?"
+      response: "I'm doing great, thank you for asking. How are you doing today."
     };
   }
   
@@ -600,7 +600,7 @@ function analyzeUserGreeting(userMessage) {
   if (casualGreetings.some(greeting => msg.startsWith(greeting))) {
     return {
       type: 'casual',
-      response: "Hey! This is Sarah from Nexella AI. How's everything going with you?"
+      response: "Hey. This is Sarah from Nexella AI. How's everything going with you."
     };
   }
   
@@ -612,14 +612,14 @@ function analyzeUserGreeting(userMessage) {
   if (businessKeywords.some(keyword => msg.includes(keyword))) {
     return {
       type: 'business_direct',
-      response: "Absolutely! I'm Sarah from Nexella AI and I'd be happy to help. Let me learn a bit about you and your business first. How did you hear about us?"
+      response: "Absolutely. I'm Sarah from Nexella AI and I'd be happy to help. Let me learn a bit about you and your business first. How did you hear about us."
     };
   }
   
   // Default: Friendly but unsure
   return {
     type: 'default',
-    response: "Hi there! This is Sarah from Nexella AI. How are you doing today?"
+    response: "Hi there. This is Sarah from Nexella AI. How are you doing today."
   };
 }
 
@@ -803,13 +803,13 @@ CONVERSATION FLOW:
 
 GREETING GUIDELINES - RESPOND NATURALLY TO USER'S GREETING:
 1. If user says simple greetings like "hi", "hello", "hey there":
-   - Respond: "Hi there! This is Sarah from Nexella AI. How are you doing today?"
+   - Respond: "Hi there. This is Sarah from Nexella AI. How are you doing today."
 
 2. If user asks how you're doing ("hey how's it going", "how are you", "what's up"):
-   - Respond: "I'm doing great, thank you for asking! How are you doing today?"
+   - Respond: "I'm doing great, thank you for asking. How are you doing today."
 
 3. If user gives a casual greeting with context ("hey", "what's up", "yo"):
-   - Respond: "Hey! This is Sarah from Nexella AI. How's everything going with you?"
+   - Respond: "Hey. This is Sarah from Nexella AI. How's everything going with you."
 
 4. If user immediately starts talking business:
    - Skip pleasantries and engage with their topic, then transition to discovery
@@ -895,7 +895,7 @@ Remember: Respond naturally to their greeting style, have brief pleasant convers
     if (!userHasSpoken) {
       console.log('🎙️ Sending auto-greeting message');
       ws.send(JSON.stringify({
-        content: "Hi there! This is Sarah from Nexella AI. How are you doing today?",
+        content: "Hi there. This is Sarah from Nexella AI. How are you doing today.",
         content_complete: true,
         actions: [],
         response_id: 1
@@ -908,7 +908,7 @@ Remember: Respond naturally to their greeting style, have brief pleasant convers
     if (!userHasSpoken) {
       console.log('🎙️ Sending backup auto-greeting');
       ws.send(JSON.stringify({
-        content: "Hello! This is Sarah from Nexella AI. I'm here to help you today. How's everything going?",
+        content: "Hello. This is Sarah from Nexella AI. I'm here to help you today. How's everything going.",
         content_complete: true,
         actions: [],
         response_id: 2
