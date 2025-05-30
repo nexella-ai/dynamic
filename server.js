@@ -1196,10 +1196,13 @@ Remember: Respond naturally to their greeting style, have brief pleasant convers
                   if (discoveryProgress.currentQuestionIndex === 0) { // How did you hear about us
                     // Make sure we're not capturing a greeting or unrelated response
                     const msg = userMessage.toLowerCase();
-                    if (msg.includes('good') || msg.includes('fine') || msg.includes('how are you') || msg.includes('great')) {
+                    if (msg.includes('good') || msg.includes('fine') || msg.includes('how are you') || msg.includes('great') || 
+                        msg.includes('doing well') || msg.includes('i\'m doing') || msg.includes('im doing') ||
+                        msg === 'hello' || msg === 'hi' || msg === 'hey') {
                       // This might be a greeting response, not an answer to our question
                       console.log('⚠️ Possible greeting response captured as answer, skipping...');
                       discoveryProgress.waitingForAnswer = false; // Reset waiting state
+                      currentQ.asked = false; // Mark question as not asked so it can be asked again
                       return; // Don't capture this as an answer
                     }
                   }
