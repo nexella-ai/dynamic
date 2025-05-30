@@ -13,7 +13,7 @@ router.post('/', async (req, res) => {
     storeContactInfoGlobally(name, email, phone, 'API Call');
 
     const response = await axios.post(
-      'https://api.retellai.com/v1/calls',
+      'https://api.retellai.com/calls',
       {
         agent_id: RETELL_AGENT_ID,
         customer_number: phone,
