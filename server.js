@@ -1024,9 +1024,9 @@ Remember: Respond naturally to their greeting style, have brief pleasant convers
         console.log('🔄 Current greeting phase:', greetingPhase);
         console.log('🔄 Current recap phase:', recapPhase);
         console.log('📊 Discovery progress:', discoveryProgress);
-        console.log('🤖 About to set botReply, current value:', botReply);
 
-        let botReply = "";
+        let botReply = ""; // Initialize botReply first!
+        console.log('🤖 About to set botReply, current value:', botReply);
         
         // Handle greeting phase with enhanced logic
         if (conversationState === 'greeting') {
