@@ -1024,6 +1024,7 @@ Remember: Respond naturally to their greeting style, have brief pleasant convers
         console.log('🔄 Current greeting phase:', greetingPhase);
         console.log('🔄 Current recap phase:', recapPhase);
         console.log('📊 Discovery progress:', discoveryProgress);
+        console.log('🤖 About to set botReply, current value:', botReply);
 
         let botReply = "";
         
@@ -1198,6 +1199,7 @@ Remember: Respond naturally to their greeting style, have brief pleasant convers
                     if (msg.includes('good') || msg.includes('fine') || msg.includes('how are you') || msg.includes('great')) {
                       // This might be a greeting response, not an answer to our question
                       console.log('⚠️ Possible greeting response captured as answer, skipping...');
+                      discoveryProgress.waitingForAnswer = false; // Reset waiting state
                       return; // Don't capture this as an answer
                     }
                   }
