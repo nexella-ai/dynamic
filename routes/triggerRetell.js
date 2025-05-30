@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { storeContactInfoGlobally } = require('../utils/contactStorage');
-const { RetellClient } = require('retell-sdk');
+const Retell = require('retell-sdk').default;
 const { RETELL_API_KEY, RETELL_AGENT_ID } = require('../config');
 
 const client = new RetellClient({ apiKey: RETELL_API_KEY });
