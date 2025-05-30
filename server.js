@@ -786,6 +786,7 @@ wss.on('connection', async (ws, req) => {
   let conversationState = 'greeting'; // greeting -> discovery -> recap -> correction -> booking -> completed
   let greetingPhase = 'initial'; // initial -> how_are_you -> transition -> discovery_start
   let recapPhase = 'presenting'; // presenting -> awaiting_confirmation -> correcting
+  let lastProcessedMessage = ''; // Track last processed message to prevent duplicates
 
   // UPDATED: Improved system prompt with better greeting flow and recap
   let conversationHistory = [
@@ -1049,6 +1050,13 @@ Remember: Respond naturally to their greeting style, have brief pleasant convers
           return;
         }
 
+        // CRITICAL: Prevent processing the same message multiple times
+        if (userMessage === lastProcessedMessage) {
+          console.log('📥 Duplicate message detected, skipping:', userMessage);
+          return;
+        }
+        lastProcessedMessage = userMessage;
+
         console.log('🗣️ User said:', userMessage);
         console.log('🔄 Current conversation state:', conversationState);
         console.log('🔄 Current greeting phase:', greetingPhase);
@@ -1057,6 +1065,36 @@ Remember: Respond naturally to their greeting style, have brief pleasant convers
 
         let botReply = ""; // Initialize botReply first!
         console.log('🤖 About to set botReply, current value:', botReply);
+
+        // CRITICAL: If user says greeting words while in discovery state, reset to greeting
+        const msg = userMessage.toLowerCase().trim().replace('?', '');
+        const isGreeting = ['hi', 'hello', 'hey', 'hey there'].includes(msg);
+        
+        if (isGreeting && conversationState === 'discovery' && discoveryProgress.questionsCompleted === 0) {
+          console.log('🔄 RESETTING: User said greeting while in discovery state, resetting to greeting');
+          conversationState = 'greeting';
+          greetingPhase = 'initial';
+          // Reset discovery progress
+          discoveryProgress = {
+            currentQuestionIndex: -1,
+            questionsCompleted: 0,
+            allQuestionsCompleted: false,
+            lastBotMessage: '',
+            waitingForAnswer: false,
+            questionOrder: [],
+            recapPresented: false,
+            recapConfirmed: false,
+            needsCorrection: false,
+            correctingQuestionIndex: -1
+          };
+          // Reset discovery questions
+          discoveryQuestions.forEach(q => {
+            q.asked = false;
+            q.answered = false;
+            q.answer = '';
+          });
+          discoveryData = {};
+        }
         
         // Handle greeting phase with enhanced logic
         if (conversationState === 'greeting') {
