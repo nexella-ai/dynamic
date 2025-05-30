@@ -13,7 +13,7 @@ router.post('/', async (req, res) => {
     storeContactInfoGlobally(name, email, phone, 'API Call');
 
     const response = await axios.post(
-      'https://api.retellai.com/calls',
+      'https://api.retellai.com/v1/calls',
       {
         agent_id: RETELL_AGENT_ID,
         customer_number: phone,
@@ -29,7 +29,6 @@ router.post('/', async (req, res) => {
     );
 
     console.log('[Retell API] Response:', response.data);
-
     res.status(200).json({ success: true, call_id: response.data.call_id });
   } catch (error) {
     console.error('[Retell API] Error:', error.response?.data || error.message);
