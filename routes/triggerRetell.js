@@ -28,8 +28,11 @@ router.post('/', async (req, res) => {
       }
     );
 
+    console.log('[Retell API] Response:', response.data);
+
     res.status(200).json({ success: true, call_id: response.data.call_id });
   } catch (error) {
+    console.error('[Retell API] Error:', error.response?.data || error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
