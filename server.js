@@ -508,11 +508,11 @@ function generateDiscoveryRecap(discoveryData, discoveryQuestions) {
     }
   });
   
-  const recap = `Perfect! Let me quickly recap what you've shared to make sure I have everything correct:
+  const recap = `Perfect. Let me quickly recap what you've shared to make sure I have everything correct.
 
 ${answers.join('\n')}
 
-Does all of that sound right to you?`;
+Does all of that sound right to you.`;
 
   return recap;
 }
@@ -819,18 +819,18 @@ TRANSITION GUIDELINES:
   "That's great to hear! I'd love to learn a bit more about you and your business so I can better help you today."
 - Then start with the first discovery question
 
-DISCOVERY QUESTIONS (ask in this EXACT order):
-1. "How did you hear about us?"
-2. "What industry or business are you in?"
-3. "What's your main product or service?"
-4. "Are you currently running any ads?"
-5. "Are you using any CRM system?"
-6. "What are your biggest pain points or challenges?"
+DISCOVERY QUESTIONS (ask in this EXACT order - use periods, not question marks):
+1. "How did you hear about us."
+2. "What industry or business are you in."
+3. "What's your main product or service."
+4. "Are you currently running any ads."
+5. "Are you using any CRM system."
+6. "What are your biggest pain points or challenges."
 
 RECAP PHASE GUIDELINES:
 - After all 6 questions are answered, present a numbered recap
 - List each question with their exact answer
-- Ask "Does all of that sound right to you?"
+- Ask "Does all of that sound right to you." (use period, not question mark)
 - Wait for their confirmation before proceeding
 
 CORRECTION PHASE GUIDELINES:
@@ -846,18 +846,23 @@ SPEAKING STYLE & PACING:
 - Complete all your sentences fully - never cut off mid-thought
 - Use shorter sentences rather than long, complex ones
 - Keep your statements and questions concise but complete
+- CRITICAL: Only use question marks (?) for actual questions that require an answer
+- Use periods (.) for statements, even if they're about asking questions
+- When ending with a period, maintain an even, calm tone throughout
 
 PERSONALITY & TONE:
 - Be warm and friendly but speak in a calm, measured way
 - Use a consistent, even speaking tone throughout the conversation
 - Use contractions and everyday language that sounds natural
 - Maintain a calm, professional demeanor at all times
-- If you ask a question with a question mark '?' go up in pitch and tone towards the end of the sentence.
-- If you respond with "." always keep an even consistent tone towards the end of the sentence.
+- IMPORTANT: Do NOT use exclamation marks (!) - they make you sound robotic
+- Keep tone even and measured, avoid dramatic emphasis
+- When making statements (ending with .), keep tone flat and professional
+- Only raise pitch/tone at the very end if ending with a question mark (?)
 
 SCHEDULING APPROACH:
 - ONLY after they confirm all answers are correct
-- Say: "Perfect! Now that I have all your information, let's schedule a call to discuss how we can help. What day would work best for you?"
+- Say: "Perfect. Now that I have all your information, let's schedule a call to discuss how we can help. What day would work best for you."
 
 Remember: Respond naturally to their greeting style, have brief pleasant conversation, then systematically complete ALL 6 discovery questions, do the recap and confirmation, before any scheduling discussion.`
     }
@@ -1049,19 +1054,38 @@ Remember: Respond naturally to their greeting style, have brief pleasant convers
             }
             
           } else if (greetingPhase === 'how_are_you') {
-            // They responded to "how are you doing" - acknowledge and transition
+            // They responded to "how are you doing" - acknowledge and respond to their question if they asked
             const msg = userMessage.toLowerCase();
             
-            // Acknowledge their response
+            // Check if they asked how we're doing back
+            const askedHowWeAre = msg.includes('how are you') || msg.includes('how about you') || msg.includes('and you');
+            
+            // Acknowledge their response and potentially answer their question
             if (msg.includes('good') || msg.includes('great') || msg.includes('fine') || msg.includes('well')) {
-              botReply = "That's wonderful to hear! I'd love to learn a bit more about you and your business so I can better help you today. How did you hear about us?";
+              if (askedHowWeAre) {
+                botReply = "That's wonderful to hear. I'm doing great too, thank you for asking. I'd love to learn a bit more about you and your business so I can better help you today. How did you hear about us.";
+              } else {
+                botReply = "That's wonderful to hear. I'd love to learn a bit more about you and your business so I can better help you today. How did you hear about us.";
+              }
             } else if (msg.includes('bad') || msg.includes('not good') || msg.includes('rough') || msg.includes('tough')) {
-              botReply = "I'm sorry to hear that. Well, hopefully I can help brighten your day! Let me learn a bit about you and your business. How did you hear about us?";
+              if (askedHowWeAre) {
+                botReply = "I'm sorry to hear that. I'm doing well, thank you for asking. Well, hopefully I can help brighten your day. Let me learn a bit about you and your business. How did you hear about us.";
+              } else {
+                botReply = "I'm sorry to hear that. Well, hopefully I can help brighten your day. Let me learn a bit about you and your business. How did you hear about us.";
+              }
             } else if (msg.includes('busy') || msg.includes('hectic') || msg.includes('crazy')) {
-              botReply = "I totally understand, life can get hectic! I'll keep this brief. Let me just learn a bit about your business. How did you hear about us?";
+              if (askedHowWeAre) {
+                botReply = "I totally understand, life can get hectic. I'm doing well, thank you for asking. I'll keep this brief. Let me just learn a bit about your business. How did you hear about us.";
+              } else {
+                botReply = "I totally understand, life can get hectic. I'll keep this brief. Let me just learn a bit about your business. How did you hear about us.";
+              }
             } else {
               // Generic acknowledgment
-              botReply = "Thanks for sharing! I'd love to learn a bit more about you and your business so I can better help you today. How did you hear about us?";
+              if (askedHowWeAre) {
+                botReply = "Thanks for sharing. I'm doing great, thank you for asking. I'd love to learn a bit more about you and your business so I can better help you today. How did you hear about us.";
+              } else {
+                botReply = "Thanks for sharing. I'd love to learn a bit more about you and your business so I can better help you today. How did you hear about us.";
+              }
             }
             
             // Transition to discovery
@@ -1151,12 +1175,39 @@ Remember: Respond naturally to their greeting style, have brief pleasant convers
               if (discoveryProgress.waitingForAnswer && userMessage.trim().length > 2) {
                 const currentQ = discoveryQuestions[discoveryProgress.currentQuestionIndex];
                 if (currentQ && currentQ.asked && !currentQ.answered) {
+                  // Enhanced answer validation - check for negative responses that might be misunderstood
+                  let userAnswer = userMessage.trim();
+                  
+                  // Special handling for pain points question to avoid capturing "No" when they mean something else
+                  if (discoveryProgress.currentQuestionIndex === 5) { // Pain points question
+                    const msg = userMessage.toLowerCase();
+                    // If they say just "no" but their full response is longer, capture the full response
+                    if (msg.includes('no') && userMessage.length > 5) {
+                      // They likely said "No, but..." or explained something - capture full response
+                      userAnswer = userMessage.trim();
+                    } else if (msg === 'no' || msg === 'no.' || msg === 'none' || msg === 'none.') {
+                      // They truly meant no pain points
+                      userAnswer = "No pain points";
+                    }
+                  }
+                  
+                  // Enhanced answer validation for other questions too
+                  if (discoveryProgress.currentQuestionIndex === 0) { // How did you hear about us
+                    // Make sure we're not capturing a greeting or unrelated response
+                    const msg = userMessage.toLowerCase();
+                    if (msg.includes('good') || msg.includes('fine') || msg.includes('how are you') || msg.includes('great')) {
+                      // This might be a greeting response, not an answer to our question
+                      console.log('⚠️ Possible greeting response captured as answer, skipping...');
+                      return; // Don't capture this as an answer
+                    }
+                  }
+                  
                   currentQ.answered = true;
-                  currentQ.answer = userMessage.trim();
+                  currentQ.answer = userAnswer;
                   
                   // FIXED: Correct mapping - use the actual index from the array
-                  discoveryData[currentQ.field] = userMessage.trim();
-                  discoveryData[`question_${discoveryProgress.currentQuestionIndex}`] = userMessage.trim();
+                  discoveryData[currentQ.field] = userAnswer;
+                  discoveryData[`question_${discoveryProgress.currentQuestionIndex}`] = userAnswer;
                   
                   discoveryProgress.questionsCompleted++;
                   discoveryProgress.waitingForAnswer = false;
@@ -1164,7 +1215,7 @@ Remember: Respond naturally to their greeting style, have brief pleasant convers
                   console.log(`✅ CAPTURED ANSWER ${discoveryProgress.questionsCompleted}/6:`);
                   console.log(`   Question Index: ${discoveryProgress.currentQuestionIndex}`);
                   console.log(`   Question: ${currentQ.question}`);
-                  console.log(`   Answer: "${userMessage.trim()}"`);
+                  console.log(`   Answer: "${userAnswer}"`);
                   console.log(`   Field: ${currentQ.field}`);
                   console.log(`   Question Key: question_${discoveryProgress.currentQuestionIndex}`);
                   
@@ -1249,7 +1300,7 @@ Remember: Respond naturally to their greeting style, have brief pleasant convers
               discoveryProgress.recapConfirmed = true;
               conversationState = 'booking';
               
-              botReply = "Perfect! Now that I have all your information, let's schedule a call to discuss how we can help. What day would work best for you?";
+              botReply = "Perfect. Now that I have all your information, let's schedule a call to discuss how we can help. What day would work best for you.";
               
             } else if (msg.includes('no') || msg.includes('wrong') || msg.includes('incorrect') || 
                        msg.includes('not right') || msg.includes('fix') || msg.includes('change')) {
@@ -1276,7 +1327,7 @@ Remember: Respond naturally to their greeting style, have brief pleasant convers
             console.log(`🔧 User wants to correct question ${correctionInfo.questionIndex + 1}: ${correctionInfo.question}`);
             discoveryProgress.correctingQuestionIndex = correctionInfo.questionIndex;
             
-            botReply = `Got it! Let me re-ask that question. ${correctionInfo.question}`;
+            botReply = "Got it. Let me re-ask that question. ${correctionInfo.question}";
             
           } else if (discoveryProgress.correctingQuestionIndex >= 0) {
             // They're providing the new answer
@@ -1298,7 +1349,7 @@ Remember: Respond naturally to their greeting style, have brief pleasant convers
             conversationState = 'recap';
             recapPhase = 'presenting';
             
-            botReply = `Perfect! Here's the updated information:\n\n${generateDiscoveryRecap(discoveryData, discoveryQuestions)}`;
+            botReply = `Perfect. Here's the updated information.\n\n${generateDiscoveryRecap(discoveryData, discoveryQuestions)}`;
             
           } else {
             // Couldn't understand what they want to correct
