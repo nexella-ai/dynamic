@@ -1430,8 +1430,22 @@ Remember: Respond naturally to their greeting style, have brief pleasant convers
 
         // Send the AI response
         if (botReply) {
+          console.log(`🤖 SENDING BOT REPLY: "${botReply}"`);
           ws.send(JSON.stringify({
             content: botReply,
+            content_complete: true,
+            actions: [],
+            response_id: parsed.response_id
+          }));
+        } else {
+          console.log(`❌ NO BOT REPLY SET - this is the problem!`);
+          console.log(`   conversationState: ${conversationState}`);
+          console.log(`   greetingPhase: ${greetingPhase}`);
+          console.log(`   userMessage: "${userMessage}"`);
+          
+          // Emergency fallback
+          ws.send(JSON.stringify({
+            content: "Hi there. This is Sarah from Nexella AI. How are you doing today.",
             content_complete: true,
             actions: [],
             response_id: parsed.response_id
