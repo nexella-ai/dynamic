@@ -572,7 +572,7 @@ function parseCorrection(userMessage, discoveryQuestions) {
 
 // Enhanced greeting detection and response system
 function analyzeUserGreeting(userMessage) {
-  const msg = userMessage.toLowerCase().trim();
+  const msg = userMessage.toLowerCase().trim().replace('?', ''); // Remove question mark for analysis
   
   // Pattern 1: Simple greetings - ask how they're doing
   const simpleGreetings = ['hi', 'hello', 'hey there', 'good morning', 'good afternoon', 'good evening'];
