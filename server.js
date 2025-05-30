@@ -92,14 +92,16 @@ async function updateConversationState(callId, discoveryComplete, preferredDay) 
   }
 }
 
-// FIXED: Send scheduling data with CORRECT field mapping
+// ENHANCED: Send scheduling data with proper email handling - MULTIPLE SOURCES
 async function sendSchedulingPreference(name, email, phone, preferredDay, callId, discoveryData = {}) {
   try {
-    console.log('=== WEBHOOK SENDING DEBUG ===');
+    console.log('=== ENHANCED WEBHOOK SENDING DEBUG ===');
     console.log('Input parameters:', { name, email, phone, preferredDay, callId });
     console.log('Raw discovery data input:', JSON.stringify(discoveryData, null, 2));
+    console.log('Discovery data keys:', Object.keys(discoveryData));
+    console.log('Global Typeform submission:', global.lastTypeformSubmission);
     
-    // Try multiple methods to get email
+    // ENHANCED: Try multiple methods to get email
     let finalEmail = email;
     let finalName = name;
     let finalPhone = phone;
@@ -147,26 +149,30 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     
     console.log(`Final contact info - Email: "${finalEmail}", Name: "${finalName}", Phone: "${finalPhone}"`);
     
-    // Don't proceed if we still don't have an email
+    // CRITICAL: Don't proceed if we still don't have an email
     if (!finalEmail || finalEmail.trim() === '') {
       console.error('❌ CRITICAL: No email found from any source. Cannot send webhook.');
       return { success: false, error: 'No email address available' };
     }
     
-    // FIXED: Correct field mapping to match your Airtable structure
+    // ENHANCED: Process discovery data with better field mapping
+    console.log('🔧 PROCESSING DISCOVERY DATA:');
+    console.log('Raw discoveryData input:', JSON.stringify(discoveryData, null, 2));
+    
+    // Initialize formatted discovery data
     const formattedDiscoveryData = {};
     
-    // CORRECT field mappings - based on your logs showing the right field names
+    // Define field mappings from question keys to Airtable field names
     const fieldMappings = {
       'question_0': 'How did you hear about us',
-      'question_1': 'Business/Industry',
+      'question_1': 'Business/Industry', 
       'question_2': 'Main product',
       'question_3': 'Running ads',
       'question_4': 'Using CRM',
       'question_5': 'Pain points'
     };
     
-    // Process discovery data with correct mapping
+    // Process all discovery data
     Object.entries(discoveryData).forEach(([key, value]) => {
       console.log(`🔧 Processing key: "${key}" with value: "${value}"`);
       
@@ -174,11 +180,38 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
         const trimmedValue = value.trim();
         
         if (key.startsWith('question_') && fieldMappings[key]) {
+          // Map question_X to the exact Airtable field name
           formattedDiscoveryData[fieldMappings[key]] = trimmedValue;
           console.log(`✅ Mapped ${key} -> "${fieldMappings[key]}" = "${trimmedValue}"`);
-        } else if (fieldMappings[key]) {
-          formattedDiscoveryData[fieldMappings[key]] = trimmedValue;
-          console.log(`✅ Direct mapping: ${fieldMappings[key]} = "${trimmedValue}"`);
+        } else if (key === 'How did you hear about us' || key.includes('hear about')) {
+          formattedDiscoveryData['How did you hear about us'] = trimmedValue;
+          console.log(`✅ Direct mapping: How did you hear about us = "${trimmedValue}"`);
+        } else if (key === 'Business/Industry' || key.includes('business') || key.includes('industry')) {
+          // Only map if we don't already have it from question_1
+          if (!formattedDiscoveryData['Business/Industry']) {
+            formattedDiscoveryData['Business/Industry'] = trimmedValue;
+            console.log(`✅ Direct mapping: Business/Industry = "${trimmedValue}"`);
+          }
+        } else if (key === 'Main product' || key.includes('product')) {
+          if (!formattedDiscoveryData['Main product']) {
+            formattedDiscoveryData['Main product'] = trimmedValue;
+            console.log(`✅ Direct mapping: Main product = "${trimmedValue}"`);
+          }
+        } else if (key === 'Running ads' || key.includes('ads') || key.includes('advertising')) {
+          if (!formattedDiscoveryData['Running ads']) {
+            formattedDiscoveryData['Running ads'] = trimmedValue;
+            console.log(`✅ Direct mapping: Running ads = "${trimmedValue}"`);
+          }
+        } else if (key === 'Using CRM' || key.includes('crm')) {
+          if (!formattedDiscoveryData['Using CRM']) {
+            formattedDiscoveryData['Using CRM'] = trimmedValue;
+            console.log(`✅ Direct mapping: Using CRM = "${trimmedValue}"`);
+          }
+        } else if (key === 'Pain points' || key.includes('pain') || key.includes('problem') || key.includes('challenge')) {
+          if (!formattedDiscoveryData['Pain points']) {
+            formattedDiscoveryData['Pain points'] = trimmedValue;
+            console.log(`✅ Direct mapping: Pain points = "${trimmedValue}"`);
+          }
         } else {
           // Keep original key if it doesn't match any pattern
           formattedDiscoveryData[key] = trimmedValue;
@@ -188,6 +221,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     });
     
     console.log('🔧 FINAL FORMATTED DISCOVERY DATA:', JSON.stringify(formattedDiscoveryData, null, 2));
+    console.log('📊 Total discovery fields captured:', Object.keys(formattedDiscoveryData).length);
     
     // Ensure phone number is formatted properly
     if (finalPhone && !finalPhone.startsWith('+')) {
@@ -197,14 +231,14 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     // Create the webhook payload
     const webhookData = {
       name: finalName || '',
-      email: finalEmail,
+      email: finalEmail, // This is now guaranteed to have a value
       phone: finalPhone || '',
       preferredDay: preferredDay || '',
       call_id: callId || '',
       schedulingComplete: true,
       discovery_data: formattedDiscoveryData,
-      formatted_discovery: formattedDiscoveryData,
-      // Include individual fields for direct access
+      formatted_discovery: formattedDiscoveryData, // Send both for compatibility
+      // Also include individual fields for direct access
       "How did you hear about us": formattedDiscoveryData["How did you hear about us"] || '',
       "Business/Industry": formattedDiscoveryData["Business/Industry"] || '',
       "Main product": formattedDiscoveryData["Main product"] || '',
@@ -214,8 +248,9 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     };
     
     console.log('📤 COMPLETE WEBHOOK PAYLOAD:', JSON.stringify(webhookData, null, 2));
+    console.log('✅ Sending scheduling preference to trigger server');
     
-    const response = await axios.post(`${process.env.TRIGGER_SERVER_URL}/process-scheduling-preference`, webhookData, {
+    const response = await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, webhookData, {
       headers: { 'Content-Type': 'application/json' },
       timeout: 10000
     });
@@ -226,50 +261,104 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
   } catch (error) {
     console.error('❌ Error sending scheduling preference:', error);
     
-    // Enhanced fallback to n8n
+    // Enhanced fallback to n8n with same data processing
     try {
-      console.log('🔄 Attempting fallback to n8n webhook');
+      console.log('🔄 Attempting to send directly to n8n webhook as fallback');
       const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL || 'https://n8n-clp2.onrender.com/webhook/retell-scheduling';
       
+      // Use the same processing logic for fallback
+      let fallbackEmail = email || (global.lastTypeformSubmission && global.lastTypeformSubmission.email) || '';
+      let fallbackName = name || (global.lastTypeformSubmission && global.lastTypeformSubmission.name) || '';
+      let fallbackPhone = phone || (global.lastTypeformSubmission && global.lastTypeformSubmission.phone) || '';
+      
+      if (callId && activeCallsMetadata.has(callId)) {
+        const callMetadata = activeCallsMetadata.get(callId);
+        fallbackEmail = fallbackEmail || callMetadata?.customer_email || '';
+        fallbackName = fallbackName || callMetadata?.customer_name || '';
+        fallbackPhone = fallbackPhone || callMetadata?.phone || callMetadata?.to_number || '';
+      }
+      
+      // Process discovery data for fallback (same logic)
+      const formattedDiscoveryData = {};
+      const fieldMappings = {
+        'question_0': 'How did you hear about us',
+        'question_1': 'Business/Industry',
+        'question_2': 'Main product',
+        'question_3': 'Running ads',
+        'question_4': 'Using CRM',
+        'question_5': 'Pain points'
+      };
+      
+      Object.entries(discoveryData).forEach(([key, value]) => {
+        if (value && typeof value === 'string' && value.trim() !== '') {
+          const trimmedValue = value.trim();
+          if (key.startsWith('question_') && fieldMappings[key]) {
+            formattedDiscoveryData[fieldMappings[key]] = trimmedValue;
+          } else if (key === 'How did you hear about us' || key.includes('hear about')) {
+            formattedDiscoveryData['How did you hear about us'] = trimmedValue;
+          } else if (key === 'Business/Industry' || key.includes('business') || key.includes('industry')) {
+            formattedDiscoveryData['Business/Industry'] = trimmedValue;
+          } else if (key === 'Main product' || key.includes('product')) {
+            formattedDiscoveryData['Main product'] = trimmedValue;
+          } else if (key === 'Running ads' || key.includes('ads')) {
+            formattedDiscoveryData['Running ads'] = trimmedValue;
+          } else if (key === 'Using CRM' || key.includes('crm')) {
+            formattedDiscoveryData['Using CRM'] = trimmedValue;
+          } else if (key === 'Pain points' || key.includes('pain') || key.includes('problem')) {
+            formattedDiscoveryData['Pain points'] = trimmedValue;
+          } else {
+            formattedDiscoveryData[key] = trimmedValue;
+          }
+        }
+      });
+      
       const fallbackWebhookData = {
-        name: finalName || '',
-        email: finalEmail || '',
-        phone: finalPhone || '',
+        name: fallbackName,
+        email: fallbackEmail,
+        phone: fallbackPhone,
         preferredDay: preferredDay || '',
         call_id: callId || '',
         schedulingComplete: true,
-        "How did you hear about us": discoveryData["How did you hear about us"] || discoveryData["question_0"] || '',
-        "Business/Industry": discoveryData["Business/Industry"] || discoveryData["question_1"] || '',
-        "Main product": discoveryData["Main product"] || discoveryData["question_2"] || '',
-        "Running ads": discoveryData["Running ads"] || discoveryData["question_3"] || '',
-        "Using CRM": discoveryData["Using CRM"] || discoveryData["question_4"] || '',
-        "Pain points": discoveryData["Pain points"] || discoveryData["question_5"] || ''
+        discovery_data: formattedDiscoveryData,
+        formatted_discovery: formattedDiscoveryData,
+        "How did you hear about us": formattedDiscoveryData["How did you hear about us"] || '',
+        "Business/Industry": formattedDiscoveryData["Business/Industry"] || '',
+        "Main product": formattedDiscoveryData["Main product"] || '',
+        "Running ads": formattedDiscoveryData["Running ads"] || '',
+        "Using CRM": formattedDiscoveryData["Using CRM"] || '',
+        "Pain points": formattedDiscoveryData["Pain points"] || ''
       };
+      
+      console.log('🔄 Fallback webhook data:', JSON.stringify(fallbackWebhookData, null, 2));
       
       const n8nResponse = await axios.post(n8nWebhookUrl, fallbackWebhookData, {
         headers: { 'Content-Type': 'application/json' },
         timeout: 10000
       });
       
-      console.log('✅ Successfully sent to n8n fallback:', n8nResponse.data);
+      console.log('✅ Successfully sent directly to n8n:', n8nResponse.data);
       return { success: true, fallback: true };
       
     } catch (n8nError) {
-      console.error('❌ Error sending to n8n fallback:', n8nError);
+      console.error('❌ Error sending directly to n8n:', n8nError);
       return { success: false, error: error.message };
     }
   }
 }
 
-// Better detection of scheduling preferences
+// IMPROVED: Better detection of scheduling preferences
 function handleSchedulingPreference(userMessage) {
+  // Extract day of week with better handling for various formats
   const dayMatch = userMessage.match(/monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today/i);
   const nextWeekMatch = userMessage.match(/next week/i);
   
   if (nextWeekMatch) {
+    // Handle "next week" specifically
     let targetDate = new Date();
+    // Add 7 days to get to next week, then adjust to Monday
     targetDate.setDate(targetDate.getDate() + 7);
     
+    // Get next Monday (if we're already past Monday this week)
     const dayOfWeek = targetDate.getDay();
     const daysUntilMonday = (dayOfWeek === 0) ? 1 : (8 - dayOfWeek);
     targetDate.setDate(targetDate.getDate() + daysUntilMonday - 7);
@@ -284,6 +373,7 @@ function handleSchedulingPreference(userMessage) {
     
     let targetDate = new Date();
     
+    // Handle relative day references
     if (preferredDay === 'tomorrow') {
       targetDate.setDate(targetDate.getDate() + 1);
       return {
@@ -298,6 +388,7 @@ function handleSchedulingPreference(userMessage) {
         isSpecific: true
       };
     } else {
+      // Handle specific day of week
       const daysOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
       const requestedDayIndex = daysOfWeek.findIndex(d => d === preferredDay);
       
@@ -305,6 +396,7 @@ function handleSchedulingPreference(userMessage) {
         const currentDay = targetDate.getDay();
         let daysToAdd = requestedDayIndex - currentDay;
         
+        // If the requested day is earlier in the week than today, go to next week
         if (daysToAdd <= 0) {
           daysToAdd += 7;
         }
@@ -324,38 +416,51 @@ function handleSchedulingPreference(userMessage) {
 }
 
 // HTTP Request - Trigger Retell Call
+// This endpoint initiates the call with Retell
 app.post('/trigger-retell-call', express.json(), async (req, res) => {
   try {
     const { name, email, phone, userId } = req.body;
     console.log(`Received request to trigger Retell call for ${name} (${email})`);
     
+    // Check if we have all required fields
     if (!email) {
       return res.status(400).json({ success: false, error: 'Email is required' });
     }
     
+    // Ensure we have a unique user ID
     const userIdentifier = userId || `user_${phone || Date.now()}`;
+    
+    // Log the incoming request data
     console.log('Call request data:', { name, email, phone, userIdentifier });
     
+    // ENHANCED: Store the data globally immediately
     storeContactInfoGlobally(name, email, phone, 'API Call');
     
+    // Set up metadata for the Retell call
+    // This is how we'll pass customer information to the voice agent
     const metadata = {
-      customer_name: name || '',
-      customer_email: email,
-      customer_phone: phone || ''
+      customer_name: name || '',  // Ensure name is passed to agent
+      customer_email: email,      // Always include email
+      customer_phone: phone || '' // Include phone if available
     };
     
+    // Log the metadata we're sending to Retell
     console.log('Setting up call with metadata:', metadata);
     
+    // Prevent fallback to "Monica" by setting a variable directly in the agent
     const initialVariables = {
       customer_name: name || '',
       customer_email: email
     };
     
+    // Make call to Retell API
     const response = await axios.post('https://api.retellai.com/v1/calls', 
       {
         agent_id: process.env.RETELL_AGENT_ID,
         customer_number: phone,
+        // Set LLM variables to pass customer info (may need Retell update to use)
         variables: initialVariables,
+        // Pass metadata which will be available in WebSocket connection
         metadata
       },
       {
@@ -382,7 +487,7 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
   }
 });
 
-// WebSocket connection handler - FIXED question mapping
+// ENHANCED WEBSOCKET CONNECTION HANDLER - FIXED DISCOVERY SYSTEM
 wss.on('connection', async (ws, req) => {
   console.log('🔗 NEW WEBSOCKET CONNECTION ESTABLISHED');
   console.log('Connection URL:', req.url);
@@ -410,6 +515,7 @@ wss.on('connection', async (ws, req) => {
       console.log('🔍 Fetching metadata for call:', callId);
       const TRIGGER_SERVER_URL = process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com';
       
+      // Try multiple possible endpoints
       const possibleEndpoints = [
         `${TRIGGER_SERVER_URL}/api/get-call-data/${callId}`,
         `${TRIGGER_SERVER_URL}/get-call-info/${callId}`,
@@ -431,9 +537,11 @@ wss.on('connection', async (ws, req) => {
             const callData = await response.json();
             console.log('📋 Retrieved call metadata:', callData);
             
+            // Handle nested response structure
             const actualData = callData.data || callData;
             connectionData.metadata = actualData;
             
+            // Extract data from metadata - handle both direct and nested structure
             connectionData.customerEmail = actualData.email || actualData.customer_email || actualData.user_email || 
                                          (actualData.metadata && actualData.metadata.customer_email);
             connectionData.customerName = actualData.name || actualData.customer_name || actualData.user_name ||
@@ -447,6 +555,7 @@ wss.on('connection', async (ws, req) => {
               phone: connectionData.customerPhone
             });
             
+            // Check if this is an appointment confirmation call
             if (callData.call_type === 'appointment_confirmation') {
               connectionData.isAppointmentConfirmation = true;
               console.log('📅 This is an APPOINTMENT CONFIRMATION call');
@@ -472,12 +581,12 @@ wss.on('connection', async (ws, req) => {
   
   console.log('Retell connected via WebSocket.');
   
-  // FIXED: Discovery questions system with correct indexing
+  // FIXED: Discovery questions system with proper tracking
   const discoveryQuestions = [
     {
       question: 'How did you hear about us?',
       field: 'How did you hear about us',
-      keywords: ['hear about', 'find us', 'found us', 'discover us', 'learn about', 'how did you hear'],
+      keywords: ['hear about', 'find us', 'found us', 'discover us', 'learn about'],
       asked: false,
       answered: false,
       answer: ''
@@ -530,10 +639,10 @@ wss.on('connection', async (ws, req) => {
     allQuestionsCompleted: false,
     lastBotMessage: '',
     waitingForAnswer: false,
-    questionOrder: []
+    questionOrder: [] // Track the order questions were asked
   };
 
-  // System prompt
+  // UPDATED: Improved system prompt with better greeting flow
   let conversationHistory = [
     {
       role: 'system',
@@ -608,7 +717,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     schedulingLinkSent: false,
     userId: `user_${Date.now()}`
   };
-  let discoveryData = {};
+  let discoveryData = {}; // This will store the final answers
   let collectedContactInfo = !!connectionData.customerEmail;
   let userHasSpoken = false;
   let webhookSent = false;
@@ -632,7 +741,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
         response_id: 1
       }));
     }
-  }, 2000);
+  }, 2000); // Reduced to 2 seconds for faster response
 
   // Set a timer for auto-greeting if user doesn't speak first
   const autoGreetingTimer = setTimeout(() => {
@@ -645,9 +754,9 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
         response_id: 2
       }));
     }
-  }, 5000);
+  }, 5000); // 5 seconds delay as backup
 
-  // ENHANCED: Message handling with FIXED discovery tracking
+  // ENHANCED: Message handling with better discovery tracking
   ws.on('message', async (data) => {
     try {
       clearTimeout(autoGreetingTimer);
@@ -710,8 +819,9 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
         collectedContactInfo = !!connectionData.customerEmail;
       }
       
-      // Get contact info when we connect to a call (BACKUP METHOD)
+      // ENHANCED: Get contact info when we connect to a call (BACKUP METHOD)
       if (parsed.call && parsed.call.call_id && !collectedContactInfo) {
+        // FIRST: Try to get contact info from trigger server using call_id
         try {
           console.log('📞 Fetching contact info from trigger server...');
           const triggerResponse = await axios.get(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/get-call-info/${connectionData.callId}`, {
@@ -753,7 +863,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
         console.log('🔄 Current conversation state:', conversationState);
         console.log('📊 Discovery progress:', discoveryProgress);
 
-        // FIXED: Better discovery question tracking with CORRECT indexing
+        // FIXED: Better discovery question tracking with exclusion logic
         if (conversationHistory.length >= 2) {
           const lastBotMessage = conversationHistory[conversationHistory.length - 1];
           
@@ -761,46 +871,51 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
             const botContent = lastBotMessage.content.toLowerCase();
             discoveryProgress.lastBotMessage = botContent;
             
-            // Check if bot asked ANY discovery question that hasn't been asked yet
+            // FIXED: Check if bot asked ANY discovery question that hasn't been asked yet
             discoveryQuestions.forEach((q, index) => {
               if (!q.asked) {
                 let keywordMatch = false;
                 
-                // Enhanced keyword matching for each specific question
-                if (index === 0) { // How did you hear about us
-                  keywordMatch = botContent.includes('how did you hear') || 
-                                botContent.includes('hear about') ||
-                                botContent.includes('find us') ||
+                // More specific keyword matching for each question with exclusion logic
+                if (index === 0) { // "How did you hear about us?"
+                  keywordMatch = botContent.includes('hear about') || 
+                                botContent.includes('find us') || 
                                 botContent.includes('found us') ||
-                                botContent.includes('discover us');
-                } else if (index === 1) { // Business/Industry
-                  keywordMatch = botContent.includes('industry') || 
-                                botContent.includes('business') ||
-                                botContent.includes('what do you do') ||
-                                botContent.includes('line of business') ||
-                                botContent.includes('work in');
-                } else if (index === 2) { // Main product
-                  keywordMatch = botContent.includes('main product') || 
-                                botContent.includes('product') || 
-                                botContent.includes('service') ||
-                                botContent.includes('what do you sell') ||
-                                botContent.includes('what do you offer');
-                } else if (index === 3) { // Running ads
-                  keywordMatch = botContent.includes('running ads') || 
-                                botContent.includes('ads') || 
-                                botContent.includes('advertising') ||
-                                botContent.includes('marketing') ||
-                                botContent.includes('facebook') ||
-                                botContent.includes('google') ||
-                                botContent.includes('meta');
-                } else if (index === 4) { // Using CRM
-                  keywordMatch = botContent.includes('crm') || 
-                                botContent.includes('customer relationship') ||
-                                botContent.includes('management system') ||
-                                botContent.includes('using any') ||
-                                botContent.includes('software') ||
-                                botContent.includes('gohighlevel');
-                } else if (index === 5) { // Pain points
+                                botContent.includes('discover us') ||
+                                botContent.includes('learn about');
+                } else if (index === 1) { // "What industry or business are you in?"
+                  keywordMatch = (botContent.includes('industry') || 
+                                 botContent.includes('business') || 
+                                 botContent.includes('line of business') ||
+                                 botContent.includes('what do you do')) &&
+                                !botContent.includes('hear about'); // Exclude first question keywords
+                } else if (index === 2) { // "What's your main product or service?"
+                  keywordMatch = (botContent.includes('main product') || 
+                                 botContent.includes('product') || 
+                                 botContent.includes('service') ||
+                                 botContent.includes('sell') ||
+                                 botContent.includes('offer')) &&
+                                !botContent.includes('industry') &&
+                                !botContent.includes('business');
+                } else if (index === 3) { // "Are you currently running any ads?"
+                  keywordMatch = (botContent.includes('ads') || 
+                                 botContent.includes('advertising') || 
+                                 botContent.includes('marketing') ||
+                                 botContent.includes('running ads') ||
+                                 botContent.includes('meta') ||
+                                 botContent.includes('google') ||
+                                 botContent.includes('facebook')) &&
+                                !botContent.includes('product') &&
+                                !botContent.includes('service');
+                } else if (index === 4) { // "Are you using any CRM system?"
+                  keywordMatch = (botContent.includes('crm') || 
+                                 botContent.includes('customer relationship') ||
+                                 botContent.includes('management system') ||
+                                 botContent.includes('gohighlevel') ||
+                                 botContent.includes('software')) &&
+                                !botContent.includes('ads') &&
+                                !botContent.includes('advertising');
+                } else if (index === 5) { // "What are your biggest pain points?"
                   keywordMatch = botContent.includes('pain point') || 
                                 botContent.includes('challenge') || 
                                 botContent.includes('problem') || 
@@ -811,40 +926,25 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
                 }
                 
                 if (keywordMatch) {
-                  console.log(`✅ DETECTED: Question ${index} (${q.field}) was asked: "${q.question}"`);
+                  console.log(`✅ DETECTED: Question ${index + 1} was asked: "${q.question}"`);
                   q.asked = true;
                   discoveryProgress.waitingForAnswer = true;
-                  discoveryProgress.currentQuestionIndex = index; // This will be 0, 1, 2, 3, 4, or 5
+                  discoveryProgress.currentQuestionIndex = index;
                   discoveryProgress.questionOrder.push(index);
                 }
               }
             });
             
-            // If we were waiting for an answer and user responded, capture it with CORRECT indexing
+            // FIXED: If we were waiting for an answer and user responded, capture it
             if (discoveryProgress.waitingForAnswer && userMessage.trim().length > 2) {
               const currentQ = discoveryQuestions[discoveryProgress.currentQuestionIndex];
               if (currentQ && currentQ.asked && !currentQ.answered) {
-                // Enhanced answer validation - check for greeting responses that shouldn't be captured
-                let userAnswer = userMessage.trim();
-                
-                // Special handling for greeting responses on question 0
-                if (discoveryProgress.currentQuestionIndex === 0) {
-                  const msg = userMessage.toLowerCase();
-                  if (msg.includes('good') || msg.includes('fine') || msg.includes('how are you') || 
-                      msg.includes('great') || msg.includes('doing well') || msg.includes('i\'m doing') || 
-                      msg === 'hello' || msg === 'hi' || msg === 'hey') {
-                    console.log('⚠️ Skipping greeting response as discovery answer');
-                    discoveryProgress.waitingForAnswer = false;
-                    return;
-                  }
-                }
-                
                 currentQ.answered = true;
-                currentQ.answer = userAnswer;
+                currentQ.answer = userMessage.trim();
                 
-                // CORRECT mapping - use the actual index from the array
-                discoveryData[currentQ.field] = userAnswer;
-                discoveryData[`question_${discoveryProgress.currentQuestionIndex}`] = userAnswer;
+                // Store answer with correct field mapping
+                discoveryData[currentQ.field] = userMessage.trim();
+                discoveryData[`question_${discoveryProgress.currentQuestionIndex}`] = userMessage.trim();
                 
                 discoveryProgress.questionsCompleted++;
                 discoveryProgress.waitingForAnswer = false;
@@ -852,30 +952,27 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
                 console.log(`✅ CAPTURED ANSWER ${discoveryProgress.questionsCompleted}/6:`);
                 console.log(`   Question Index: ${discoveryProgress.currentQuestionIndex}`);
                 console.log(`   Question: ${currentQ.question}`);
-                console.log(`   Answer: "${userAnswer}"`);
+                console.log(`   Answer: "${userMessage.trim()}"`);
                 console.log(`   Field: ${currentQ.field}`);
-                console.log(`   Question Key: question_${discoveryProgress.currentQuestionIndex}`);
-                
-                // Debug: Show current discovery data
-                console.log('📋 Current discovery data:', JSON.stringify(discoveryData, null, 2));
                 
                 // Debug: Show which questions are still unanswered
                 const unanswered = discoveryQuestions.filter(q => !q.answered);
                 console.log(`📋 Remaining questions: ${unanswered.length}`);
                 unanswered.forEach((q, i) => {
-                  const originalIndex = discoveryQuestions.indexOf(q);
-                  console.log(`   ${originalIndex}. ${q.question} (asked: ${q.asked})`);
+                  const questionIndex = discoveryQuestions.indexOf(q);
+                  console.log(`   ${questionIndex}. ${q.question} (asked: ${q.asked})`);
                 });
               }
             }
           }
         }
 
-        // More accurate completion check
+        // FIXED: More accurate completion check
         discoveryProgress.allQuestionsCompleted = discoveryQuestions.every(q => q.answered);
         
         console.log(`📊 Discovery Status: ${discoveryProgress.questionsCompleted}/6 questions completed`);
         console.log(`📊 All questions completed: ${discoveryProgress.allQuestionsCompleted}`);
+        console.log('📋 Current discovery data:', JSON.stringify(discoveryData, null, 2));
 
         // Check for scheduling preference (only after ALL questions are answered)
         let schedulingDetected = false;
@@ -898,7 +995,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
         // Add user message to conversation history
         conversationHistory.push({ role: 'user', content: userMessage });
 
-        // Better context for GPT about current question status
+        // ENHANCED: Better context for GPT about current question status (keeping original approach)
         let contextPrompt = '';
         if (!discoveryProgress.allQuestionsCompleted) {
           const nextUnanswered = discoveryQuestions.find(q => !q.answered);
@@ -953,7 +1050,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
           response_id: parsed.response_id
         }));
         
-        // Enhanced webhook sending logic
+        // FIXED: Enhanced webhook sending logic
         if (schedulingDetected && discoveryProgress.allQuestionsCompleted && !webhookSent) {
           console.log('🚀 SENDING WEBHOOK - All conditions met:');
           console.log('   ✅ All 6 discovery questions completed and answered');
@@ -993,7 +1090,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
       // Enhanced emergency webhook logic
       if (!webhookSent && connectionData.callId && 
           (bookingInfo.email || connectionData.customerEmail) &&
-          discoveryProgress.questionsCompleted >= 4) {
+          discoveryProgress.questionsCompleted >= 4) { // Reduced threshold but still substantial
         try {
           console.log('🚨 EMERGENCY WEBHOOK SEND - Substantial discovery data available');
           
@@ -1042,7 +1139,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     
     // Detailed breakdown of each question
     discoveryQuestions.forEach((q, index) => {
-      console.log(`Question ${index}: Asked=${q.asked}, Answered=${q.answered}, Answer="${q.answer}"`);
+      console.log(`Question ${index + 1}: Asked=${q.asked}, Answered=${q.answered}, Answer="${q.answer}"`);
     });
     
     // FINAL webhook attempt only if we have meaningful data and haven't sent yet
