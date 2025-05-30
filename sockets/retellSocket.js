@@ -1,9 +1,7 @@
-function setupSocket(wss) {
-  wss.on('connection', async (ws, req) => {
-    console.log('🔗 WebSocket connected');
-    // Move full WebSocket logic here from your original server file
-  });
+const { handleWebSocketConnection } = require('./retellSocketHandler');
 
+function setupSocket(wss) {
+  wss.on('connection', handleWebSocketConnection);
   wss.on('error', (err) => console.error('WebSocket error:', err));
 }
 
