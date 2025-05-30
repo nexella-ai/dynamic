@@ -1015,9 +1015,36 @@ Remember: Respond naturally to their greeting style, have brief pleasant convers
         }
       }
 
-      if (parsed.interaction_type === 'response_required') {
-        const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
-        const userMessage = latestUserUtterance?.content || "";
+      if (parsed.interaction_type === 'response_required' || (parsed.interaction_type === 'update_only' && parsed.transcript)) {
+        // For update_only messages, check if there's a new user utterance we haven't processed
+        let userMessage = "";
+        
+        if (parsed.interaction_type === 'response_required') {
+          const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
+          userMessage = latestUserUtterance?.content || "";
+        } else if (parsed.interaction_type === 'update_only') {
+          // Check if there's a user message we haven't processed yet
+          const userUtterances = parsed.transcript.filter(t => t.role === 'user');
+          if (userUtterances.length > 0) {
+            const lastUserMessage = userUtterances[userUtterances.length - 1];
+            // Only process if this is a new message we haven't seen
+            if (lastUserMessage && !conversationHistory.some(h => h.role === 'user' && h.content === lastUserMessage.content)) {
+              userMessage = lastUserMessage.content;
+              console.log('📥 Processing user message from update_only:', userMessage);
+            } else {
+              console.log('📥 update_only message - no new user input to process');
+              return; // No new user input to process
+            }
+          } else {
+            console.log('📥 update_only message - no user utterances found');
+            return; // No user input in this message
+          }
+        }
+        
+        if (!userMessage || userMessage.trim().length === 0) {
+          console.log('📥 Empty or invalid user message, skipping');
+          return;
+        }
 
         console.log('🗣️ User said:', userMessage);
         console.log('🔄 Current conversation state:', conversationState);
