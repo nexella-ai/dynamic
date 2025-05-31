@@ -868,7 +868,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
         console.log('🔄 Current conversation state:', conversationState);
         console.log('📊 Discovery progress:', discoveryProgress);
 
-        // FIXED: Better discovery question tracking with sequential order and delayed capture
+        // FIXED: Better discovery question tracking with sequential order and enhanced debugging
         if (conversationHistory.length >= 2) {
           const lastBotMessage = conversationHistory[conversationHistory.length - 1];
           
@@ -876,12 +876,20 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
             const botContent = lastBotMessage.content.toLowerCase();
             discoveryProgress.lastBotMessage = botContent;
             
+            console.log(`🤖 QUESTION DETECTION DEBUG:`);
+            console.log(`   Bot message: "${botContent}"`);
+            
             // FIXED: Only check for the NEXT unanswered question in sequence
             const nextQuestionIndex = discoveryQuestions.findIndex(q => !q.asked);
+            console.log(`   Next unanswered question index: ${nextQuestionIndex}`);
             
             if (nextQuestionIndex !== -1) {
               const nextQuestion = discoveryQuestions[nextQuestionIndex];
+              console.log(`   Next question: "${nextQuestion.question}"`);
+              console.log(`   Next question field: "${nextQuestion.field}"`);
+              
               let keywordMatch = false;
+              let matchReason = '';
               
               // More specific keyword matching for each question
               if (nextQuestionIndex === 0) { // "How did you hear about us?"
@@ -890,12 +898,14 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
                               botContent.includes('found us') ||
                               botContent.includes('discover us') ||
                               botContent.includes('learn about');
+                if (keywordMatch) matchReason = 'Found "hear about" or similar keywords';
               } else if (nextQuestionIndex === 1) { // "What industry or business are you in?"
                 keywordMatch = (botContent.includes('industry') || 
                                botContent.includes('business') || 
                                botContent.includes('line of business') ||
                                botContent.includes('what do you do')) &&
                               !botContent.includes('hear about');
+                if (keywordMatch) matchReason = 'Found "industry/business" keywords without "hear about"';
               } else if (nextQuestionIndex === 2) { // "What's your main product or service?"
                 keywordMatch = (botContent.includes('main product') || 
                                botContent.includes('product') || 
@@ -905,11 +915,13 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
                               !botContent.includes('industry') &&
                               !botContent.includes('business') &&
                               !botContent.includes('hear about');
+                if (keywordMatch) matchReason = 'Found "product/service" keywords without previous question keywords';
               } else if (nextQuestionIndex === 3) { // "Are you currently running any ads?"
                 keywordMatch = (botContent.includes('running') && botContent.includes('ads')) ||
                                botContent.includes('advertising') || 
                                botContent.includes('running any ads') ||
                                (botContent.includes('ads') && !botContent.includes('product') && !botContent.includes('service'));
+                if (keywordMatch) matchReason = 'Found "running ads" or "advertising" keywords';
               } else if (nextQuestionIndex === 4) { // "Are you using any CRM system?"
                 keywordMatch = (botContent.includes('crm') || 
                                botContent.includes('customer relationship') ||
@@ -917,6 +929,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
                                (botContent.includes('using') && botContent.includes('system'))) &&
                               !botContent.includes('ads') &&
                               !botContent.includes('advertising');
+                if (keywordMatch) matchReason = 'Found "CRM" or "management system" keywords';
               } else if (nextQuestionIndex === 5) { // "What are your biggest pain points?"
                 keywordMatch = botContent.includes('pain point') || 
                               botContent.includes('challenge') || 
@@ -925,25 +938,56 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
                               botContent.includes('struggle') ||
                               botContent.includes('biggest') ||
                               botContent.includes('issue');
+                if (keywordMatch) matchReason = 'Found "pain point" or "challenge" keywords';
               }
+              
+              console.log(`   Keyword match: ${keywordMatch}`);
+              console.log(`   Match reason: ${matchReason}`);
               
               if (keywordMatch) {
                 console.log(`✅ DETECTED: Question ${nextQuestionIndex + 1} was asked: "${nextQuestion.question}"`);
+                console.log(`   Setting question as asked and waiting for answer`);
+                console.log(`   Field will be: "${nextQuestion.field}"`);
+                
                 nextQuestion.asked = true;
                 discoveryProgress.waitingForAnswer = true;
                 discoveryProgress.currentQuestionIndex = nextQuestionIndex;
                 discoveryProgress.questionOrder.push(nextQuestionIndex);
                 
+                console.log(`   Updated progress - waitingForAnswer: ${discoveryProgress.waitingForAnswer}`);
+                console.log(`   Updated progress - currentQuestionIndex: ${discoveryProgress.currentQuestionIndex}`);
+                console.log(`   Updated progress - questionOrder: ${JSON.stringify(discoveryProgress.questionOrder)}`);
+                
                 // Reset the response buffer for new question
                 userResponseBuffer = [];
+                console.log(`   Reset response buffer for new question`);
+              } else {
+                console.log(`❌ No keyword match for question ${nextQuestionIndex + 1}`);
+                console.log(`   Bot message did not contain expected keywords for: "${nextQuestion.question}"`);
               }
+            } else {
+              console.log(`✅ All questions have been asked`);
             }
+            
+            // Debug: Show current state of all questions
+            console.log(`📊 CURRENT QUESTIONS STATE:`);
+            discoveryQuestions.forEach((q, index) => {
+              console.log(`   ${index}: "${q.question}" | Asked: ${q.asked} | Answered: ${q.answered}`);
+            });
           }
         }
 
-        // ENHANCED: Delayed answer capture with response buffering
+        // ENHANCED: Delayed answer capture with response buffering and better debugging
         if (discoveryProgress.waitingForAnswer && userMessage.trim().length > 2) {
           const currentQ = discoveryQuestions[discoveryProgress.currentQuestionIndex];
+          
+          console.log(`🔍 ANSWER CAPTURE DEBUG:`);
+          console.log(`   Current question index: ${discoveryProgress.currentQuestionIndex}`);
+          console.log(`   Current question: ${currentQ ? currentQ.question : 'undefined'}`);
+          console.log(`   Current question field: ${currentQ ? currentQ.field : 'undefined'}`);
+          console.log(`   Question asked: ${currentQ ? currentQ.asked : 'undefined'}`);
+          console.log(`   Question answered: ${currentQ ? currentQ.answered : 'undefined'}`);
+          console.log(`   User message: "${userMessage.trim()}"`);
           
           if (currentQ && currentQ.asked && !currentQ.answered) {
             // Add this response to the buffer
@@ -954,21 +998,31 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
             
             console.log(`📝 Added response to buffer: "${userMessage.trim()}"`);
             console.log(`📝 Buffer now has ${userResponseBuffer.length} responses`);
+            console.log(`📝 Current buffer contents: ${JSON.stringify(userResponseBuffer.map(r => r.content))}`);
             
             // Clear any existing timer
             if (answerCaptureTimer) {
               clearTimeout(answerCaptureTimer);
+              console.log(`⏰ Cleared existing timer`);
             }
             
             // Set up delayed capture - wait 3 seconds after last user input
             answerCaptureTimer = setTimeout(() => {
-              console.log(`⏰ Timer expired - capturing answer for question ${discoveryProgress.currentQuestionIndex + 1}`);
+              console.log(`⏰ TIMER EXPIRED - Processing answer capture:`);
+              console.log(`   Question index: ${discoveryProgress.currentQuestionIndex}`);
+              console.log(`   Question: ${currentQ.question}`);
+              console.log(`   Field: ${currentQ.field}`);
+              console.log(`   Buffer length: ${userResponseBuffer.length}`);
               
               // Combine all buffered responses into one complete answer
               const completeAnswer = userResponseBuffer.map(r => r.content).join(' ');
+              console.log(`   Complete answer: "${completeAnswer}"`);
               
               // Validate this is still the right question to answer
               const isValidAnswer = discoveryProgress.questionOrder[discoveryProgress.questionOrder.length - 1] === discoveryProgress.currentQuestionIndex;
+              console.log(`   Is valid answer: ${isValidAnswer}`);
+              console.log(`   Question order: ${JSON.stringify(discoveryProgress.questionOrder)}`);
+              console.log(`   Last question in order: ${discoveryProgress.questionOrder[discoveryProgress.questionOrder.length - 1]}`);
               
               if (isValidAnswer && !currentQ.answered) {
                 currentQ.answered = true;
@@ -988,6 +1042,9 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
                 console.log(`   Field: ${currentQ.field}`);
                 console.log(`   Responses combined: ${userResponseBuffer.length}`);
                 
+                // Debug: Show current discovery data state
+                console.log(`📊 Current discoveryData after capture:`, JSON.stringify(discoveryData, null, 2));
+                
                 // Clear the buffer
                 userResponseBuffer = [];
                 
@@ -996,7 +1053,13 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
                 console.log(`📋 Remaining questions: ${unanswered.length}`);
                 unanswered.forEach((q, i) => {
                   const questionIndex = discoveryQuestions.indexOf(q);
-                  console.log(`   ${questionIndex}. ${q.question} (asked: ${q.asked})`);
+                  console.log(`   ${questionIndex}. ${q.question} (asked: ${q.asked}, answered: ${q.answered})`);
+                });
+                
+                // Debug: Show all questions status
+                console.log(`📊 ALL QUESTIONS STATUS:`);
+                discoveryQuestions.forEach((q, index) => {
+                  console.log(`   ${index}: ${q.question} | Asked: ${q.asked} | Answered: ${q.answered} | Answer: "${q.answer}"`);
                 });
                 
                 // Update completion status
@@ -1004,6 +1067,8 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
                 console.log(`📊 All questions completed: ${discoveryProgress.allQuestionsCompleted}`);
               } else {
                 console.log(`⚠️ Skipping delayed answer capture - question state changed`);
+                console.log(`   isValidAnswer: ${isValidAnswer}`);
+                console.log(`   currentQ.answered: ${currentQ ? currentQ.answered : 'undefined'}`);
                 userResponseBuffer = [];
               }
               
@@ -1011,6 +1076,11 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
             }, 3000); // Wait 3 seconds after user stops talking
             
             console.log(`⏰ Started 3-second timer for answer capture`);
+          } else {
+            console.log(`⚠️ Skipping answer buffer - conditions not met:`);
+            console.log(`   currentQ exists: ${!!currentQ}`);
+            console.log(`   currentQ.asked: ${currentQ ? currentQ.asked : 'undefined'}`);
+            console.log(`   currentQ.answered: ${currentQ ? currentQ.answered : 'undefined'}`);
           }
         }
 
