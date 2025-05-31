@@ -487,7 +487,7 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
   }
 });
 
-// ENHANCED WEBSOCKET CONNECTION HANDLER - FIXED DISCOVERY SYSTEM
+// ENHANCED WEBSOCKET CONNECTION HANDLER - FIXED DISCOVERY SYSTEM WITH DELAYED ANSWER CAPTURE
 wss.on('connection', async (ws, req) => {
   console.log('🔗 NEW WEBSOCKET CONNECTION ESTABLISHED');
   console.log('Connection URL:', req.url);
@@ -508,6 +508,11 @@ wss.on('connection', async (ws, req) => {
     isOutboundCall: false,
     isAppointmentConfirmation: false
   };
+
+  // NEW: Delayed answer capture variables
+  let answerCaptureTimer = null;
+  let pendingAnswerCapture = null;
+  let userResponseBuffer = [];
 
   // Try to fetch call metadata but don't block if it fails
   if (callId) {
@@ -756,7 +761,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     }
   }, 5000); // 5 seconds delay as backup
 
-  // ENHANCED: Message handling with better discovery tracking
+  // ENHANCED: Message handling with delayed answer capture
   ws.on('message', async (data) => {
     try {
       clearTimeout(autoGreetingTimer);
@@ -863,7 +868,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
         console.log('🔄 Current conversation state:', conversationState);
         console.log('📊 Discovery progress:', discoveryProgress);
 
-        // FIXED: Better discovery question tracking with exclusion logic
+        // FIXED: Better discovery question tracking with sequential order and delayed capture
         if (conversationHistory.length >= 2) {
           const lastBotMessage = conversationHistory[conversationHistory.length - 1];
           
@@ -871,108 +876,143 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
             const botContent = lastBotMessage.content.toLowerCase();
             discoveryProgress.lastBotMessage = botContent;
             
-            // FIXED: Check if bot asked ANY discovery question that hasn't been asked yet
-            discoveryQuestions.forEach((q, index) => {
-              if (!q.asked) {
-                let keywordMatch = false;
-                
-                // More specific keyword matching for each question with exclusion logic
-                if (index === 0) { // "How did you hear about us?"
-                  keywordMatch = botContent.includes('hear about') || 
-                                botContent.includes('find us') || 
-                                botContent.includes('found us') ||
-                                botContent.includes('discover us') ||
-                                botContent.includes('learn about');
-                } else if (index === 1) { // "What industry or business are you in?"
-                  keywordMatch = (botContent.includes('industry') || 
-                                 botContent.includes('business') || 
-                                 botContent.includes('line of business') ||
-                                 botContent.includes('what do you do')) &&
-                                !botContent.includes('hear about'); // Exclude first question keywords
-                } else if (index === 2) { // "What's your main product or service?"
-                  keywordMatch = (botContent.includes('main product') || 
-                                 botContent.includes('product') || 
-                                 botContent.includes('service') ||
-                                 botContent.includes('sell') ||
-                                 botContent.includes('offer')) &&
-                                !botContent.includes('industry') &&
-                                !botContent.includes('business');
-                } else if (index === 3) { // "Are you currently running any ads?"
-                  keywordMatch = (botContent.includes('ads') || 
-                                 botContent.includes('advertising') || 
-                                 botContent.includes('marketing') ||
-                                 botContent.includes('running ads') ||
-                                 botContent.includes('meta') ||
-                                 botContent.includes('google') ||
-                                 botContent.includes('facebook')) &&
-                                !botContent.includes('product') &&
-                                !botContent.includes('service');
-                } else if (index === 4) { // "Are you using any CRM system?"
-                  keywordMatch = (botContent.includes('crm') || 
-                                 botContent.includes('customer relationship') ||
-                                 botContent.includes('management system') ||
-                                 botContent.includes('gohighlevel') ||
-                                 botContent.includes('software')) &&
-                                !botContent.includes('ads') &&
-                                !botContent.includes('advertising');
-                } else if (index === 5) { // "What are your biggest pain points?"
-                  keywordMatch = botContent.includes('pain point') || 
-                                botContent.includes('challenge') || 
-                                botContent.includes('problem') || 
-                                botContent.includes('difficult') ||
-                                botContent.includes('struggle') ||
-                                botContent.includes('biggest') ||
-                                botContent.includes('issue');
-                }
-                
-                if (keywordMatch) {
-                  console.log(`✅ DETECTED: Question ${index + 1} was asked: "${q.question}"`);
-                  q.asked = true;
-                  discoveryProgress.waitingForAnswer = true;
-                  discoveryProgress.currentQuestionIndex = index;
-                  discoveryProgress.questionOrder.push(index);
-                }
+            // FIXED: Only check for the NEXT unanswered question in sequence
+            const nextQuestionIndex = discoveryQuestions.findIndex(q => !q.asked);
+            
+            if (nextQuestionIndex !== -1) {
+              const nextQuestion = discoveryQuestions[nextQuestionIndex];
+              let keywordMatch = false;
+              
+              // More specific keyword matching for each question
+              if (nextQuestionIndex === 0) { // "How did you hear about us?"
+                keywordMatch = botContent.includes('hear about') || 
+                              botContent.includes('find us') || 
+                              botContent.includes('found us') ||
+                              botContent.includes('discover us') ||
+                              botContent.includes('learn about');
+              } else if (nextQuestionIndex === 1) { // "What industry or business are you in?"
+                keywordMatch = (botContent.includes('industry') || 
+                               botContent.includes('business') || 
+                               botContent.includes('line of business') ||
+                               botContent.includes('what do you do')) &&
+                              !botContent.includes('hear about');
+              } else if (nextQuestionIndex === 2) { // "What's your main product or service?"
+                keywordMatch = (botContent.includes('main product') || 
+                               botContent.includes('product') || 
+                               botContent.includes('service') ||
+                               botContent.includes('sell') ||
+                               botContent.includes('offer')) &&
+                              !botContent.includes('industry') &&
+                              !botContent.includes('business') &&
+                              !botContent.includes('hear about');
+              } else if (nextQuestionIndex === 3) { // "Are you currently running any ads?"
+                keywordMatch = (botContent.includes('running') && botContent.includes('ads')) ||
+                               botContent.includes('advertising') || 
+                               botContent.includes('running any ads') ||
+                               (botContent.includes('ads') && !botContent.includes('product') && !botContent.includes('service'));
+              } else if (nextQuestionIndex === 4) { // "Are you using any CRM system?"
+                keywordMatch = (botContent.includes('crm') || 
+                               botContent.includes('customer relationship') ||
+                               botContent.includes('management system') ||
+                               (botContent.includes('using') && botContent.includes('system'))) &&
+                              !botContent.includes('ads') &&
+                              !botContent.includes('advertising');
+              } else if (nextQuestionIndex === 5) { // "What are your biggest pain points?"
+                keywordMatch = botContent.includes('pain point') || 
+                              botContent.includes('challenge') || 
+                              botContent.includes('problem') || 
+                              botContent.includes('difficult') ||
+                              botContent.includes('struggle') ||
+                              botContent.includes('biggest') ||
+                              botContent.includes('issue');
               }
+              
+              if (keywordMatch) {
+                console.log(`✅ DETECTED: Question ${nextQuestionIndex + 1} was asked: "${nextQuestion.question}"`);
+                nextQuestion.asked = true;
+                discoveryProgress.waitingForAnswer = true;
+                discoveryProgress.currentQuestionIndex = nextQuestionIndex;
+                discoveryProgress.questionOrder.push(nextQuestionIndex);
+                
+                // Reset the response buffer for new question
+                userResponseBuffer = [];
+              }
+            }
+          }
+        }
+
+        // ENHANCED: Delayed answer capture with response buffering
+        if (discoveryProgress.waitingForAnswer && userMessage.trim().length > 2) {
+          const currentQ = discoveryQuestions[discoveryProgress.currentQuestionIndex];
+          
+          if (currentQ && currentQ.asked && !currentQ.answered) {
+            // Add this response to the buffer
+            userResponseBuffer.push({
+              content: userMessage.trim(),
+              timestamp: Date.now()
             });
             
-            // FIXED: If we were waiting for an answer and user responded, capture it
-            if (discoveryProgress.waitingForAnswer && userMessage.trim().length > 2) {
-              const currentQ = discoveryQuestions[discoveryProgress.currentQuestionIndex];
-              if (currentQ && currentQ.asked && !currentQ.answered) {
+            console.log(`📝 Added response to buffer: "${userMessage.trim()}"`);
+            console.log(`📝 Buffer now has ${userResponseBuffer.length} responses`);
+            
+            // Clear any existing timer
+            if (answerCaptureTimer) {
+              clearTimeout(answerCaptureTimer);
+            }
+            
+            // Set up delayed capture - wait 3 seconds after last user input
+            answerCaptureTimer = setTimeout(() => {
+              console.log(`⏰ Timer expired - capturing answer for question ${discoveryProgress.currentQuestionIndex + 1}`);
+              
+              // Combine all buffered responses into one complete answer
+              const completeAnswer = userResponseBuffer.map(r => r.content).join(' ');
+              
+              // Validate this is still the right question to answer
+              const isValidAnswer = discoveryProgress.questionOrder[discoveryProgress.questionOrder.length - 1] === discoveryProgress.currentQuestionIndex;
+              
+              if (isValidAnswer && !currentQ.answered) {
                 currentQ.answered = true;
-                currentQ.answer = userMessage.trim();
+                currentQ.answer = completeAnswer;
                 
                 // Store answer with correct field mapping
-                discoveryData[currentQ.field] = userMessage.trim();
-                discoveryData[`question_${discoveryProgress.currentQuestionIndex}`] = userMessage.trim();
+                discoveryData[currentQ.field] = completeAnswer;
+                discoveryData[`question_${discoveryProgress.currentQuestionIndex}`] = completeAnswer;
                 
                 discoveryProgress.questionsCompleted++;
                 discoveryProgress.waitingForAnswer = false;
                 
-                console.log(`✅ CAPTURED ANSWER ${discoveryProgress.questionsCompleted}/6:`);
+                console.log(`✅ CAPTURED COMPLETE ANSWER ${discoveryProgress.questionsCompleted}/6:`);
                 console.log(`   Question Index: ${discoveryProgress.currentQuestionIndex}`);
                 console.log(`   Question: ${currentQ.question}`);
-                console.log(`   Answer: "${userMessage.trim()}"`);
+                console.log(`   Complete Answer: "${completeAnswer}"`);
                 console.log(`   Field: ${currentQ.field}`);
+                console.log(`   Responses combined: ${userResponseBuffer.length}`);
                 
-                // Debug: Show which questions are still unanswered
+                // Clear the buffer
+                userResponseBuffer = [];
+                
+                // Debug: Show remaining questions
                 const unanswered = discoveryQuestions.filter(q => !q.answered);
                 console.log(`📋 Remaining questions: ${unanswered.length}`);
                 unanswered.forEach((q, i) => {
                   const questionIndex = discoveryQuestions.indexOf(q);
                   console.log(`   ${questionIndex}. ${q.question} (asked: ${q.asked})`);
                 });
+                
+                // Update completion status
+                discoveryProgress.allQuestionsCompleted = discoveryQuestions.every(q => q.answered);
+                console.log(`📊 All questions completed: ${discoveryProgress.allQuestionsCompleted}`);
+              } else {
+                console.log(`⚠️ Skipping delayed answer capture - question state changed`);
+                userResponseBuffer = [];
               }
-            }
+              
+              answerCaptureTimer = null;
+            }, 3000); // Wait 3 seconds after user stops talking
+            
+            console.log(`⏰ Started 3-second timer for answer capture`);
           }
         }
-
-        // FIXED: More accurate completion check
-        discoveryProgress.allQuestionsCompleted = discoveryQuestions.every(q => q.answered);
-        
-        console.log(`📊 Discovery Status: ${discoveryProgress.questionsCompleted}/6 questions completed`);
-        console.log(`📊 All questions completed: ${discoveryProgress.allQuestionsCompleted}`);
-        console.log('📋 Current discovery data:', JSON.stringify(discoveryData, null, 2));
 
         // Check for scheduling preference (only after ALL questions are answered)
         let schedulingDetected = false;
@@ -995,7 +1035,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
         // Add user message to conversation history
         conversationHistory.push({ role: 'user', content: userMessage });
 
-        // ENHANCED: Better context for GPT about current question status (keeping original approach)
+        // ENHANCED: Better context for GPT about current question status
         let contextPrompt = '';
         if (!discoveryProgress.allQuestionsCompleted) {
           const nextUnanswered = discoveryQuestions.find(q => !q.answered);
@@ -1090,7 +1130,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
       // Enhanced emergency webhook logic
       if (!webhookSent && connectionData.callId && 
           (bookingInfo.email || connectionData.customerEmail) &&
-          discoveryProgress.questionsCompleted >= 4) { // Reduced threshold but still substantial
+          discoveryProgress.questionsCompleted >= 4) {
         try {
           console.log('🚨 EMERGENCY WEBHOOK SEND - Substantial discovery data available');
           
@@ -1131,6 +1171,26 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
   ws.on('close', async () => {
     console.log('🔌 Connection closed.');
     clearTimeout(autoGreetingTimer);
+    
+    // Clear any pending answer capture timer
+    if (answerCaptureTimer) {
+      clearTimeout(answerCaptureTimer);
+      console.log('🧹 Cleared pending answer capture timer');
+    }
+    
+    // If we have a pending answer in the buffer, capture it now
+    if (userResponseBuffer.length > 0 && discoveryProgress.waitingForAnswer) {
+      const currentQ = discoveryQuestions[discoveryProgress.currentQuestionIndex];
+      if (currentQ && !currentQ.answered) {
+        const completeAnswer = userResponseBuffer.map(r => r.content).join(' ');
+        currentQ.answered = true;
+        currentQ.answer = completeAnswer;
+        discoveryData[currentQ.field] = completeAnswer;
+        discoveryData[`question_${discoveryProgress.currentQuestionIndex}`] = completeAnswer;
+        discoveryProgress.questionsCompleted++;
+        console.log(`🔌 Captured buffered answer on close: "${completeAnswer}"`);
+      }
+    }
     
     console.log('=== FINAL CONNECTION CLOSE ANALYSIS ===');
     console.log('📋 Final discoveryData:', JSON.stringify(discoveryData, null, 2));
