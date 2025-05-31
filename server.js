@@ -604,31 +604,88 @@ wss.on('connection', async (ws, req) => {
     lastAcknowledgment: '' // Track last acknowledgment used
   };
 
-  // Array of varied acknowledgments
-  const acknowledgments = [
-    "Perfect, thank you.",
-    "Got it, that's helpful.",
-    "Great, I understand.",
-    "Excellent, thank you.",
-    "That makes sense.",
-    "Perfect, I have that noted.",
-    "Wonderful, thanks.",
-    "I see, that's very helpful.",
-    "Perfect, understood.",
-    "That's great, thank you.",
-    "Awesome, got it.",
-    "Perfect, thanks for that.",
-    "Great, that helps a lot.",
-    "Excellent, I understand.",
-    "Got it, perfect."
-  ];
-
-  function getRandomAcknowledgment() {
-    // Filter out the last used acknowledgment to avoid repetition
-    const available = acknowledgments.filter(ack => ack !== discoveryProgress.lastAcknowledgment);
-    const selected = available[Math.floor(Math.random() * available.length)];
-    discoveryProgress.lastAcknowledgment = selected;
-    return selected;
+  // Function to generate contextual acknowledgments based on user's answer
+  function getContextualAcknowledgment(userAnswer, questionIndex) {
+    const answer = userAnswer.toLowerCase();
+    
+    switch (questionIndex) {
+      case 0: // How did you hear about us?
+        if (answer.includes('instagram') || answer.includes('social media')) {
+          return "Instagram, nice! Social media is huge these days.";
+        } else if (answer.includes('google') || answer.includes('search')) {
+          return "Found us through Google, perfect.";
+        } else if (answer.includes('referral') || answer.includes('friend') || answer.includes('recommend')) {
+          return "Word of mouth referrals are the best!";
+        } else {
+          return "Great, thanks for sharing that.";
+        }
+        
+      case 1: // What industry or business are you in?
+        if (answer.includes('solar')) {
+          return "Solar industry, that's awesome! Clean energy is the future.";
+        } else if (answer.includes('real estate') || answer.includes('property')) {
+          return "Real estate, excellent! That's a great market.";
+        } else if (answer.includes('healthcare') || answer.includes('medical')) {
+          return "Healthcare, wonderful! Such important work.";
+        } else if (answer.includes('restaurant') || answer.includes('food')) {
+          return "Food industry, nice! Everyone loves good food.";
+        } else if (answer.includes('fitness') || answer.includes('gym')) {
+          return "Fitness industry, fantastic! Health is so important.";
+        } else if (answer.includes('e-commerce') || answer.includes('online')) {
+          return "E-commerce, perfect! Online business is booming.";
+        } else {
+          return `So you're in the ${answer.split(' ')[0]} industry, that's great.`;
+        }
+        
+      case 2: // What's your main product or service?
+        if (answer.includes('solar')) {
+          return "Solar installations, excellent choice for the market.";
+        } else if (answer.includes('coaching') || answer.includes('consulting')) {
+          return "Coaching services, that's valuable work.";
+        } else if (answer.includes('software') || answer.includes('app')) {
+          return "Software solutions, perfect for today's market.";
+        } else {
+          return "Got it, that sounds like a great service.";
+        }
+        
+      case 3: // Are you currently running any ads?
+        if (answer.includes('yes') || answer.includes('google') || answer.includes('facebook') || answer.includes('meta')) {
+          return "Great, so you're already running ads. That's smart.";
+        } else if (answer.includes('no') || answer.includes('not')) {
+          return "No ads currently, that's totally fine.";
+        } else {
+          return "Got it, thanks for that info.";
+        }
+        
+      case 4: // Are you using any CRM system?
+        if (answer.includes('gohighlevel') || answer.includes('go high level')) {
+          return "GoHighLevel, excellent choice! That's a powerful platform.";
+        } else if (answer.includes('hubspot')) {
+          return "HubSpot, nice! That's a solid CRM.";
+        } else if (answer.includes('salesforce')) {
+          return "Salesforce, perfect! The industry standard.";
+        } else if (answer.includes('yes')) {
+          return "Great, having a CRM system is really important.";
+        } else if (answer.includes('no') || answer.includes('not')) {
+          return "No CRM currently, that's actually pretty common.";
+        } else {
+          return "Perfect, I understand.";
+        }
+        
+      case 5: // What are your biggest pain points?
+        if (answer.includes('lead') || answer.includes('follow up')) {
+          return "Lead follow-up challenges, I totally get that.";
+        } else if (answer.includes('time') || answer.includes('busy')) {
+          return "Time management issues, that's so common in business.";
+        } else if (answer.includes('money') || answer.includes('expensive')) {
+          return "Budget concerns, completely understandable.";
+        } else {
+          return "I see, those are definitely real challenges.";
+        }
+        
+      default:
+        return "Perfect, thank you.";
+    }
   }
 
   // SIMPLIFIED QUESTION DETECTION
@@ -848,7 +905,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
         response_id: 1
       }));
     }
-  }, 3000); // Increased back to 3 seconds for complete greeting
+  }, 4000); // Increased to 4 seconds for complete greeting
 
   // Set a timer for auto-greeting if user doesn't speak first
   const autoGreetingTimer = setTimeout(() => {
@@ -861,7 +918,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
         response_id: 2
       }));
     }
-  }, 7000); // Increased to 7 seconds to avoid overlap
+  }, 8000); // Increased to 8 seconds to avoid overlap
 
   // ENHANCED: Message handling with delayed answer capture
   ws.on('message', async (data) => {
@@ -1012,17 +1069,23 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
             const questionNumber = discoveryQuestions.indexOf(nextUnanswered) + 1;
             const completed = discoveryQuestions.filter(q => q.answered).map((q, i) => `${discoveryQuestions.indexOf(q) + 1}. ${q.question} ✓`).join('\n');
             
-            // Get a random acknowledgment for variety
-            const suggestedAck = getRandomAcknowledgment();
+            // Check if user just answered a question
+            const lastAnsweredQ = discoveryQuestions.find(q => q.asked && q.answered && q.answer);
+            let acknowledgmentInstruction = '';
+            
+            if (lastAnsweredQ && discoveryProgress.questionsCompleted > 0) {
+              const lastQuestionIndex = discoveryQuestions.indexOf(lastAnsweredQ);
+              const suggestedAck = getContextualAcknowledgment(lastAnsweredQ.answer, lastQuestionIndex);
+              acknowledgmentInstruction = `\n\nThe user just answered: "${lastAnsweredQ.answer}"
+Acknowledge this with: "${suggestedAck}" then ask the next question.`;
+            }
             
             contextPrompt = `\n\nDISCOVERY STATUS:
 COMPLETED (${discoveryProgress.questionsCompleted}/6):
 ${completed || 'None yet'}
 
 NEXT TO ASK:
-${questionNumber}. ${nextUnanswered.question}
-
-IMPORTANT: If the user just answered a question, acknowledge with something like "${suggestedAck}" then ask question ${questionNumber}.
+${questionNumber}. ${nextUnanswered.question}${acknowledgmentInstruction}
 
 CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions. Do NOT skip to scheduling until all 6 are done.`;
           }
