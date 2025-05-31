@@ -945,6 +945,14 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
               console.log(`   Match reason: ${matchReason}`);
               
               if (keywordMatch) {
+                // SAFEGUARD: Check if this question was already asked recently
+                const wasRecentlyAsked = discoveryProgress.questionOrder.includes(nextQuestionIndex);
+                if (wasRecentlyAsked) {
+                  console.log(`⚠️ DUPLICATE DETECTION PREVENTED: Question ${nextQuestionIndex + 1} was already asked`);
+                  console.log(`   Question order history: ${JSON.stringify(discoveryProgress.questionOrder)}`);
+                  return; // Skip this detection
+                }
+                
                 console.log(`✅ DETECTED: Question ${nextQuestionIndex + 1} was asked: "${nextQuestion.question}"`);
                 console.log(`   Setting question as asked and waiting for answer`);
                 console.log(`   Field will be: "${nextQuestion.field}"`);
@@ -1024,7 +1032,23 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
               console.log(`   Question order: ${JSON.stringify(discoveryProgress.questionOrder)}`);
               console.log(`   Last question in order: ${discoveryProgress.questionOrder[discoveryProgress.questionOrder.length - 1]}`);
               
-              if (isValidAnswer && !currentQ.answered) {
+              if (isValidAnswer && !currentQ.answered && discoveryProgress.waitingForAnswer && 
+                  discoveryProgress.currentQuestionIndex === discoveryQuestions.indexOf(currentQ)) {
+                
+                // DOUBLE CHECK: Make sure this is actually the right question
+                const expectedQuestionIndex = discoveryProgress.currentQuestionIndex;
+                const actualQuestionIndex = discoveryQuestions.indexOf(currentQ);
+                
+                if (expectedQuestionIndex !== actualQuestionIndex) {
+                  console.log(`🚨 QUESTION MISMATCH DETECTED:`);
+                  console.log(`   Expected question index: ${expectedQuestionIndex}`);
+                  console.log(`   Actual question index: ${actualQuestionIndex}`);
+                  console.log(`   Skipping answer capture to prevent misalignment`);
+                  userResponseBuffer = [];
+                  answerCaptureTimer = null;
+                  return;
+                }
+                
                 currentQ.answered = true;
                 currentQ.answer = completeAnswer;
                 
@@ -1105,13 +1129,41 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
         // Add user message to conversation history
         conversationHistory.push({ role: 'user', content: userMessage });
 
-        // ENHANCED: Better context for GPT about current question status
+        // ENHANCED: Better context for GPT with question tracking to prevent repeats
         let contextPrompt = '';
         if (!discoveryProgress.allQuestionsCompleted) {
           const nextUnanswered = discoveryQuestions.find(q => !q.answered);
           if (nextUnanswered) {
             const questionNumber = discoveryQuestions.indexOf(nextUnanswered) + 1;
-            contextPrompt = `\n\nIMPORTANT: You need to ask question ${questionNumber}: "${nextUnanswered.question}". You have completed ${discoveryProgress.questionsCompleted} out of 6 questions so far. Do NOT skip to scheduling until all 6 questions are answered.`;
+            
+            // Show which questions have been completed
+            const completedQuestions = discoveryQuestions
+              .filter(q => q.answered)
+              .map((q, index) => `${discoveryQuestions.indexOf(q) + 1}. ${q.question} ✓`)
+              .join('\n');
+            
+            const pendingQuestions = discoveryQuestions
+              .filter(q => !q.answered)
+              .map((q, index) => `${discoveryQuestions.indexOf(q) + 1}. ${q.question}`)
+              .join('\n');
+            
+            contextPrompt = `\n\nIMPORTANT DISCOVERY STATUS:
+COMPLETED QUESTIONS (${discoveryProgress.questionsCompleted}/6):
+${completedQuestions || 'None completed yet'}
+
+NEXT QUESTION TO ASK:
+${questionNumber}. ${nextUnanswered.question}
+
+REMAINING QUESTIONS:
+${pendingQuestions}
+
+CRITICAL INSTRUCTIONS:
+- You have completed ${discoveryProgress.questionsCompleted} out of 6 questions so far
+- You MUST ask question ${questionNumber} next: "${nextUnanswered.question}"
+- Do NOT repeat any completed questions
+- Do NOT skip to scheduling until all 6 questions are answered
+- Do NOT ask multiple questions at once
+- Wait for the customer's complete answer before asking the next question`;
           }
         } else {
           contextPrompt = '\n\nAll 6 discovery questions have been completed. You can now proceed to scheduling.';
