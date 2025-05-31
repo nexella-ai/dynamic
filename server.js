@@ -513,6 +513,7 @@ wss.on('connection', async (ws, req) => {
   let answerCaptureTimer = null;
   let userResponseBuffer = [];
   let isCapturingAnswer = false; // Prevent multiple captures
+  let contextualResponseSent = false; // Prevent double responses
 
   // Try to fetch call metadata but don't block if it fails
   if (callId) {
@@ -743,7 +744,7 @@ wss.on('connection', async (ws, req) => {
     return false;
   }
 
-  // SIMPLIFIED ANSWER CAPTURE
+  // SIMPLIFIED ANSWER CAPTURE with contextual responses
   function captureUserAnswer(userMessage) {
     if (!discoveryProgress.waitingForAnswer || isCapturingAnswer) {
       return;
@@ -779,13 +780,53 @@ wss.on('connection', async (ws, req) => {
       discoveryData[currentQ.field] = completeAnswer;
       discoveryData[`question_${discoveryProgress.currentQuestionIndex}`] = completeAnswer;
       
+      // Generate contextual acknowledgment
+      const contextualAck = getContextualAcknowledgment(completeAnswer, discoveryProgress.currentQuestionIndex);
+      
       // Update progress
       discoveryProgress.questionsCompleted++;
       discoveryProgress.waitingForAnswer = false;
       discoveryProgress.allQuestionsCompleted = discoveryQuestions.every(q => q.answered);
       
       console.log(`✅ CAPTURED Q${discoveryProgress.currentQuestionIndex + 1}: "${completeAnswer}"`);
+      console.log(`🎭 Contextual acknowledgment: "${contextualAck}"`);
       console.log(`📊 Progress: ${discoveryProgress.questionsCompleted}/6 questions completed`);
+      
+      // Send the contextual acknowledgment directly
+      if (!discoveryProgress.allQuestionsCompleted) {
+        const nextQuestion = discoveryQuestions.find(q => !q.answered);
+        if (nextQuestion) {
+          const nextQuestionNumber = discoveryQuestions.indexOf(nextQuestion) + 1;
+          const fullResponse = `${contextualAck} ${nextQuestion.question}`;
+          
+          // Set flag to prevent double response
+          contextualResponseSent = true;
+          
+          // Send this response directly through WebSocket
+          setTimeout(() => {
+            ws.send(JSON.stringify({
+              content: fullResponse,
+              content_complete: true,
+              actions: [],
+              response_id: Date.now()
+            }));
+          }, 1000); // Small delay to ensure proper timing
+          
+          console.log(`🎙️ Sending contextual response: "${fullResponse}"`);
+        }
+      } else {
+        // All questions done, send acknowledgment and transition to scheduling
+        contextualResponseSent = true;
+        
+        setTimeout(() => {
+          ws.send(JSON.stringify({
+            content: `${contextualAck} Perfect! I have all the information I need. Let's schedule a call to discuss how we can help. What day would work best for you?`,
+            content_complete: true,
+            actions: [],
+            response_id: Date.now()
+          }));
+        }, 1000);
+      }
       
       // Reset
       userResponseBuffer = [];
@@ -1038,6 +1079,12 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
         // SIMPLIFIED: Answer capture
         if (discoveryProgress.waitingForAnswer && userMessage.trim().length > 2) {
           captureUserAnswer(userMessage);
+        }
+
+        // Skip GPT processing if we just sent a contextual response
+        if (contextualResponseSent) {
+          contextualResponseSent = false;
+          return;
         }
 
         // Check for scheduling preference (only after ALL questions are answered)
