@@ -600,8 +600,36 @@ wss.on('connection', async (ws, req) => {
     currentQuestionIndex: -1,
     questionsCompleted: 0,
     allQuestionsCompleted: false,
-    waitingForAnswer: false
+    waitingForAnswer: false,
+    lastAcknowledgment: '' // Track last acknowledgment used
   };
+
+  // Array of varied acknowledgments
+  const acknowledgments = [
+    "Perfect, thank you.",
+    "Got it, that's helpful.",
+    "Great, I understand.",
+    "Excellent, thank you.",
+    "That makes sense.",
+    "Perfect, I have that noted.",
+    "Wonderful, thanks.",
+    "I see, that's very helpful.",
+    "Perfect, understood.",
+    "That's great, thank you.",
+    "Awesome, got it.",
+    "Perfect, thanks for that.",
+    "Great, that helps a lot.",
+    "Excellent, I understand.",
+    "Got it, perfect."
+  ];
+
+  function getRandomAcknowledgment() {
+    // Filter out the last used acknowledgment to avoid repetition
+    const available = acknowledgments.filter(ack => ack !== discoveryProgress.lastAcknowledgment);
+    const selected = available[Math.floor(Math.random() * available.length)];
+    discoveryProgress.lastAcknowledgment = selected;
+    return selected;
+  }
 
   // SIMPLIFIED QUESTION DETECTION
   function detectQuestionAsked(botMessage) {
@@ -761,22 +789,21 @@ PERSONALITY & TONE:
 
 DISCOVERY FLOW:
 - Only start discovery questions AFTER greeting exchange is complete
-- After each answer, use varied acknowledgments like:
-  * "Perfect, thank you for sharing that."
+- After each answer, acknowledge it briefly with varied responses like:
+  * "Perfect, thank you."
   * "Got it, that's helpful."
   * "Great, I understand."
   * "Excellent, thank you."
-  * "That makes sense, thank you."
-  * "Perfect, I have that noted."
-  * "Wonderful, thanks for letting me know."
+  * "That makes sense."
+  * "Wonderful, thanks."
   * "I see, that's very helpful."
-  * "Perfect, I understand."
-  * "That's great, thank you."
-  * Sometimes briefly repeat their answer: "So you're in [industry], got it."
+  * "Perfect, understood."
+  * "Awesome, got it."
+- CRITICAL: Never use the same acknowledgment twice in a row
+- Keep acknowledgments short and natural
 - Then immediately ask the next question
 - Do NOT skip questions or assume answers
 - Count your questions mentally: 1, 2, 3, 4, 5, 6
-- Vary your acknowledgments to sound natural and conversational
 
 SCHEDULING APPROACH:
 - ONLY after asking ALL 6 discovery questions, ask for scheduling preference
@@ -985,12 +1012,17 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
             const questionNumber = discoveryQuestions.indexOf(nextUnanswered) + 1;
             const completed = discoveryQuestions.filter(q => q.answered).map((q, i) => `${discoveryQuestions.indexOf(q) + 1}. ${q.question} ✓`).join('\n');
             
+            // Get a random acknowledgment for variety
+            const suggestedAck = getRandomAcknowledgment();
+            
             contextPrompt = `\n\nDISCOVERY STATUS:
 COMPLETED (${discoveryProgress.questionsCompleted}/6):
 ${completed || 'None yet'}
 
 NEXT TO ASK:
 ${questionNumber}. ${nextUnanswered.question}
+
+IMPORTANT: If the user just answered a question, acknowledge with something like "${suggestedAck}" then ask question ${questionNumber}.
 
 CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions. Do NOT skip to scheduling until all 6 are done.`;
           }
