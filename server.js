@@ -809,7 +809,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
         response_id: 1
       }));
     }
-  }, 2000); // Reduced to 2 seconds for faster response
+  }, 3000); // Increased back to 3 seconds for complete greeting
 
   // Set a timer for auto-greeting if user doesn't speak first
   const autoGreetingTimer = setTimeout(() => {
@@ -822,7 +822,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
         response_id: 2
       }));
     }
-  }, 5000); // 5 seconds delay as backup
+  }, 7000); // Increased to 7 seconds to avoid overlap
 
   // ENHANCED: Message handling with delayed answer capture
   ws.on('message', async (data) => {
