@@ -1154,7 +1154,7 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
         
         // FIXED: Enhanced webhook sending logic
         if (schedulingDetected && discoveryProgress.allQuestionsCompleted && !webhookSent) {
-          console.log('🚀console.log('🚀 SENDING WEBHOOK - All conditions met:');
+         console.log('🚀 SENDING WEBHOOK - All conditions met:');
          console.log('   ✅ All 6 discovery questions completed and answered');
          console.log('   ✅ Scheduling preference detected');
          console.log('   ✅ Contact info available');
