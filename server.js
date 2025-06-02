@@ -60,7 +60,7 @@ let discoveryProgress = {
   questionsCompleted: 0,
   allQuestionsCompleted: false,
   waitingForAnswer: false,
-  lastAcknowledgment: '' // Track last acknowledgment used
+  lastAcknowledgment: ''
 };
 
 // Function to get varied acknowledgments
@@ -69,7 +69,7 @@ function getAcknowledgment() {
     "Perfect, thank you.",
     "Got it, that's helpful.",
     "Great, I understand.",
-    "Excellent, thank you.",
+    "Excellent, thanks.",
     "That makes sense.",
     "Wonderful, thanks.",
     "I see, that's very helpful.",
@@ -77,16 +77,13 @@ function getAcknowledgment() {
     "Awesome, got it."
   ];
   
-  // Filter out the last used acknowledgment to avoid repetition
   const availableOptions = options.filter(opt => opt !== discoveryProgress.lastAcknowledgment);
   
-  // If we have options left, use them, otherwise reset
   if (availableOptions.length > 0) {
     const selected = availableOptions[Math.floor(Math.random() * availableOptions.length)];
     discoveryProgress.lastAcknowledgment = selected;
     return selected;
   } else {
-    // All options used, reset the last acknowledgment and return a random one
     discoveryProgress.lastAcknowledgment = "";
     return options[Math.floor(Math.random() * options.length)];
   }
@@ -107,7 +104,7 @@ function getContextualAcknowledgment(userAnswer, questionIndex) {
       }
     
     case 1: // Ideal Price Range
-      if (/\d{4,}/.test(answer)) { // If answer contains a number with 4+ digits
+      if (/\d{4,}/.test(answer)) {
         return `A budget of ${answer} is a great starting point.`;
       } else {
         return getAcknowledgment();
@@ -173,7 +170,7 @@ When responding:
 - Avoid technical terms
 - Keep it conversational
 
-CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions. Do NOT skip to scheduling until all 6 are done.`;
+CRITICAL: Ask question ${discoveryProgress.currentQuestionIndex + 1} next. Do NOT repeat completed questions. Do NOT skip to scheduling until all 6 are done.`;
 
 // Conversation history for GPT context
 let conversationHistory = [
@@ -193,6 +190,16 @@ function handleWebSocketConnection(ws) {
   let callId = null;
   let answerCaptureTimer = null;
   let userResponseBuffer = [];
+  let bookingInfo = {};
+  let connectionData = {
+    customerName: '',
+    customerEmail: '',
+    customerPhone: '',
+    callId: ''
+  };
+  let collectedContactInfo = false;
+  let webhookSent = false;
+  let conversationState = 'active';
   
   // Auto greeting timer
   const autoGreetingTimer = setTimeout(() => {
@@ -218,6 +225,7 @@ function handleWebSocketConnection(ws) {
       // Handle call data
       if (parsed.call) {
         callId = parsed.call.call_id;
+        connectionData.callId = callId;
         console.log(`Call ID: ${callId}`);
         
         // Store metadata
@@ -281,12 +289,12 @@ function handleWebSocketConnection(ws) {
   
   // Connection close handler
   ws.on('close', async () => {
-    console.log('Connection closed.');
+    console.log('🔌 Connection closed.');
     clearTimeout(autoGreetingTimer);
     
     if (answerCaptureTimer) {
       clearTimeout(answerCaptureTimer);
-      console.log('Cleared pending answer capture timer');
+      console.log('🧹 Cleared pending answer capture timer');
     }
     
     if (userResponseBuffer.length > 0 && discoveryProgress.waitingForAnswer) {
@@ -343,7 +351,6 @@ async function continueDiscovery(ws) {
         }
       });
       
-      // Here you would typically send to your webhook or API
       console.log('📦 Final discovery data:', formattedDiscoveryData);
       
       // Simulate sending to scheduling
