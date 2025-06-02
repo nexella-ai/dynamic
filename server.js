@@ -12,7 +12,7 @@ app.use(express.json());
 
 // Ensure we have the required environment variables
 if (!process.env.TRIGGER_SERVER_URL) {
-  process.env. TRIGGER_SERVER_URL = 'https://trigger-server-qt7u.onrender.com';
+  process.env.TRIGGER_SERVER_URL = 'https://trigger-server-qt7u.onrender.com';
 }
 if (!process.env.N8N_WEBHOOK_URL) {
   process.env.N8N_WEBHOOK_URL = 'https://n8n-clp2.onrender.com/webhook/retell-scheduling';
@@ -90,7 +90,9 @@ async function updateConversationState(callId, discoveryComplete, preferredDay) 
     console.error('Error updating conversation state:', error);
     return false;
   }
-}// ENHANCED: Send scheduling data with proper email handling - MULTIPLE SOURCES
+}
+
+// ENHANCED: Send scheduling data with proper email handling - MULTIPLE SOURCES
 async function sendSchedulingPreference(name, email, phone, preferredDay, callId, discoveryData = {}) {
   try {
     console.log('=== ENHANCED WEBHOOK SENDING DEBUG ===');
@@ -345,6 +347,8 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
 
 // IMPROVED: Better detection of scheduling preferences
 function handleSchedulingPreference(userMessage) {
+  console.log(`🔍 Analyzing scheduling preference in: "${userMessage}"`);
+  
   // Extract day of week with better handling for various formats
   const dayMatch = userMessage.match(/monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today/i);
   const nextWeekMatch = userMessage.match(/next week/i);
@@ -360,6 +364,7 @@ function handleSchedulingPreference(userMessage) {
     const daysUntilMonday = (dayOfWeek === 0) ? 1 : (8 - dayOfWeek);
     targetDate.setDate(targetDate.getDate() + daysUntilMonday - 7);
     
+    console.log(`✅ Detected "next week" preference`);
     return {
       dayName: 'next week',
       date: targetDate,
@@ -367,6 +372,7 @@ function handleSchedulingPreference(userMessage) {
     };
   } else if (dayMatch) {
     const preferredDay = dayMatch[0].toLowerCase();
+    console.log(`✅ Detected day preference: "${preferredDay}"`);
     
     let targetDate = new Date();
     
@@ -409,6 +415,7 @@ function handleSchedulingPreference(userMessage) {
     }
   }
   
+  console.log(`⚠️ No scheduling preference detected in: "${userMessage}"`);
   return null;
 }
 
@@ -482,7 +489,9 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
       error: error.message || 'Unknown error triggering call' 
     });
   }
-});// ENHANCED WEBSOCKET CONNECTION HANDLER - REAL ESTATE DISCOVERY SYSTEM
+});
+
+// FIXED WEBSOCKET CONNECTION HANDLER - REAL ESTATE DISCOVERY SYSTEM
 wss.on('connection', async (ws, req) => {
   console.log('🔗 NEW WEBSOCKET CONNECTION ESTABLISHED');
   console.log('Connection URL:', req.url);
@@ -616,7 +625,7 @@ wss.on('connection', async (ws, req) => {
         }
         
       case 1: // What's your ideal price range?
-        if (answer.includes('$') || answer.includes('thousand') || answer.includes('k') || answer.includes('million')) {
+        if (answer.includes(') || answer.includes('thousand') || answer.includes('k') || answer.includes('million')) {
           return "Perfect, having a clear budget helps us focus our search effectively.";
         } else if (answer.includes('flexible') || answer.includes('depends')) {
           return "Flexibility in budget gives us more options to explore.";
@@ -910,8 +919,8 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     response_id: 0
   }));
 
-  // Send auto-greeting after a short delay
-  setTimeout(() => {
+  // FIXED: Single auto-greeting timer (removed conflicting timers)
+  const autoGreetingTimer = setTimeout(() => {
     if (!userHasSpoken) {
       console.log('🎙️ Sending auto-greeting message');
       ws.send(JSON.stringify({
@@ -921,20 +930,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
         response_id: 1
       }));
     }
-  }, 4000); // Increased to 4 seconds for complete greeting
-
-  // Set a timer for auto-greeting if user doesn't speak first
-  const autoGreetingTimer = setTimeout(() => {
-    if (!userHasSpoken) {
-      console.log('🎙️ Sending backup auto-greeting');
-      ws.send(JSON.stringify({
-        content: "Hello! This is Emma from our real estate team. I'm here to help you find your perfect property today. How's everything going?",
-        content_complete: true,
-        actions: [],
-        response_id: 2
-      }));
-    }
-  }, 8000); // Increased to 8 seconds to avoid overlap
+  }, 4000); // Single 4-second delay
 
   // ENHANCED: Message handling with delayed answer capture
   ws.on('message', async (data) => {
@@ -1056,22 +1052,27 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
           captureUserAnswer(userMessage);
         }
 
-        // Check for scheduling preference (only after ALL questions are answered)
+        // FIXED: Check for scheduling preference with better logging
         let schedulingDetected = false;
-        if (discoveryProgress.allQuestionsCompleted && 
-            userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today)\b/)) {
+        
+        // Check if user mentions scheduling-related words
+        const schedulingWords = /\b(schedule|book|appointment|call|talk|meet|discuss|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today)\b/i;
+        
+        if (userMessage.toLowerCase().match(schedulingWords)) {
+          console.log('🗓️ User mentioned scheduling-related words:', userMessage);
           
-          console.log('🗓️ User mentioned scheduling after completing ALL discovery questions');
-          
-          const dayInfo = handleSchedulingPreference(userMessage);
-          
-          if (dayInfo && !webhookSent) {
-            bookingInfo.preferredDay = dayInfo.dayName;
-            schedulingDetected = true;
+          if (discoveryProgress.allQuestionsCompleted) {
+            console.log('✅ All discovery questions completed - processing scheduling preference');
+            const dayInfo = handleSchedulingPreference(userMessage);
+            
+            if (dayInfo && !webhookSent) {
+              bookingInfo.preferredDay = dayInfo.dayName;
+              schedulingDetected = true;
+              console.log(`📅 Scheduling preference captured: ${dayInfo.dayName}`);
+            }
+          } else {
+            console.log(`⚠️ User mentioned scheduling but only ${discoveryProgress.questionsCompleted}/6 questions completed. Continuing with discovery.`);
           }
-        } else if (!discoveryProgress.allQuestionsCompleted && 
-                   userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss)\b/)) {
-          console.log('⚠️ User mentioned scheduling but discovery is not complete. Continuing with questions.');
         }
 
         // Add user message to conversation history
@@ -1152,301 +1153,316 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
           response_id: parsed.response_id
         }));
         
-        // FIXED: Enhanced webhook sending logic
+        // FIXED: Enhanced webhook sending logic with better validation
         if (schedulingDetected && discoveryProgress.allQuestionsCompleted && !webhookSent) {
-         console.log('🚀 SENDING WEBHOOK - All conditions met:');
-         console.log('   ✅ All 6 discovery questions completed and answered');
-         console.log('   ✅ Scheduling preference detected');
-         console.log('   ✅ Contact info available');
-         
-         // Final validation of discovery data
-         const finalDiscoveryData = {};
-         discoveryQuestions.forEach((q, index) => {
-           if (q.answered && q.answer) {
-             finalDiscoveryData[q.field] = q.answer;
-             finalDiscoveryData[`question_${index}`] = q.answer;
-           }
-         });
-         
-         console.log('📋 Final discovery data being sent:', JSON.stringify(finalDiscoveryData, null, 2));
-         
-         const result = await sendSchedulingPreference(
-           bookingInfo.name || connectionData.customerName || '',
-           bookingInfo.email || connectionData.customerEmail || '',
-           bookingInfo.phone || connectionData.customerPhone || '',
-           bookingInfo.preferredDay,
-           connectionData.callId,
-           finalDiscoveryData
-         );
-         
-         if (result.success) {
-           webhookSent = true;
-           conversationState = 'completed';
-           console.log('✅ Webhook sent successfully with all discovery data');
-         }
-       }
-     }
-   } catch (error) {
-     console.error('❌ Error handling message:', error.message);
-     
-     // Enhanced emergency webhook logic
-     if (!webhookSent && connectionData.callId && 
-         (bookingInfo.email || connectionData.customerEmail) &&
-         discoveryProgress.questionsCompleted >= 4) {
-       try {
-         console.log('🚨 EMERGENCY WEBHOOK SEND - Substantial discovery data available');
-         
-         // Create emergency discovery data from what we have
-         const emergencyDiscoveryData = {};
-         discoveryQuestions.forEach((q, index) => {
-           if (q.answered && q.answer) {
-             emergencyDiscoveryData[q.field] = q.answer;
-             emergencyDiscoveryData[`question_${index}`] = q.answer;
-           }
-         });
-         
-         await sendSchedulingPreference(
-           bookingInfo.name || connectionData.customerName || '',
-           bookingInfo.email || connectionData.customerEmail || '',
-           bookingInfo.phone || connectionData.customerPhone || '',
-           bookingInfo.preferredDay || 'Error occurred',
-           connectionData.callId,
-           emergencyDiscoveryData
-         );
-         webhookSent = true;
-         console.log('✅ Emergency webhook sent with available discovery data');
-       } catch (webhookError) {
-         console.error('❌ Emergency webhook also failed:', webhookError.message);
-       }
-     }
-     
-     // Send a recovery message
-     ws.send(JSON.stringify({
-       content: "I missed that. Could you repeat it?",
-       content_complete: true,
-       actions: [],
-       response_id: 9999
-     }));
-   }
- });
+          console.log('🚀 SENDING WEBHOOK - All conditions met:');
+          console.log('   ✅ All 6 discovery questions completed and answered');
+          console.log('   ✅ Scheduling preference detected');
+          console.log('   ✅ Contact info available');
+          
+          // Final validation of discovery data
+          const finalDiscoveryData = {};
+          discoveryQuestions.forEach((q, index) => {
+            if (q.answered && q.answer) {
+              finalDiscoveryData[q.field] = q.answer;
+              finalDiscoveryData[`question_${index}`] = q.answer;
+            }
+          });
+          
+          console.log('📋 Final discovery data being sent:', JSON.stringify(finalDiscoveryData, null, 2));
+          
+          // Ensure we have minimum required data
+          const finalEmail = bookingInfo.email || connectionData.customerEmail || '';
+          const finalName = bookingInfo.name || connectionData.customerName || '';
+          const finalPhone = bookingInfo.phone || connectionData.customerPhone || '';
+          
+          if (finalEmail) {
+            const result = await sendSchedulingPreference(
+              finalName,
+              finalEmail,
+              finalPhone,
+              bookingInfo.preferredDay,
+              connectionData.callId,
+              finalDiscoveryData
+            );
+            
+            if (result.success) {
+              webhookSent = true;
+              conversationState = 'completed';
+              console.log('✅ Webhook sent successfully with all discovery data');
+            } else {
+              console.error('❌ Webhook failed:', result.error);
+            }
+          } else {
+            console.error('❌ Cannot send webhook: No email address available');
+          }
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error handling message:', error.message);
+      
+      // Enhanced emergency webhook logic
+      if (!webhookSent && connectionData.callId && 
+          (bookingInfo.email || connectionData.customerEmail) &&
+          discoveryProgress.questionsCompleted >= 4) {
+        try {
+          console.log('🚨 EMERGENCY WEBHOOK SEND - Substantial discovery data available');
+          
+          // Create emergency discovery data from what we have
+          const emergencyDiscoveryData = {};
+          discoveryQuestions.forEach((q, index) => {
+            if (q.answered && q.answer) {
+              emergencyDiscoveryData[q.field] = q.answer;
+              emergencyDiscoveryData[`question_${index}`] = q.answer;
+            }
+          });
+          
+          await sendSchedulingPreference(
+            bookingInfo.name || connectionData.customerName || '',
+            bookingInfo.email || connectionData.customerEmail || '',
+            bookingInfo.phone || connectionData.customerPhone || '',
+            bookingInfo.preferredDay || 'Error occurred',
+            connectionData.callId,
+            emergencyDiscoveryData
+          );
+          webhookSent = true;
+          console.log('✅ Emergency webhook sent with available discovery data');
+        } catch (webhookError) {
+          console.error('❌ Emergency webhook also failed:', webhookError.message);
+        }
+      }
+      
+      // Send a recovery message
+      ws.send(JSON.stringify({
+        content: "I missed that. Could you repeat it?",
+        content_complete: true,
+        actions: [],
+        response_id: 9999
+      }));
+    }
+  });
 
- ws.on('close', async () => {
-   console.log('🔌 Connection closed.');
-   clearTimeout(autoGreetingTimer);
-   
-   // Clear any pending answer capture timer
-   if (answerCaptureTimer) {
-     clearTimeout(answerCaptureTimer);
-     console.log('🧹 Cleared pending answer capture timer');
-   }
-   
-   // If we have a pending answer in the buffer, capture it now
-   if (userResponseBuffer.length > 0 && discoveryProgress.waitingForAnswer) {
-     const currentQ = discoveryQuestions[discoveryProgress.currentQuestionIndex];
-     if (currentQ && !currentQ.answered) {
-       const completeAnswer = userResponseBuffer.join(' ');
-       currentQ.answered = true;
-       currentQ.answer = completeAnswer;
-       discoveryData[currentQ.field] = completeAnswer;
-       discoveryData[`question_${discoveryProgress.currentQuestionIndex}`] = completeAnswer;
-       discoveryProgress.questionsCompleted++;
-       console.log(`🔌 Captured buffered answer on close: "${completeAnswer}"`);
-     }
-   }
-   
-   console.log('=== FINAL CONNECTION CLOSE ANALYSIS ===');
-   console.log('📋 Final discoveryData:', JSON.stringify(discoveryData, null, 2));
-   console.log('📊 Questions completed:', discoveryProgress.questionsCompleted);
-   console.log('📊 All questions completed:', discoveryProgress.allQuestionsCompleted);
-   
-   // Detailed breakdown of each question
-   discoveryQuestions.forEach((q, index) => {
-     console.log(`Question ${index + 1}: Asked=${q.asked}, Answered=${q.answered}, Answer="${q.answer}"`);
-   });
-   
-   // FINAL webhook attempt only if we have meaningful data and haven't sent yet
-   if (!webhookSent && connectionData.callId && discoveryProgress.questionsCompleted >= 2) {
-     try {
-       const finalEmail = connectionData.customerEmail || bookingInfo.email || '';
-       const finalName = connectionData.customerName || bookingInfo.name || '';
-       const finalPhone = connectionData.customerPhone || bookingInfo.phone || '';
-       
-       console.log('🚨 FINAL WEBHOOK ATTEMPT on connection close');
-       console.log(`📊 Sending with ${discoveryProgress.questionsCompleted}/6 questions completed`);
-       
-       // Create final discovery data from answered questions
-       const finalDiscoveryData = {};
-       discoveryQuestions.forEach((q, index) => {
-         if (q.answered && q.answer) {
-           finalDiscoveryData[q.field] = q.answer;
-           finalDiscoveryData[`question_${index}`] = q.answer;
-         }
-       });
-       
-       await sendSchedulingPreference(
-         finalName,
-         finalEmail,
-         finalPhone,
-         bookingInfo.preferredDay || 'Call ended early',
-         connectionData.callId,
-         finalDiscoveryData
-       );
-       
-       console.log('✅ Final webhook sent successfully on connection close');
-       webhookSent = true;
-     } catch (finalError) {
-       console.error('❌ Final webhook failed:', finalError.message);
-     }
-   }
-   
-   // Clean up
-   if (connectionData.callId) {
-     activeCallsMetadata.delete(connectionData.callId);
-     console.log(`🧹 Cleaned up metadata for call ${connectionData.callId}`);
-   }
- });
+  ws.on('close', async () => {
+    console.log('🔌 Connection closed.');
+    clearTimeout(autoGreetingTimer);
+    
+    // Clear any pending answer capture timer
+    if (answerCaptureTimer) {
+      clearTimeout(answerCaptureTimer);
+      console.log('🧹 Cleared pending answer capture timer');
+    }
+    
+    // If we have a pending answer in the buffer, capture it now
+    if (userResponseBuffer.length > 0 && discoveryProgress.waitingForAnswer) {
+      const currentQ = discoveryQuestions[discoveryProgress.currentQuestionIndex];
+      if (currentQ && !currentQ.answered) {
+        const completeAnswer = userResponseBuffer.join(' ');
+        currentQ.answered = true;
+        currentQ.answer = completeAnswer;
+        discoveryData[currentQ.field] = completeAnswer;
+        discoveryData[`question_${discoveryProgress.currentQuestionIndex}`] = completeAnswer;
+        discoveryProgress.questionsCompleted++;
+        console.log(`🔌 Captured buffered answer on close: "${completeAnswer}"`);
+      }
+    }
+    
+    console.log('=== FINAL CONNECTION CLOSE ANALYSIS ===');
+    console.log('📋 Final discoveryData:', JSON.stringify(discoveryData, null, 2));
+    console.log('📊 Questions completed:', discoveryProgress.questionsCompleted);
+    console.log('📊 All questions completed:', discoveryProgress.allQuestionsCompleted);
+    
+    // Detailed breakdown of each question
+    discoveryQuestions.forEach((q, index) => {
+      console.log(`Question ${index + 1}: Asked=${q.asked}, Answered=${q.answered}, Answer="${q.answer}"`);
+    });
+    
+    // FINAL webhook attempt only if we have meaningful data and haven't sent yet
+    if (!webhookSent && connectionData.callId && discoveryProgress.questionsCompleted >= 2) {
+      try {
+        const finalEmail = connectionData.customerEmail || bookingInfo.email || '';
+        const finalName = connectionData.customerName || bookingInfo.name || '';
+        const finalPhone = connectionData.customerPhone || bookingInfo.phone || '';
+        
+        console.log('🚨 FINAL WEBHOOK ATTEMPT on connection close');
+        console.log(`📊 Sending with ${discoveryProgress.questionsCompleted}/6 questions completed`);
+        
+        // Create final discovery data from answered questions
+        const finalDiscoveryData = {};
+        discoveryQuestions.forEach((q, index) => {
+          if (q.answered && q.answer) {
+            finalDiscoveryData[q.field] = q.answer;
+            finalDiscoveryData[`question_${index}`] = q.answer;
+          }
+        });
+        
+        if (finalEmail) {
+          await sendSchedulingPreference(
+            finalName,
+            finalEmail,
+            finalPhone,
+            bookingInfo.preferredDay || 'Call ended early',
+            connectionData.callId,
+            finalDiscoveryData
+          );
+          
+          console.log('✅ Final webhook sent successfully on connection close');
+          webhookSent = true;
+        } else {
+          console.log('❌ Cannot send final webhook: No email address available');
+        }
+      } catch (finalError) {
+        console.error('❌ Final webhook failed:', finalError.message);
+      }
+    }
+    
+    // Clean up
+    if (connectionData.callId) {
+      activeCallsMetadata.delete(connectionData.callId);
+      console.log(`🧹 Cleaned up metadata for call ${connectionData.callId}`);
+    }
+  });
 });
 
 // Add error handling for WebSocket server
 wss.on('error', (error) => {
- console.error('❌ WebSocket Server Error:', error);
+  console.error('❌ WebSocket Server Error:', error);
 });
 
 server.on('error', (error) => {
- console.error('❌ HTTP Server Error:', error);
+  console.error('❌ HTTP Server Error:', error);
 });
 
 // Endpoint to receive Retell webhook call events
 app.post('/retell-webhook', express.json(), async (req, res) => {
- try {
-   const { event, call } = req.body;
-   
-   console.log(`Received Retell webhook event: ${event}`);
-   
-   if (call && call.call_id) {
-     console.log(`Call ID: ${call.call_id}, Status: ${call.call_status}`);
-     
-     // Extract important call information
-     const email = call.metadata?.customer_email || '';
-     const name = call.metadata?.customer_name || '';
-     const phone = call.to_number || '';
-     let preferredDay = '';
-     let discoveryData = {};
-     
-     // Store this info globally as well
-     if (email) {
-       storeContactInfoGlobally(name, email, phone, 'Retell Webhook');
-     }
-     
-     // Look for preferred day in various locations
-     if (call.variables && call.variables.preferredDay) {
-       preferredDay = call.variables.preferredDay;
-     } else if (call.custom_data && call.custom_data.preferredDay) {
-       preferredDay = call.custom_data.preferredDay;
-     } else if (call.analysis && call.analysis.custom_data) {
-       try {
-         const customData = typeof call.analysis.custom_data === 'string'
-           ? JSON.parse(call.analysis.custom_data)
-           : call.analysis.custom_data;
-           
-         if (customData.preferredDay) {
-           preferredDay = customData.preferredDay;
-         }
-       } catch (error) {
-         console.error('Error parsing custom data:', error);
-       }
-     }
-     
-     // Extract discovery data from variables, transcript, and custom data
-     if (call.variables) {
-       // Extract discovery-related variables
-       Object.entries(call.variables).forEach(([key, value]) => {
-         if (key.startsWith('discovery_') || key.includes('question_')) {
-           discoveryData[key] = value;
-         }
-       });
-     }
-     
-     // Extract from custom_data if any
-     if (call.custom_data && call.custom_data.discovery_data) {
-       try {
-         const parsedData = typeof call.custom_data.discovery_data === 'string' 
-           ? JSON.parse(call.custom_data.discovery_data)
-           : call.custom_data.discovery_data;
-           
-         discoveryData = { ...discoveryData, ...parsedData };
-       } catch (error) {
-         console.error('Error parsing discovery data from custom_data:', error);
-       }
-     }
-     
-     // If no discovery data found yet, try to extract from transcript
-     if (Object.keys(discoveryData).length === 0 && call.transcript && call.transcript.length > 0) {
-       // Use the discovery questions to match answers in the transcript (REAL ESTATE)
-       const discoveryQuestions = [
-         'Are you currently renting or do you own?',
-         'What\'s your ideal price range?',
-         'How soon are you looking to buy?',
-         'What type of home are you looking for?',
-         'Are there any must-haves or deal-breakers for you?',
-         'Are you working with another agent currently?'
-       ];
-       
-       // Find questions and their answers in the transcript
-       call.transcript.forEach((item, index) => {
-         if (item.role === 'assistant') {
-           const botMessage = item.content.toLowerCase();
-           
-           // Try to match with our known discovery questions
-           discoveryQuestions.forEach((question, qIndex) => {
-             // If this bot message contains a discovery question
-             if (botMessage.includes(question.toLowerCase().substring(0, 15))) {
-               // Check if next message is from the user (the answer)
-               if (call.transcript[index + 1] && call.transcript[index + 1].role === 'user') {
-                 const answer = call.transcript[index + 1].content;
-                 discoveryData[`question_${qIndex}`] = answer;
-               }
-             }
-           });
-         }
-       });
-     }
-     
-     // Send webhook for call ending events
-     if ((event === 'call_ended' || event === 'call_analyzed') && email) {
-       console.log(`Sending webhook for ${event} event with discovery data:`, discoveryData);
-       
-       try {
-         // Use the trigger server to route the webhook
-         await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, {
-           name,
-           email,
-           phone,
-           preferredDay: preferredDay || 'Not specified',
-           call_id: call.call_id,
-           call_status: call.call_status,
-           discovery_data: discoveryData,
-           schedulingComplete: true
-         });
-         
-         console.log(`Successfully sent webhook for ${event}`);
-       } catch (error) {
-         console.error(`Error sending webhook for ${event}:`, error);
-       }
-     }
-     
-     // Clean up any stored data
-     activeCallsMetadata.delete(call.call_id);
-   }
-   
-   res.status(200).json({ success: true });
- } catch (error) {
-   console.error('Error handling Retell webhook:', error);
-   res.status(500).json({ success: false, error: error.message });
- }
+  try {
+    const { event, call } = req.body;
+    
+    console.log(`Received Retell webhook event: ${event}`);
+    
+    if (call && call.call_id) {
+      console.log(`Call ID: ${call.call_id}, Status: ${call.call_status}`);
+      
+      // Extract important call information
+      const email = call.metadata?.customer_email || '';
+      const name = call.metadata?.customer_name || '';
+      const phone = call.to_number || '';
+      let preferredDay = '';
+      let discoveryData = {};
+      
+      // Store this info globally as well
+      if (email) {
+        storeContactInfoGlobally(name, email, phone, 'Retell Webhook');
+      }
+      
+      // Look for preferred day in various locations
+      if (call.variables && call.variables.preferredDay) {
+        preferredDay = call.variables.preferredDay;
+      } else if (call.custom_data && call.custom_data.preferredDay) {
+        preferredDay = call.custom_data.preferredDay;
+      } else if (call.analysis && call.analysis.custom_data) {
+        try {
+          const customData = typeof call.analysis.custom_data === 'string'
+            ? JSON.parse(call.analysis.custom_data)
+            : call.analysis.custom_data;
+            
+          if (customData.preferredDay) {
+            preferredDay = customData.preferredDay;
+          }
+        } catch (error) {
+          console.error('Error parsing custom data:', error);
+        }
+      }
+      
+      // Extract discovery data from variables, transcript, and custom data
+      if (call.variables) {
+        // Extract discovery-related variables
+        Object.entries(call.variables).forEach(([key, value]) => {
+          if (key.startsWith('discovery_') || key.includes('question_')) {
+            discoveryData[key] = value;
+          }
+        });
+      }
+      
+      // Extract from custom_data if any
+      if (call.custom_data && call.custom_data.discovery_data) {
+        try {
+          const parsedData = typeof call.custom_data.discovery_data === 'string' 
+            ? JSON.parse(call.custom_data.discovery_data)
+            : call.custom_data.discovery_data;
+            
+          discoveryData = { ...discoveryData, ...parsedData };
+        } catch (error) {
+          console.error('Error parsing discovery data from custom_data:', error);
+        }
+      }
+      
+      // If no discovery data found yet, try to extract from transcript
+      if (Object.keys(discoveryData).length === 0 && call.transcript && call.transcript.length > 0) {
+        // Use the discovery questions to match answers in the transcript (REAL ESTATE)
+        const discoveryQuestions = [
+          'Are you currently renting or do you own?',
+          'What\'s your ideal price range?',
+          'How soon are you looking to buy?',
+          'What type of home are you looking for?',
+          'Are there any must-haves or deal-breakers for you?',
+          'Are you working with another agent currently?'
+        ];
+        
+        // Find questions and their answers in the transcript
+        call.transcript.forEach((item, index) => {
+          if (item.role === 'assistant') {
+            const botMessage = item.content.toLowerCase();
+            
+            // Try to match with our known discovery questions
+            discoveryQuestions.forEach((question, qIndex) => {
+              // If this bot message contains a discovery question
+              if (botMessage.includes(question.toLowerCase().substring(0, 15))) {
+                // Check if next message is from the user (the answer)
+                if (call.transcript[index + 1] && call.transcript[index + 1].role === 'user') {
+                  const answer = call.transcript[index + 1].content;
+                  discoveryData[`question_${qIndex}`] = answer;
+                }
+              }
+            });
+          }
+        });
+      }
+      
+      // Send webhook for call ending events
+      if ((event === 'call_ended' || event === 'call_analyzed') && email) {
+        console.log(`Sending webhook for ${event} event with discovery data:`, discoveryData);
+        
+        try {
+          // Use the trigger server to route the webhook
+          await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, {
+            name,
+            email,
+            phone,
+            preferredDay: preferredDay || 'Not specified',
+            call_id: call.call_id,
+            call_status: call.call_status,
+            discovery_data: discoveryData,
+            schedulingComplete: true
+          });
+          
+          console.log(`Successfully sent webhook for ${event}`);
+        } catch (error) {
+          console.error(`Error sending webhook for ${event}:`, error);
+        }
+      }
+      
+      // Clean up any stored data
+      activeCallsMetadata.delete(call.call_id);
+    }
+    
+    res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('Error handling Retell webhook:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
- console.log(`Real Estate Receptionist WebSocket Server with appointment scheduling is listening on port ${PORT}`);
+  console.log(`Real Estate Receptionist WebSocket Server with appointment scheduling is listening on port ${PORT}`);
 });
