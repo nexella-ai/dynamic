@@ -805,6 +805,68 @@ wss.on('connection', async (ws, req) => {
       console.log(`✅ CAPTURED Q${discoveryProgress.currentQuestionIndex + 1}: "${completeAnswer}"`);
       console.log(`📊 Progress: ${discoveryProgress.questionsCompleted}/6 questions completed`);
       
+      // CRITICAL: If all questions are now complete, send webhook IMMEDIATELY (only if we have email)
+      if (discoveryProgress.allQuestionsCompleted && !webhookSent) {
+        console.log('🚨 ALL 6 QUESTIONS COMPLETED - CHECKING FOR WEBHOOK SEND');
+        
+        const finalEmail = connectionData.customerEmail || bookingInfo.email || '';
+        
+        if (finalEmail && finalEmail.trim() !== '') {
+          console.log('✅ Email found - triggering immediate webhook');
+          
+          // Force webhook immediately 
+          setTimeout(async () => {
+            if (webhookSent) {
+              console.log('⚠️ Webhook already sent, skipping duplicate');
+              return;
+            }
+            
+            try {
+              const finalDiscoveryData = {};
+              discoveryQuestions.forEach((q, index) => {
+                if (q.answered && q.answer) {
+                  finalDiscoveryData[q.field] = q.answer;
+                  finalDiscoveryData[`question_${index}`] = q.answer;
+                }
+              });
+              
+              console.log('📋 IMMEDIATE WEBHOOK - Discovery data:', JSON.stringify(finalDiscoveryData, null, 2));
+              
+              const finalName = connectionData.customerName || bookingInfo.name || '';
+              const finalPhone = connectionData.customerPhone || bookingInfo.phone || '';
+              
+              console.log(`📧 IMMEDIATE WEBHOOK - Using email: ${finalEmail}`);
+              
+              const result = await sendSchedulingPreference(
+                finalName,
+                finalEmail,
+                finalPhone,
+                'Discovery completed - ready to schedule',
+                connectionData.callId,
+                finalDiscoveryData
+              );
+              
+              if (result.success) {
+                webhookSent = true;
+                console.log('✅ IMMEDIATE webhook sent successfully after all 6 questions!');
+              } else {
+                console.error('❌ IMMEDIATE webhook failed:', result.error);
+              }
+            } catch (webhookError) {
+              console.error('❌ IMMEDIATE webhook error:', webhookError.message);
+            }
+          }, 500);
+        } else {
+          console.error('❌ Cannot send immediate webhook: No email address available');
+          console.log('📧 Available contact info:', {
+            customerEmail: connectionData.customerEmail,
+            bookingEmail: bookingInfo.email,
+            customerName: connectionData.customerName,
+            customerPhone: connectionData.customerPhone
+          });
+        }
+      }
+      
       // Reset
       userResponseBuffer = [];
       isCapturingAnswer = false;
@@ -1137,12 +1199,44 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
         // Add bot reply to conversation history (without context prompt)
         conversationHistory.push({ role: 'assistant', content: botReply });
 
+        // ENHANCED: Detect when agent asks for scheduling (not just user response)
+        const agentAsksForScheduling = botReply.toLowerCase().includes('what day would work') || 
+                                      botReply.toLowerCase().includes('schedule a consultation') ||
+                                      botReply.toLowerCase().includes('book an appointment') ||
+                                      botReply.toLowerCase().includes('let\'s schedule') ||
+                                      botReply.toLowerCase().includes('schedule a call') ||
+                                      botReply.toLowerCase().includes('what day') ||
+                                      botReply.toLowerCase().includes('when would') ||
+                                      (botReply.toLowerCase().includes('schedule') && discoveryProgress.allQuestionsCompleted);
+        
+        if (agentAsksForScheduling && discoveryProgress.allQuestionsCompleted && !webhookSent) {
+          console.log('🗓️ AGENT ASKED FOR SCHEDULING - TRIGGERING WEBHOOK IMMEDIATELY');
+          console.log('Agent said:', botReply);
+          schedulingDetected = true;
+          bookingInfo.preferredDay = 'Agent initiated scheduling';
+        }
+
         // Update conversation state
         if (conversationState === 'introduction') {
           conversationState = 'discovery';
         } else if (conversationState === 'discovery' && discoveryProgress.allQuestionsCompleted) {
           conversationState = 'booking';
           console.log('🔄 Transitioning to booking state - ALL 6 discovery questions completed');
+        }
+
+        // CRITICAL: Check if we should send webhook immediately after each question is answered
+        if (discoveryProgress.allQuestionsCompleted && !webhookSent) {
+          console.log('🚀 ALL 6 QUESTIONS COMPLETED - SENDING WEBHOOK IMMEDIATELY');
+          console.log('   ✅ All 6 discovery questions completed and answered');
+          console.log('   ✅ Discovery data ready to send');
+          
+          // Set default scheduling preference if none detected
+          if (!bookingInfo.preferredDay) {
+            bookingInfo.preferredDay = 'To be scheduled';
+          }
+          
+          // Force webhook send regardless of scheduling detection
+          schedulingDetected = true;
         }
 
         // Send the AI response
@@ -1153,12 +1247,8 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
           response_id: parsed.response_id
         }));
         
-        // FIXED: Enhanced webhook sending logic with better validation
+        // FIXED: Send webhook when ALL 6 questions completed (regardless of scheduling mention)
         if (schedulingDetected && discoveryProgress.allQuestionsCompleted && !webhookSent) {
-          console.log('🚀 SENDING WEBHOOK - All conditions met:');
-          console.log('   ✅ All 6 discovery questions completed and answered');
-          console.log('   ✅ Scheduling preference detected');
-          console.log('   ✅ Contact info available');
           
           // Final validation of discovery data
           const finalDiscoveryData = {};
