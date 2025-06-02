@@ -12,7 +12,7 @@ app.use(express.json());
 
 // Ensure we have the required environment variables
 if (!process.env.TRIGGER_SERVER_URL) {
-  process.env.TRIGGER_SERVER_URL = 'https://trigger-server-qt7u.onrender.com';
+  process.env. TRIGGER_SERVER_URL = 'https://trigger-server-qt7u.onrender.com';
 }
 if (!process.env.N8N_WEBHOOK_URL) {
   process.env.N8N_WEBHOOK_URL = 'https://n8n-clp2.onrender.com/webhook/retell-scheduling';
@@ -22,7 +22,7 @@ if (!process.env.N8N_WEBHOOK_URL) {
 global.lastTypeformSubmission = null;
 
 app.get('/', (req, res) => {
-  res.send('Real Estate Receptionist WebSocket Server with appointment scheduling is live!');
+  res.send('Nexella WebSocket Server with Calendly scheduling link integration is live!');
 });
 
 // Store active calls metadata
@@ -62,7 +62,7 @@ async function checkAvailability(startTime, endTime) {
   }
 }
 
-// For getting available time slots from calendar system (through your trigger server)
+// For getting available time slots from Calendly (through your trigger server)
 async function getAvailableTimeSlots(date) {
   try {
     const formattedDate = new Date(date).toISOString().split('T')[0];
@@ -155,14 +155,14 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       return { success: false, error: 'No email address available' };
     }
     
-    // ENHANCED: Process discovery data with better field mapping (REAL ESTATE FIELDS)
+    // ENHANCED: Process discovery data with better field mapping
     console.log('🔧 PROCESSING DISCOVERY DATA:');
     console.log('Raw discoveryData input:', JSON.stringify(discoveryData, null, 2));
     
     // Initialize formatted discovery data
     const formattedDiscoveryData = {};
     
-    // Define field mappings from question keys to CRM field names (REAL ESTATE)
+    // Define field mappings from question keys to Airtable field names
     const fieldMappings = {
       'question_0': 'Current Ownership Status',
       'question_1': 'Ideal Price Range', 
@@ -180,33 +180,34 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
         const trimmedValue = value.trim();
         
         if (key.startsWith('question_') && fieldMappings[key]) {
-          // Map question_X to the exact CRM field name
+          // Map question_X to the exact Airtable field name
           formattedDiscoveryData[fieldMappings[key]] = trimmedValue;
           console.log(`✅ Mapped ${key} -> "${fieldMappings[key]}" = "${trimmedValue}"`);
-        } else if (key === 'Current Ownership Status' || key.includes('renting') || key.includes('own')) {
+        } else if (key === 'Current Ownership Status' || key.includes('rent') || key.includes('own')) {
           formattedDiscoveryData['Current Ownership Status'] = trimmedValue;
           console.log(`✅ Direct mapping: Current Ownership Status = "${trimmedValue}"`);
-        } else if (key === 'Ideal Price Range' || key.includes('price') || key.includes('budget')) {
+        } else if (key === 'Ideal Price Range' || key.includes('price') || key.includes('range') || key.includes('budget')) {
+          // Only map if we don't already have it from question_1
           if (!formattedDiscoveryData['Ideal Price Range']) {
             formattedDiscoveryData['Ideal Price Range'] = trimmedValue;
             console.log(`✅ Direct mapping: Ideal Price Range = "${trimmedValue}"`);
           }
-        } else if (key === 'Timeline to Buy' || key.includes('timeline') || key.includes('soon')) {
+        } else if (key === 'Timeline to Buy' || key.includes('timeframe') || key.includes('soon') || key.includes('when')) {
           if (!formattedDiscoveryData['Timeline to Buy']) {
             formattedDiscoveryData['Timeline to Buy'] = trimmedValue;
             console.log(`✅ Direct mapping: Timeline to Buy = "${trimmedValue}"`);
           }
-        } else if (key === 'Home Type Preference' || key.includes('home type') || key.includes('property type')) {
+        } else if (key === 'Home Type Preference' || key.includes('home') || key.includes('type') || key.includes('house')) {
           if (!formattedDiscoveryData['Home Type Preference']) {
             formattedDiscoveryData['Home Type Preference'] = trimmedValue;
             console.log(`✅ Direct mapping: Home Type Preference = "${trimmedValue}"`);
           }
-        } else if (key === 'Must-Haves and Deal-Breakers' || key.includes('must-have') || key.includes('deal-breaker')) {
+        } else if (key === 'Must-Haves and Deal-Breakers' || key.includes('must') || key.includes('deal') || key.includes('breaker')) {
           if (!formattedDiscoveryData['Must-Haves and Deal-Breakers']) {
             formattedDiscoveryData['Must-Haves and Deal-Breakers'] = trimmedValue;
             console.log(`✅ Direct mapping: Must-Haves and Deal-Breakers = "${trimmedValue}"`);
           }
-        } else if (key === 'Current Agent Status' || key.includes('agent') || key.includes('working with')) {
+        } else if (key === 'Current Agent Status' || key.includes('agent') || key.includes('realtor')) {
           if (!formattedDiscoveryData['Current Agent Status']) {
             formattedDiscoveryData['Current Agent Status'] = trimmedValue;
             console.log(`✅ Direct mapping: Current Agent Status = "${trimmedValue}"`);
@@ -227,7 +228,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       finalPhone = '+1' + finalPhone.replace(/[^0-9]/g, '');
     }
     
-    // Create the webhook payload (REAL ESTATE FIELDS)
+    // Create the webhook payload
     const webhookData = {
       name: finalName || '',
       email: finalEmail, // This is now guaranteed to have a value
@@ -237,7 +238,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       schedulingComplete: true,
       discovery_data: formattedDiscoveryData,
       formatted_discovery: formattedDiscoveryData, // Send both for compatibility
-      // Also include individual fields for direct access (REAL ESTATE)
+      // Also include individual fields for direct access
       "Current Ownership Status": formattedDiscoveryData["Current Ownership Status"] || '',
       "Ideal Price Range": formattedDiscoveryData["Ideal Price Range"] || '',
       "Timeline to Buy": formattedDiscoveryData["Timeline to Buy"] || '',
@@ -277,7 +278,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
         fallbackPhone = fallbackPhone || callMetadata?.phone || callMetadata?.to_number || '';
       }
       
-      // Process discovery data for fallback (REAL ESTATE FIELDS)
+      // Process discovery data for fallback (same logic)
       const formattedDiscoveryData = {};
       const fieldMappings = {
         'question_0': 'Current Ownership Status',
@@ -293,17 +294,17 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
           const trimmedValue = value.trim();
           if (key.startsWith('question_') && fieldMappings[key]) {
             formattedDiscoveryData[fieldMappings[key]] = trimmedValue;
-          } else if (key === 'Current Ownership Status' || key.includes('renting') || key.includes('own')) {
+          } else if (key === 'Current Ownership Status' || key.includes('rent') || key.includes('own')) {
             formattedDiscoveryData['Current Ownership Status'] = trimmedValue;
-          } else if (key === 'Ideal Price Range' || key.includes('price') || key.includes('budget')) {
+          } else if (key === 'Ideal Price Range' || key.includes('price') || key.includes('range') || key.includes('budget')) {
             formattedDiscoveryData['Ideal Price Range'] = trimmedValue;
-          } else if (key === 'Timeline to Buy' || key.includes('timeline')) {
+          } else if (key === 'Timeline to Buy' || key.includes('timeframe') || key.includes('soon') || key.includes('when')) {
             formattedDiscoveryData['Timeline to Buy'] = trimmedValue;
-          } else if (key === 'Home Type Preference' || key.includes('home type') || key.includes('property type')) {
+          } else if (key === 'Home Type Preference' || key.includes('home') || key.includes('type') || key.includes('house')) {
             formattedDiscoveryData['Home Type Preference'] = trimmedValue;
-          } else if (key === 'Must-Haves and Deal-Breakers' || key.includes('must-have') || key.includes('deal-breaker')) {
+          } else if (key === 'Must-Haves and Deal-Breakers' || key.includes('must') || key.includes('deal') || key.includes('breaker')) {
             formattedDiscoveryData['Must-Haves and Deal-Breakers'] = trimmedValue;
-          } else if (key === 'Current Agent Status' || key.includes('agent')) {
+          } else if (key === 'Current Agent Status' || key.includes('agent') || key.includes('realtor')) {
             formattedDiscoveryData['Current Agent Status'] = trimmedValue;
           } else {
             formattedDiscoveryData[key] = trimmedValue;
@@ -347,8 +348,6 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
 
 // IMPROVED: Better detection of scheduling preferences
 function handleSchedulingPreference(userMessage) {
-  console.log(`🔍 Analyzing scheduling preference in: "${userMessage}"`);
-  
   // Extract day of week with better handling for various formats
   const dayMatch = userMessage.match(/monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today/i);
   const nextWeekMatch = userMessage.match(/next week/i);
@@ -364,7 +363,6 @@ function handleSchedulingPreference(userMessage) {
     const daysUntilMonday = (dayOfWeek === 0) ? 1 : (8 - dayOfWeek);
     targetDate.setDate(targetDate.getDate() + daysUntilMonday - 7);
     
-    console.log(`✅ Detected "next week" preference`);
     return {
       dayName: 'next week',
       date: targetDate,
@@ -372,7 +370,6 @@ function handleSchedulingPreference(userMessage) {
     };
   } else if (dayMatch) {
     const preferredDay = dayMatch[0].toLowerCase();
-    console.log(`✅ Detected day preference: "${preferredDay}"`);
     
     let targetDate = new Date();
     
@@ -415,7 +412,6 @@ function handleSchedulingPreference(userMessage) {
     }
   }
   
-  console.log(`⚠️ No scheduling preference detected in: "${userMessage}"`);
   return null;
 }
 
@@ -451,7 +447,7 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
     // Log the metadata we're sending to Retell
     console.log('Setting up call with metadata:', metadata);
     
-    // Prevent fallback to default name by setting a variable directly in the agent
+    // Prevent fallback to "Monica" by setting a variable directly in the agent
     const initialVariables = {
       customer_name: name || '',
       customer_email: email
@@ -491,7 +487,7 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
   }
 });
 
-// FIXED WEBSOCKET CONNECTION HANDLER - REAL ESTATE DISCOVERY SYSTEM
+// ENHANCED WEBSOCKET CONNECTION HANDLER - FIXED DISCOVERY SYSTEM WITH DELAYED ANSWER CAPTURE
 wss.on('connection', async (ws, req) => {
   console.log('🔗 NEW WEBSOCKET CONNECTION ESTABLISHED');
   console.log('Connection URL:', req.url);
@@ -590,13 +586,13 @@ wss.on('connection', async (ws, req) => {
   
   console.log('Retell connected via WebSocket.');
   
-  // REAL ESTATE DISCOVERY QUESTIONS SYSTEM
+  // SIMPLIFIED: Discovery questions system
   const discoveryQuestions = [
     { question: 'Are you currently renting or do you own?', field: 'Current Ownership Status', asked: false, answered: false, answer: '' },
     { question: 'What\'s your ideal price range?', field: 'Ideal Price Range', asked: false, answered: false, answer: '' },
     { question: 'How soon are you looking to buy?', field: 'Timeline to Buy', asked: false, answered: false, answer: '' },
-    { question: 'What type of home are you looking for? Single-family, condo, townhouse, or something else?', field: 'Home Type Preference', asked: false, answered: false, answer: '' },
-    { question: 'Are there any must-haves or deal-breakers for you?', field: 'Must-Haves and Deal-Breakers', asked: false, answered: false, answer: '' },
+    { question: 'What type of home are you looking for?', field: 'Home Type Preference', asked: false, answered: false, answer: '' },
+    { question: 'Are there any must-haves or deal-breakers?', field: 'Must-Haves and Deal-Breakers', asked: false, answered: false, answer: '' },
     { question: 'Are you working with another agent currently?', field: 'Current Agent Status', asked: false, answered: false, answer: '' }
   ];
   
@@ -608,951 +604,52 @@ wss.on('connection', async (ws, req) => {
     lastAcknowledgment: '' // Track last acknowledgment used
   };
 
-  // Function to generate contextual acknowledgments based on user's answer (REAL ESTATE)
+  // Function to generate contextual acknowledgments based on user's answer
   function getContextualAcknowledgment(userAnswer, questionIndex) {
     const answer = userAnswer.toLowerCase();
     
     switch (questionIndex) {
       case 0: // Are you currently renting or do you own?
         if (answer.includes('rent') || answer.includes('renting')) {
-          return "Currently renting, that's very common! Ready to build some equity.";
-        } else if (answer.includes('own') || answer.includes('house') || answer.includes('home')) {
-          return "You already own, so you're looking to upgrade or relocate.";
-        } else if (answer.includes('live with') || answer.includes('family') || answer.includes('parents')) {
-          return "Living with family, time to get your own place!";
+          return "Got it, so you're currently renting.";
+        } else if (answer.includes('own') || answer.includes('owner')) {
+          return "I see, you currently own your home.";
         } else {
-          return "Got it, thanks for sharing your current situation.";
+          return "Perfect, thanks for sharing that.";
         }
         
       case 1: // What's your ideal price range?
-        if (answer.includes('$') || answer.includes('thousand') || answer.includes('k') || answer.includes('million')) {
-          return "Perfect, having a clear budget helps us focus our search effectively.";
-        } else if (answer.includes('flexible') || answer.includes('depends')) {
-          return "Flexibility in budget gives us more options to explore.";
-        } else if (answer.includes('max') || answer.includes('up to') || answer.includes('under')) {
-          return "Good to know your upper limit, that really helps narrow things down.";
+        if (answer.includes('$') || answer.includes('dollar') || answer.includes('k') || answer.includes('thousand')) {
+          return "Great, that's a good budget to work with.";
+        } else if (answer.includes('open') || answer.includes('flexible')) {
+          return "Excellent, flexibility is always helpful.";
         } else {
-          return "Thanks for sharing your price range with me.";
+          return "Perfect, I understand your price range.";
         }
         
       case 2: // How soon are you looking to buy?
-        if (answer.includes('asap') || answer.includes('immediately') || answer.includes('soon') || answer.includes('right away')) {
-          return "Looking to move quickly, we can definitely help with that timeline.";
-        } else if (answer.includes('month') && (answer.includes('few') || answer.includes('couple'))) {
-          return "A few months gives us good time to find the perfect property.";
-        } else if (answer.includes('year') || answer.includes('flexible') || answer.includes('no rush')) {
-          return "Having flexibility in timing is great for finding the best opportunities.";
-        } else if (answer.includes('spring') || answer.includes('summer') || answer.includes('fall') || answer.includes('winter')) {
-          return "Seasonal timing can work really well in the market.";
+        if (answer.includes('asap') || answer.includes('soon') || answer.includes('immediately')) {
+          return "Wonderful, we can definitely move quickly for you.";
+        } else if (answer.includes('month') || answer.includes('months')) {
+          return "Great timeline, that gives us good time to find the right place.";
+        } else if (answer.includes('year') || answer.includes('years')) {
+          return "Perfect, we have time to find exactly what you're looking for.";
         } else {
-          return "Perfect, that timeline works well for us.";
+          return "Got it, that's a good timeframe.";
         }
         
       case 3: // What type of home are you looking for?
-        if (answer.includes('single') || answer.includes('house') || answer.includes('family home')) {
-          return "Single-family homes are wonderful! Great space and privacy.";
-        } else if (answer.includes('condo') || answer.includes('condominium')) {
-          return "Condos are fantastic! Lower maintenance and great amenities.";
+        if (answer.includes('condo') || answer.includes('condominium')) {
+          return "Condos are great! Low maintenance and often good amenities.";
+        } else if (answer.includes('house') || answer.includes('single family')) {
+          return "Single family homes are wonderful, more space and privacy.";
         } else if (answer.includes('townhouse') || answer.includes('townhome')) {
-          return "Townhouses offer a nice balance of space and convenience.";
-        } else if (answer.includes('duplex') || answer.includes('multi')) {
-          return "Multi-family properties can be great investments too.";
-        } else if (answer.includes('open') || answer.includes('flexible') || answer.includes('any')) {
-          return "Being open to different types gives us lots of great options.";
+          return "Townhomes are fantastic, great balance of space and convenience.";
         } else {
-          return "Excellent choice, that's a great type of property.";
+          return "Excellent, I have a good sense of what you're looking for.";
         }
         
       case 4: // Are there any must-haves or deal-breakers?
-        if (answer.includes('bedroom') || answer.includes('bed')) {
-          return "Bedroom count is definitely important for your needs.";
-        } else if (answer.includes('garage') || answer.includes('parking')) {
-          return "Parking and garage space, that's always a smart priority!";
-        } else if (answer.includes('yard') || answer.includes('garden') || answer.includes('outdoor')) {
-          return "Outdoor space is wonderful, especially for relaxation and entertaining.";
-        } else if (answer.includes('school') || answer.includes('district')) {
-          return "School districts are so important, especially for families.";
-        } else if (answer.includes('updated') || answer.includes('modern') || answer.includes('new')) {
-          return "Updated features save time and money in the long run.";
-        } else if (answer.includes('nothing') || answer.includes('flexible') || answer.includes('open')) {
-          return "Being flexible with features gives us more great options.";
-        } else if (answer.includes('location') || answer.includes('area') || answer.includes('neighborhood')) {
-          return "Location is everything in real estate, smart thinking!";
-        } else {
-          return "Those are excellent requirements to keep in mind.";
+        if (answer.includes('bedroom') || answer.includes('bath')) {
+          return "Absolutely, bedroom and bathroom count is really important.";
         }
-        
-      case 5: // Are you working with another agent currently?
-        if (answer.includes('no') || answer.includes('not') || answer.includes('aren\'t')) {
-          return "Perfect! We'd love to help you find your ideal home.";
-        } else if (answer.includes('yes') || answer.includes('working with') || answer.includes('have an agent')) {
-          return "I understand. We're here if you ever need a second opinion or additional help.";
-        } else if (answer.includes('looking') || answer.includes('shopping') || answer.includes('considering')) {
-          return "Smart to explore your options and find the right fit.";
-        } else if (answer.includes('maybe') || answer.includes('sort of') || answer.includes('kind of')) {
-          return "I see, sounds like you're still exploring your options.";
-        } else {
-          return "Thanks for letting me know about your current situation.";
-        }
-        
-      default:
-        return "Perfect, thank you.";
-    }
-  }
-
-  // SIMPLIFIED QUESTION DETECTION (REAL ESTATE)
-  function detectQuestionAsked(botMessage) {
-    const botContent = botMessage.toLowerCase();
-    
-    // Only look for the next question that hasn't been asked yet
-    const nextQuestionIndex = discoveryQuestions.findIndex(q => !q.asked);
-    
-    if (nextQuestionIndex === -1) {
-      console.log('✅ All questions have been asked');
-      return false;
-    }
-    
-    // Don't detect new questions if we're already waiting for an answer
-    if (discoveryProgress.waitingForAnswer) {
-      console.log(`⚠️ Already waiting for answer to question ${discoveryProgress.currentQuestionIndex + 1} - ignoring detection`);
-      return false;
-    }
-    
-    const nextQuestion = discoveryQuestions[nextQuestionIndex];
-    let detected = false;
-    
-    // Simple keyword detection for each question (REAL ESTATE)
-    switch (nextQuestionIndex) {
-      case 0: // Are you currently renting or do you own?
-        detected = (botContent.includes('renting') || botContent.includes('rent')) && botContent.includes('own');
-        break;
-      case 1: // What's your ideal price range?
-        detected = botContent.includes('price range') || botContent.includes('ideal price') || 
-                  (botContent.includes('budget') && botContent.includes('range'));
-        break;
-      case 2: // How soon are you looking to buy?
-        detected = (botContent.includes('how soon') || botContent.includes('when')) && 
-                  (botContent.includes('buy') || botContent.includes('looking'));
-        break;
-      case 3: // What type of home are you looking for?
-        detected = (botContent.includes('type') && botContent.includes('home')) || 
-                  botContent.includes('single-family') || botContent.includes('condo') || 
-                  botContent.includes('townhouse');
-        break;
-      case 4: // Are there any must-haves or deal-breakers?
-        detected = botContent.includes('must-have') || botContent.includes('deal-breaker') || 
-                  (botContent.includes('any') && (botContent.includes('must') || botContent.includes('deal')));
-        break;
-      case 5: // Are you working with another agent currently?
-        detected = (botContent.includes('working with') && botContent.includes('agent')) || 
-                  botContent.includes('another agent');
-        break;
-    }
-    
-    if (detected) {
-      console.log(`✅ DETECTED Question ${nextQuestionIndex + 1}: "${nextQuestion.question}"`);
-      nextQuestion.asked = true;
-      discoveryProgress.currentQuestionIndex = nextQuestionIndex;
-      discoveryProgress.waitingForAnswer = true;
-      userResponseBuffer = []; // Reset buffer
-      return true;
-    }
-    
-    return false;
-  }
-
-  // SIMPLIFIED ANSWER CAPTURE
-  function captureUserAnswer(userMessage) {
-    if (!discoveryProgress.waitingForAnswer || isCapturingAnswer) {
-      return;
-    }
-    
-    const currentQ = discoveryQuestions[discoveryProgress.currentQuestionIndex];
-    if (!currentQ || currentQ.answered) {
-      return;
-    }
-    
-    console.log(`📝 Buffering answer for Q${discoveryProgress.currentQuestionIndex + 1}: "${userMessage}"`);
-    
-    // Add to buffer
-    userResponseBuffer.push(userMessage.trim());
-    
-    // Clear existing timer
-    if (answerCaptureTimer) {
-      clearTimeout(answerCaptureTimer);
-    }
-    
-    // Set new timer
-    answerCaptureTimer = setTimeout(() => {
-      if (isCapturingAnswer) return; // Prevent double capture
-      
-      isCapturingAnswer = true;
-      
-      // Combine all responses
-      const completeAnswer = userResponseBuffer.join(' ');
-      
-      // Store the answer
-      currentQ.answered = true;
-      currentQ.answer = completeAnswer;
-      discoveryData[currentQ.field] = completeAnswer;
-      discoveryData[`question_${discoveryProgress.currentQuestionIndex}`] = completeAnswer;
-      
-      // Update progress
-      discoveryProgress.questionsCompleted++;
-      discoveryProgress.waitingForAnswer = false;
-      discoveryProgress.allQuestionsCompleted = discoveryQuestions.every(q => q.answered);
-      
-      console.log(`✅ CAPTURED Q${discoveryProgress.currentQuestionIndex + 1}: "${completeAnswer}"`);
-      console.log(`📊 Progress: ${discoveryProgress.questionsCompleted}/6 questions completed`);
-      
-      // CRITICAL: If all questions are now complete, send webhook IMMEDIATELY (only if we have email)
-      if (discoveryProgress.allQuestionsCompleted && !webhookSent) {
-        console.log('🚨 ALL 6 QUESTIONS COMPLETED - CHECKING FOR WEBHOOK SEND');
-        
-        const finalEmail = connectionData.customerEmail || bookingInfo.email || '';
-        
-        if (finalEmail && finalEmail.trim() !== '') {
-          console.log('✅ Email found - triggering immediate webhook');
-          
-          // Force webhook immediately 
-          setTimeout(async () => {
-            if (webhookSent) {
-              console.log('⚠️ Webhook already sent, skipping duplicate');
-              return;
-            }
-            
-            try {
-              const finalDiscoveryData = {};
-              discoveryQuestions.forEach((q, index) => {
-                if (q.answered && q.answer) {
-                  finalDiscoveryData[q.field] = q.answer;
-                  finalDiscoveryData[`question_${index}`] = q.answer;
-                }
-              });
-              
-              console.log('📋 IMMEDIATE WEBHOOK - Discovery data:', JSON.stringify(finalDiscoveryData, null, 2));
-              
-              const finalName = connectionData.customerName || bookingInfo.name || '';
-              const finalPhone = connectionData.customerPhone || bookingInfo.phone || '';
-              
-              console.log(`📧 IMMEDIATE WEBHOOK - Using email: ${finalEmail}`);
-              
-              const result = await sendSchedulingPreference(
-                finalName,
-                finalEmail,
-                finalPhone,
-                'Discovery completed - ready to schedule',
-                connectionData.callId,
-                finalDiscoveryData
-              );
-              
-              if (result.success) {
-                webhookSent = true;
-                console.log('✅ IMMEDIATE webhook sent successfully after all 6 questions!');
-              } else {
-                console.error('❌ IMMEDIATE webhook failed:', result.error);
-              }
-            } catch (webhookError) {
-              console.error('❌ IMMEDIATE webhook error:', webhookError.message);
-            }
-          }, 500);
-        } else {
-          console.error('❌ Cannot send immediate webhook: No email address available');
-          console.log('📧 Available contact info:', {
-            customerEmail: connectionData.customerEmail,
-            bookingEmail: bookingInfo.email,
-            customerName: connectionData.customerName,
-            customerPhone: connectionData.customerPhone
-          });
-        }
-      }
-      
-      // Reset
-      userResponseBuffer = [];
-      isCapturingAnswer = false;
-      answerCaptureTimer = null;
-      
-    }, 3000);
-  }
-
-  // UPDATED: Real Estate system prompt with better greeting flow
-  let conversationHistory = [
-    {
-      role: 'system',
-      content: `You are a friendly and professional real estate receptionist named "Emma". Always introduce yourself as Emma.
-
-CONVERSATION FLOW:
-1. GREETING PHASE: Start with a warm greeting and ask how they're doing
-2. BRIEF CHAT: Engage in 1-2 exchanges of pleasantries before discovery
-3. TRANSITION: Naturally transition to discovery questions
-4. DISCOVERY PHASE: Ask all 6 discovery questions systematically
-5. SCHEDULING PHASE: Only after all 6 questions are complete
-
-GREETING & TRANSITION GUIDELINES:
-- Always start with: "Hi there! This is Emma, I'm a real estate assistant. How are you doing today?"
-- When they respond to how they're doing, acknowledge it warmly
-- After 1-2 friendly exchanges, transition naturally with something like:
-  "That's wonderful! I'd love to learn more about what you're looking for in real estate so I can help connect you with the right agent."
-- Then start with the first discovery question
-
-CRITICAL DISCOVERY REQUIREMENTS:
-- You MUST ask ALL 6 discovery questions in the exact order listed below
-- Ask ONE question at a time and wait for the customer's response
-- Do NOT move to scheduling until ALL 6 questions are answered
-- After each answer, acknowledge it briefly before asking the next question
-
-DISCOVERY QUESTIONS (ask in this EXACT order):
-1. "Are you currently renting or do you own?"
-2. "What's your ideal price range?"
-3. "How soon are you looking to buy?"
-4. "What type of home are you looking for? Single-family, condo, townhouse, or something else?"
-5. "Are there any must-haves or deal-breakers for you?"
-6. "Are you working with another agent currently?"
-
-SPEAKING STYLE & PACING:
-- Speak at a SLOW, measured pace - never rush your words
-- Insert natural pauses between sentences using periods (.)
-- Complete all your sentences fully - never cut off mid-thought
-- Use shorter sentences rather than long, complex ones
-- Keep your statements and questions concise but complete
-
-PERSONALITY & TONE:
-- Be warm, friendly, and knowledgeable about real estate
-- Use a consistent, even speaking tone throughout the conversation
-- Use contractions and everyday language that sounds natural
-- Maintain a calm, professional demeanor at all times
-- Show genuine interest in helping them find their perfect property
-- If you ask a question with a question mark '?' go up in pitch and tone towards the end of the sentence.
-- If you respond with "." always keep an even consistent tone towards the end of the sentence.
-
-DISCOVERY FLOW:
-- Only start discovery questions AFTER greeting exchange is complete
-- After each answer, acknowledge it briefly with varied responses like:
-  * "Perfect, that's helpful."
-  * "Great, I understand."
-  * "Excellent information."
-  * "That makes perfect sense."
-  * "Wonderful, thank you."
-  * "I see, that's very helpful."
-  * "Perfect, got it."
-  * "That's exactly what I needed to know."
-  * "Awesome, thanks for sharing."
-- CRITICAL: Never use the same acknowledgment twice in a row
-- Keep acknowledgments short and natural
-- Then immediately ask the next question
-- Do NOT skip questions or assume answers
-- Count your questions mentally: 1, 2, 3, 4, 5, 6
-
-SCHEDULING APPROACH:
-- ONLY after asking ALL 6 discovery questions, ask for scheduling preference
-- Say: "Perfect! I have all the information I need to connect you with one of our top agents. Let's schedule a consultation to discuss your property search. What day would work best for you?"
-- When they mention a day, acknowledge it and confirm scheduling
-
-REAL ESTATE KNOWLEDGE:
-- You understand different property types (houses, condos, townhomes, etc.)
-- You're familiar with real estate timelines and market conditions
-- You can relate to various living situations and housing needs
-- You understand the importance of location, budget, and specific requirements
-
-Remember: Start with greeting, have brief pleasant conversation, then systematically complete ALL 6 discovery questions before any scheduling discussion.`
-    }
-  ];
-
-  // States for conversation flow
-  let conversationState = 'introduction';
-  let bookingInfo = {
-    name: connectionData.customerName || '',
-    email: connectionData.customerEmail || '',
-    phone: connectionData.customerPhone || '',
-    preferredDay: '',
-    schedulingLinkSent: false,
-    userId: `user_${Date.now()}`
-  };
-  let discoveryData = {}; // This will store the final answers
-  let collectedContactInfo = !!connectionData.customerEmail;
-  let userHasSpoken = false;
-  let webhookSent = false;
-
-  // Send connecting message
-  ws.send(JSON.stringify({
-    content: "Hi there",
-    content_complete: true,
-    actions: [],
-    response_id: 0
-  }));
-
-  // FIXED: Single auto-greeting timer (removed conflicting timers)
-  const autoGreetingTimer = setTimeout(() => {
-    if (!userHasSpoken) {
-      console.log('🎙️ Sending auto-greeting message');
-      ws.send(JSON.stringify({
-        content: "Hi there! This is Emma, I'm a real estate assistant. How are you doing today?",
-        content_complete: true,
-        actions: [],
-        response_id: 1
-      }));
-    }
-  }, 4000); // Single 4-second delay
-
-  // ENHANCED: Message handling with delayed answer capture
-  ws.on('message', async (data) => {
-    try {
-      clearTimeout(autoGreetingTimer);
-      userHasSpoken = true;
-      
-      const parsed = JSON.parse(data);
-      console.log('📥 Raw WebSocket Message:', JSON.stringify(parsed, null, 2));
-      
-      // Debug logging to see what we're receiving
-      console.log('WebSocket message type:', parsed.interaction_type || 'unknown');
-      if (parsed.call) {
-        console.log('Call data structure:', JSON.stringify(parsed.call, null, 2));
-      }
-      
-      // Extract call info from WebSocket messages first
-      if (parsed.call && parsed.call.call_id) {
-        if (!connectionData.callId) {
-          connectionData.callId = parsed.call.call_id;
-          console.log(`🔗 Got call ID from WebSocket: ${connectionData.callId}`);
-        }
-        
-        // Extract metadata from call object
-        if (parsed.call.metadata) {
-          console.log('📞 Call metadata from WebSocket:', JSON.stringify(parsed.call.metadata, null, 2));
-          
-          if (!connectionData.customerEmail && parsed.call.metadata.customer_email) {
-            connectionData.customerEmail = parsed.call.metadata.customer_email;
-            bookingInfo.email = connectionData.customerEmail;
-            console.log(`✅ Got email from WebSocket metadata: ${connectionData.customerEmail}`);
-          }
-          
-          if (!connectionData.customerName && parsed.call.metadata.customer_name) {
-            connectionData.customerName = parsed.call.metadata.customer_name;
-            bookingInfo.name = connectionData.customerName;
-            console.log(`✅ Got name from WebSocket metadata: ${connectionData.customerName}`);
-          }
-          
-          if (!connectionData.customerPhone && (parsed.call.metadata.customer_phone || parsed.call.to_number)) {
-            connectionData.customerPhone = parsed.call.metadata.customer_phone || parsed.call.to_number;
-            bookingInfo.phone = connectionData.customerPhone;
-            console.log(`✅ Got phone from WebSocket metadata: ${connectionData.customerPhone}`);
-          }
-        }
-        
-        // Extract phone from call object if not in metadata
-        if (!connectionData.customerPhone && parsed.call.to_number) {
-          connectionData.customerPhone = parsed.call.to_number;
-          bookingInfo.phone = connectionData.customerPhone;
-          console.log(`✅ Got phone from call object: ${connectionData.customerPhone}`);
-        }
-        
-        // Store in active calls metadata map
-        activeCallsMetadata.set(connectionData.callId, {
-          customer_email: connectionData.customerEmail,
-          customer_name: connectionData.customerName,
-          phone: connectionData.customerPhone,
-          to_number: connectionData.customerPhone
-        });
-        
-        collectedContactInfo = !!connectionData.customerEmail;
-      }
-      
-      // ENHANCED: Get contact info when we connect to a call (BACKUP METHOD)
-      if (parsed.call && parsed.call.call_id && !collectedContactInfo) {
-        // FIRST: Try to get contact info from trigger server using call_id
-        try {
-          console.log('📞 Fetching contact info from trigger server...');
-          const triggerResponse = await axios.get(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/get-call-info/${connectionData.callId}`, {
-            timeout: 5000
-          });
-          
-          if (triggerResponse.data && triggerResponse.data.success) {
-            const callInfo = triggerResponse.data.data;
-            if (!bookingInfo.email) bookingInfo.email = callInfo.email || '';
-            if (!bookingInfo.name) bookingInfo.name = callInfo.name || '';
-            if (!bookingInfo.phone) bookingInfo.phone = callInfo.phone || '';
-            collectedContactInfo = true;
-            
-            console.log('✅ Got contact info from trigger server:', {
-              name: bookingInfo.name,
-              email: bookingInfo.email,
-              phone: bookingInfo.phone
-            });
-            
-            // Update system prompt with the actual customer name if we have it
-            if (bookingInfo.name) {
-              const systemPrompt = conversationHistory[0].content;
-              conversationHistory[0].content = systemPrompt
-                .replace(/\[Name\]/g, bookingInfo.name)
-                .replace(/Emma/g, bookingInfo.name);
-              console.log(`Updated system prompt with customer name: ${bookingInfo.name}`);
-            }
-          }
-        } catch (triggerError) {
-          console.log('⚠️ Could not fetch contact info from trigger server:', triggerError.message);
-        }
-      }
-
-      if (parsed.interaction_type === 'response_required') {
-        const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
-        const userMessage = latestUserUtterance?.content || "";
-
-        console.log('🗣️ User said:', userMessage);
-        console.log('🔄 Current conversation state:', conversationState);
-        console.log('📊 Discovery progress:', discoveryProgress);
-
-        // SIMPLIFIED: Question detection
-        if (conversationHistory.length >= 2) {
-          const lastBotMessage = conversationHistory[conversationHistory.length - 1];
-          if (lastBotMessage && lastBotMessage.role === 'assistant') {
-            detectQuestionAsked(lastBotMessage.content);
-          }
-        }
-
-        // SIMPLIFIED: Answer capture
-        if (discoveryProgress.waitingForAnswer && userMessage.trim().length > 2) {
-          captureUserAnswer(userMessage);
-        }
-
-        // FIXED: Check for scheduling preference with better logging
-        let schedulingDetected = false;
-        
-        // Check if user mentions scheduling-related words
-        const schedulingWords = /\b(schedule|book|appointment|call|talk|meet|discuss|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today)\b/i;
-        
-        if (userMessage.toLowerCase().match(schedulingWords)) {
-          console.log('🗓️ User mentioned scheduling-related words:', userMessage);
-          
-          if (discoveryProgress.allQuestionsCompleted) {
-            console.log('✅ All discovery questions completed - processing scheduling preference');
-            const dayInfo = handleSchedulingPreference(userMessage);
-            
-            if (dayInfo && !webhookSent) {
-              bookingInfo.preferredDay = dayInfo.dayName;
-              schedulingDetected = true;
-              console.log(`📅 Scheduling preference captured: ${dayInfo.dayName}`);
-            }
-          } else {
-            console.log(`⚠️ User mentioned scheduling but only ${discoveryProgress.questionsCompleted}/6 questions completed. Continuing with discovery.`);
-          }
-        }
-
-        // Add user message to conversation history
-        conversationHistory.push({ role: 'user', content: userMessage });
-
-        // SIMPLIFIED: Better context for GPT with question tracking
-        let contextPrompt = '';
-        if (!discoveryProgress.allQuestionsCompleted) {
-          const nextUnanswered = discoveryQuestions.find(q => !q.answered);
-          if (nextUnanswered) {
-            const questionNumber = discoveryQuestions.indexOf(nextUnanswered) + 1;
-            const completed = discoveryQuestions.filter(q => q.answered).map((q, i) => `${discoveryQuestions.indexOf(q) + 1}. ${q.question} ✓`).join('\n');
-            
-            // Check if user just answered a question
-            const lastAnsweredQ = discoveryQuestions.find(q => q.asked && q.answered && q.answer);
-            let acknowledgmentInstruction = '';
-            
-            if (lastAnsweredQ && discoveryProgress.questionsCompleted > 0) {
-              const lastQuestionIndex = discoveryQuestions.indexOf(lastAnsweredQ);
-              const suggestedAck = getContextualAcknowledgment(lastAnsweredQ.answer, lastQuestionIndex);
-              acknowledgmentInstruction = `\n\nThe user just answered: "${lastAnsweredQ.answer}"
-Acknowledge this with: "${suggestedAck}" then ask the next question.`;
-            }
-            
-            contextPrompt = `\n\nDISCOVERY STATUS:
-COMPLETED (${discoveryProgress.questionsCompleted}/6):
-${completed || 'None yet'}
-
-NEXT TO ASK:
-${questionNumber}. ${nextUnanswered.question}${acknowledgmentInstruction}
-
-CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions. Do NOT skip to scheduling until all 6 are done.`;
-          }
-        } else {
-          contextPrompt = '\n\nAll 6 discovery questions completed. Proceed to scheduling.';
-        }
-
-        // Process with GPT
-        const messages = [...conversationHistory];
-        if (contextPrompt) {
-          messages[messages.length - 1].content += contextPrompt;
-        }
-
-        const openaiResponse = await axios.post(
-          'https://api.openai.com/v1/chat/completions',
-          {
-            model: 'gpt-4o',
-            messages: messages,
-            temperature: 0.7
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-              'Content-Type': 'application/json'
-            },
-            timeout: 8000
-          }
-        );
-
-        const botReply = openaiResponse.data.choices[0].message.content || "Could you tell me a bit more about that?";
-
-        // Add bot reply to conversation history (without context prompt)
-        conversationHistory.push({ role: 'assistant', content: botReply });
-
-        // ENHANCED: Detect when agent asks for scheduling (not just user response)
-        const agentAsksForScheduling = botReply.toLowerCase().includes('what day would work') || 
-                                      botReply.toLowerCase().includes('schedule a consultation') ||
-                                      botReply.toLowerCase().includes('book an appointment') ||
-                                      botReply.toLowerCase().includes('let\'s schedule') ||
-                                      botReply.toLowerCase().includes('schedule a call') ||
-                                      botReply.toLowerCase().includes('what day') ||
-                                      botReply.toLowerCase().includes('when would') ||
-                                      (botReply.toLowerCase().includes('schedule') && discoveryProgress.allQuestionsCompleted);
-        
-        if (agentAsksForScheduling && discoveryProgress.allQuestionsCompleted && !webhookSent) {
-          console.log('🗓️ AGENT ASKED FOR SCHEDULING - TRIGGERING WEBHOOK IMMEDIATELY');
-          console.log('Agent said:', botReply);
-          schedulingDetected = true;
-          bookingInfo.preferredDay = 'Agent initiated scheduling';
-        }
-
-        // Update conversation state
-        if (conversationState === 'introduction') {
-          conversationState = 'discovery';
-        } else if (conversationState === 'discovery' && discoveryProgress.allQuestionsCompleted) {
-          conversationState = 'booking';
-          console.log('🔄 Transitioning to booking state - ALL 6 discovery questions completed');
-        }
-
-        // CRITICAL: Check if we should send webhook immediately after each question is answered
-        if (discoveryProgress.allQuestionsCompleted && !webhookSent) {
-          console.log('🚀 ALL 6 QUESTIONS COMPLETED - SENDING WEBHOOK IMMEDIATELY');
-          console.log('   ✅ All 6 discovery questions completed and answered');
-          console.log('   ✅ Discovery data ready to send');
-          
-          // Set default scheduling preference if none detected
-          if (!bookingInfo.preferredDay) {
-            bookingInfo.preferredDay = 'To be scheduled';
-          }
-          
-          // Force webhook send regardless of scheduling detection
-          schedulingDetected = true;
-        }
-
-        // Send the AI response
-        ws.send(JSON.stringify({
-          content: botReply,
-          content_complete: true,
-          actions: [],
-          response_id: parsed.response_id
-        }));
-        
-        // FIXED: Send webhook when ALL 6 questions completed (regardless of scheduling mention)
-        if (schedulingDetected && discoveryProgress.allQuestionsCompleted && !webhookSent) {
-          
-          // Final validation of discovery data
-          const finalDiscoveryData = {};
-          discoveryQuestions.forEach((q, index) => {
-            if (q.answered && q.answer) {
-              finalDiscoveryData[q.field] = q.answer;
-              finalDiscoveryData[`question_${index}`] = q.answer;
-            }
-          });
-          
-          console.log('📋 Final discovery data being sent:', JSON.stringify(finalDiscoveryData, null, 2));
-          
-          // Ensure we have minimum required data
-          const finalEmail = bookingInfo.email || connectionData.customerEmail || '';
-          const finalName = bookingInfo.name || connectionData.customerName || '';
-          const finalPhone = bookingInfo.phone || connectionData.customerPhone || '';
-          
-          if (finalEmail) {
-            const result = await sendSchedulingPreference(
-              finalName,
-              finalEmail,
-              finalPhone,
-              bookingInfo.preferredDay,
-              connectionData.callId,
-              finalDiscoveryData
-            );
-            
-            if (result.success) {
-              webhookSent = true;
-              conversationState = 'completed';
-              console.log('✅ Webhook sent successfully with all discovery data');
-            } else {
-              console.error('❌ Webhook failed:', result.error);
-            }
-          } else {
-            console.error('❌ Cannot send webhook: No email address available');
-          }
-        }
-      }
-    } catch (error) {
-      console.error('❌ Error handling message:', error.message);
-      
-      // Enhanced emergency webhook logic
-      if (!webhookSent && connectionData.callId && 
-          (bookingInfo.email || connectionData.customerEmail) &&
-          discoveryProgress.questionsCompleted >= 4) {
-        try {
-          console.log('🚨 EMERGENCY WEBHOOK SEND - Substantial discovery data available');
-          
-          // Create emergency discovery data from what we have
-          const emergencyDiscoveryData = {};
-          discoveryQuestions.forEach((q, index) => {
-            if (q.answered && q.answer) {
-              emergencyDiscoveryData[q.field] = q.answer;
-              emergencyDiscoveryData[`question_${index}`] = q.answer;
-            }
-          });
-          
-          await sendSchedulingPreference(
-            bookingInfo.name || connectionData.customerName || '',
-            bookingInfo.email || connectionData.customerEmail || '',
-            bookingInfo.phone || connectionData.customerPhone || '',
-            bookingInfo.preferredDay || 'Error occurred',
-            connectionData.callId,
-            emergencyDiscoveryData
-          );
-          webhookSent = true;
-          console.log('✅ Emergency webhook sent with available discovery data');
-        } catch (webhookError) {
-          console.error('❌ Emergency webhook also failed:', webhookError.message);
-        }
-      }
-      
-      // Send a recovery message
-      ws.send(JSON.stringify({
-        content: "I missed that. Could you repeat it?",
-        content_complete: true,
-        actions: [],
-        response_id: 9999
-      }));
-    }
-  });
-
-  ws.on('close', async () => {
-    console.log('🔌 Connection closed.');
-    clearTimeout(autoGreetingTimer);
-    
-    // Clear any pending answer capture timer
-    if (answerCaptureTimer) {
-      clearTimeout(answerCaptureTimer);
-      console.log('🧹 Cleared pending answer capture timer');
-    }
-    
-    // If we have a pending answer in the buffer, capture it now
-    if (userResponseBuffer.length > 0 && discoveryProgress.waitingForAnswer) {
-      const currentQ = discoveryQuestions[discoveryProgress.currentQuestionIndex];
-      if (currentQ && !currentQ.answered) {
-        const completeAnswer = userResponseBuffer.join(' ');
-        currentQ.answered = true;
-        currentQ.answer = completeAnswer;
-        discoveryData[currentQ.field] = completeAnswer;
-        discoveryData[`question_${discoveryProgress.currentQuestionIndex}`] = completeAnswer;
-        discoveryProgress.questionsCompleted++;
-        console.log(`🔌 Captured buffered answer on close: "${completeAnswer}"`);
-      }
-    }
-    
-    console.log('=== FINAL CONNECTION CLOSE ANALYSIS ===');
-    console.log('📋 Final discoveryData:', JSON.stringify(discoveryData, null, 2));
-    console.log('📊 Questions completed:', discoveryProgress.questionsCompleted);
-    console.log('📊 All questions completed:', discoveryProgress.allQuestionsCompleted);
-    
-    // Detailed breakdown of each question
-    discoveryQuestions.forEach((q, index) => {
-      console.log(`Question ${index + 1}: Asked=${q.asked}, Answered=${q.answered}, Answer="${q.answer}"`);
-    });
-    
-    // FINAL webhook attempt only if we have meaningful data and haven't sent yet
-    if (!webhookSent && connectionData.callId && discoveryProgress.questionsCompleted >= 2) {
-      try {
-        const finalEmail = connectionData.customerEmail || bookingInfo.email || '';
-        const finalName = connectionData.customerName || bookingInfo.name || '';
-        const finalPhone = connectionData.customerPhone || bookingInfo.phone || '';
-        
-        console.log('🚨 FINAL WEBHOOK ATTEMPT on connection close');
-        console.log(`📊 Sending with ${discoveryProgress.questionsCompleted}/6 questions completed`);
-        
-        // Create final discovery data from answered questions
-        const finalDiscoveryData = {};
-        discoveryQuestions.forEach((q, index) => {
-          if (q.answered && q.answer) {
-            finalDiscoveryData[q.field] = q.answer;
-            finalDiscoveryData[`question_${index}`] = q.answer;
-          }
-        });
-        
-        if (finalEmail) {
-          await sendSchedulingPreference(
-            finalName,
-            finalEmail,
-            finalPhone,
-            bookingInfo.preferredDay || 'Call ended early',
-            connectionData.callId,
-            finalDiscoveryData
-          );
-          
-          console.log('✅ Final webhook sent successfully on connection close');
-          webhookSent = true;
-        } else {
-          console.log('❌ Cannot send final webhook: No email address available');
-        }
-      } catch (finalError) {
-        console.error('❌ Final webhook failed:', finalError.message);
-      }
-    }
-    
-    // Clean up
-    if (connectionData.callId) {
-      activeCallsMetadata.delete(connectionData.callId);
-      console.log(`🧹 Cleaned up metadata for call ${connectionData.callId}`);
-    }
-  });
-});
-
-// Add error handling for WebSocket server
-wss.on('error', (error) => {
-  console.error('❌ WebSocket Server Error:', error);
-});
-
-server.on('error', (error) => {
-  console.error('❌ HTTP Server Error:', error);
-});
-
-// Endpoint to receive Retell webhook call events
-app.post('/retell-webhook', express.json(), async (req, res) => {
-  try {
-    const { event, call } = req.body;
-    
-    console.log(`Received Retell webhook event: ${event}`);
-    
-    if (call && call.call_id) {
-      console.log(`Call ID: ${call.call_id}, Status: ${call.call_status}`);
-      
-      // Extract important call information
-      const email = call.metadata?.customer_email || '';
-      const name = call.metadata?.customer_name || '';
-      const phone = call.to_number || '';
-      let preferredDay = '';
-      let discoveryData = {};
-      
-      // Store this info globally as well
-      if (email) {
-        storeContactInfoGlobally(name, email, phone, 'Retell Webhook');
-      }
-      
-      // Look for preferred day in various locations
-      if (call.variables && call.variables.preferredDay) {
-        preferredDay = call.variables.preferredDay;
-      } else if (call.custom_data && call.custom_data.preferredDay) {
-        preferredDay = call.custom_data.preferredDay;
-      } else if (call.analysis && call.analysis.custom_data) {
-        try {
-          const customData = typeof call.analysis.custom_data === 'string'
-            ? JSON.parse(call.analysis.custom_data)
-            : call.analysis.custom_data;
-            
-          if (customData.preferredDay) {
-            preferredDay = customData.preferredDay;
-          }
-        } catch (error) {
-          console.error('Error parsing custom data:', error);
-        }
-      }
-      
-      // Extract discovery data from variables, transcript, and custom data
-      if (call.variables) {
-        // Extract discovery-related variables
-        Object.entries(call.variables).forEach(([key, value]) => {
-          if (key.startsWith('discovery_') || key.includes('question_')) {
-            discoveryData[key] = value;
-          }
-        });
-      }
-      
-      // Extract from custom_data if any
-      if (call.custom_data && call.custom_data.discovery_data) {
-        try {
-          const parsedData = typeof call.custom_data.discovery_data === 'string' 
-            ? JSON.parse(call.custom_data.discovery_data)
-            : call.custom_data.discovery_data;
-            
-          discoveryData = { ...discoveryData, ...parsedData };
-        } catch (error) {
-          console.error('Error parsing discovery data from custom_data:', error);
-        }
-      }
-      
-      // If no discovery data found yet, try to extract from transcript
-      if (Object.keys(discoveryData).length === 0 && call.transcript && call.transcript.length > 0) {
-        // Use the discovery questions to match answers in the transcript (REAL ESTATE)
-        const discoveryQuestions = [
-          'Are you currently renting or do you own?',
-          'What\'s your ideal price range?',
-          'How soon are you looking to buy?',
-          'What type of home are you looking for?',
-          'Are there any must-haves or deal-breakers for you?',
-          'Are you working with another agent currently?'
-        ];
-        
-        // Find questions and their answers in the transcript
-        call.transcript.forEach((item, index) => {
-          if (item.role === 'assistant') {
-            const botMessage = item.content.toLowerCase();
-            
-            // Try to match with our known discovery questions
-            discoveryQuestions.forEach((question, qIndex) => {
-              // If this bot message contains a discovery question
-              if (botMessage.includes(question.toLowerCase().substring(0, 15))) {
-                // Check if next message is from the user (the answer)
-                if (call.transcript[index + 1] && call.transcript[index + 1].role === 'user') {
-                  const answer = call.transcript[index + 1].content;
-                  discoveryData[`question_${qIndex}`] = answer;
-                }
-              }
-            });
-          }
-        });
-      }
-      
-      // Send webhook for call ending events
-      if ((event === 'call_ended' || event === 'call_analyzed') && email) {
-        console.log(`Sending webhook for ${event} event with discovery data:`, discoveryData);
-        
-        try {
-          // Use the trigger server to route the webhook
-          await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, {
-            name,
-            email,
-            phone,
-            preferredDay: preferredDay || 'Not specified',
-            call_id: call.call_id,
-            call_status: call.call_status,
-            discovery_data: discoveryData,
-            schedulingComplete: true
-          });
-          
-          console.log(`Successfully sent webhook for ${event}`);
-        } catch (error) {
-          console.error(`Error sending webhook for ${event}:`, error);
-        }
-      }
-      
-      // Clean up any stored data
-      activeCallsMetadata.delete(call.call_id);
-    }
-    
-    res.status(200).json({ success: true });
-  } catch (error) {
-    console.error('Error handling Retell webhook:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Real Estate Receptionist WebSocket Server with appointment scheduling is listening on port ${PORT}`);
-});
