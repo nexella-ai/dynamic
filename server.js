@@ -779,6 +779,42 @@ wss.on('connection', async (ws, req) => {
       console.log(`✅ CAPTURED Q${discoveryProgress.currentQuestionIndex + 1}: "${completeAnswer}"`);
       console.log(`📊 Progress: ${discoveryProgress.questionsCompleted}/6 questions completed`);
       
+      // NEW: Check if all questions are completed and send webhook immediately
+      if (discoveryProgress.allQuestionsCompleted && discoveryProgress.questionsCompleted === 6) {
+        console.log('🎯 ALL 6 QUESTIONS COMPLETED - Triggering immediate webhook check');
+        
+        // Set a flag to trigger webhook on next message processing
+        setTimeout(() => {
+          if (!webhookSent && (bookingInfo.email || connectionData.customerEmail)) {
+            console.log('🚀 IMMEDIATE WEBHOOK SEND - All discovery complete');
+            
+            const immediateDiscoveryData = {};
+            discoveryQuestions.forEach((q, index) => {
+              if (q.answered && q.answer) {
+                immediateDiscoveryData[q.field] = q.answer;
+                immediateDiscoveryData[`question_${index}`] = q.answer;
+              }
+            });
+            
+            sendSchedulingPreference(
+              bookingInfo.name || connectionData.customerName || '',
+              bookingInfo.email || connectionData.customerEmail || '',
+              bookingInfo.phone || connectionData.customerPhone || '',
+              'All discovery questions completed',
+              connectionData.callId,
+              immediateDiscoveryData
+            ).then(result => {
+              if (result.success) {
+                webhookSent = true;
+                console.log('✅ Immediate webhook sent successfully after all questions completed');
+              }
+            }).catch(error => {
+              console.error('❌ Immediate webhook failed:', error.message);
+            });
+          }
+        }, 1000); // 1 second delay to allow processing
+      }
+      
       // Reset
       userResponseBuffer = [];
       isCapturingAnswer = false;
@@ -1127,17 +1163,11 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
           response_id: parsed.response_id
         }));
         
-        // FIXED: Enhanced webhook sending logic - Send when discovery is complete OR scheduling detected
-        if (((schedulingDetected && discoveryProgress.allQuestionsCompleted) || 
-             (discoveryProgress.allQuestionsCompleted && discoveryProgress.questionsCompleted >= 6)) && !webhookSent) {
-          console.log('🚀 SENDING WEBHOOK - All conditions met:');
+        // ENHANCED: Send webhook when all discovery is complete (regardless of scheduling mention)
+        if (discoveryProgress.allQuestionsCompleted && discoveryProgress.questionsCompleted === 6 && !webhookSent) {
+          console.log('🚀 SENDING WEBHOOK - All discovery questions completed:');
           console.log('   ✅ All 6 discovery questions completed and answered');
           console.log('   ✅ Contact info available');
-          if (schedulingDetected) {
-            console.log('   ✅ Scheduling preference detected');
-          } else {
-            console.log('   ℹ️ Sending due to completed discovery (scheduling not explicitly mentioned)');
-          }
           
           // Final validation of discovery data
           const finalDiscoveryData = {};
@@ -1154,7 +1184,41 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
             bookingInfo.name || connectionData.customerName || '',
             bookingInfo.email || connectionData.customerEmail || '',
             bookingInfo.phone || connectionData.customerPhone || '',
-            bookingInfo.preferredDay || 'Discovery completed - no specific day mentioned',
+            bookingInfo.preferredDay || 'Discovery completed',
+            connectionData.callId,
+            finalDiscoveryData
+          );
+          
+          if (result.success) {
+            webhookSent = true;
+            conversationState = 'completed';
+            console.log('✅ Webhook sent successfully with all discovery data');
+          }
+        }
+        
+        // ORIGINAL: Also check for explicit scheduling mention
+        if (schedulingDetected && discoveryProgress.allQuestionsCompleted && !webhookSent) {
+          console.log('🚀 SENDING WEBHOOK - Scheduling explicitly mentioned:');
+          console.log('   ✅ All 6 discovery questions completed and answered');
+          console.log('   ✅ Scheduling preference detected');
+          console.log('   ✅ Contact info available');
+          
+          // Final validation of discovery data
+          const finalDiscoveryData = {};
+          discoveryQuestions.forEach((q, index) => {
+            if (q.answered && q.answer) {
+              finalDiscoveryData[q.field] = q.answer;
+              finalDiscoveryData[`question_${index}`] = q.answer;
+            }
+          });
+          
+          console.log('📋 Final discovery data being sent:', JSON.stringify(finalDiscoveryData, null, 2));
+          
+          const result = await sendSchedulingPreference(
+            bookingInfo.name || connectionData.customerName || '',
+            bookingInfo.email || connectionData.customerEmail || '',
+            bookingInfo.phone || connectionData.customerPhone || '',
+            bookingInfo.preferredDay,
             connectionData.callId,
             finalDiscoveryData
           );
