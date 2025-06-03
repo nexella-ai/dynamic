@@ -164,12 +164,12 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     
     // Define field mappings from question keys to Airtable field names
     const fieldMappings = {
-      'question_0': 'How did you hear about us',
-      'question_1': 'Business/Industry', 
-      'question_2': 'Main product',
-      'question_3': 'Running ads',
-      'question_4': 'Using CRM',
-      'question_5': 'Pain points'
+      'question_0': 'Current Ownership Status',
+      'question_1': 'Ideal Price Range', 
+      'question_2': 'Timeline to Buy',
+      'question_3': 'Home Type Preference',
+      'question_4': 'Must-Haves and Deal-Breakers',
+      'question_5': 'Current Agent Status'
     };
     
     // Process all discovery data
@@ -183,34 +183,34 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
           // Map question_X to the exact Airtable field name
           formattedDiscoveryData[fieldMappings[key]] = trimmedValue;
           console.log(`✅ Mapped ${key} -> "${fieldMappings[key]}" = "${trimmedValue}"`);
-        } else if (key === 'How did you hear about us' || key.includes('hear about')) {
-          formattedDiscoveryData['How did you hear about us'] = trimmedValue;
-          console.log(`✅ Direct mapping: How did you hear about us = "${trimmedValue}"`);
-        } else if (key === 'Business/Industry' || key.includes('business') || key.includes('industry')) {
+        } else if (key === 'Current Ownership Status' || key.includes('ownership') || key.includes('renting') || key.includes('own')) {
+          formattedDiscoveryData['Current Ownership Status'] = trimmedValue;
+          console.log(`✅ Direct mapping: Current Ownership Status = "${trimmedValue}"`);
+        } else if (key === 'Ideal Price Range' || key.includes('price') || key.includes('budget')) {
           // Only map if we don't already have it from question_1
-          if (!formattedDiscoveryData['Business/Industry']) {
-            formattedDiscoveryData['Business/Industry'] = trimmedValue;
-            console.log(`✅ Direct mapping: Business/Industry = "${trimmedValue}"`);
+          if (!formattedDiscoveryData['Ideal Price Range']) {
+            formattedDiscoveryData['Ideal Price Range'] = trimmedValue;
+            console.log(`✅ Direct mapping: Ideal Price Range = "${trimmedValue}"`);
           }
-        } else if (key === 'Main product' || key.includes('product')) {
-          if (!formattedDiscoveryData['Main product']) {
-            formattedDiscoveryData['Main product'] = trimmedValue;
-            console.log(`✅ Direct mapping: Main product = "${trimmedValue}"`);
+        } else if (key === 'Timeline to Buy' || key.includes('timeline') || key.includes('soon')) {
+          if (!formattedDiscoveryData['Timeline to Buy']) {
+            formattedDiscoveryData['Timeline to Buy'] = trimmedValue;
+            console.log(`✅ Direct mapping: Timeline to Buy = "${trimmedValue}"`);
           }
-        } else if (key === 'Running ads' || key.includes('ads') || key.includes('advertising')) {
-          if (!formattedDiscoveryData['Running ads']) {
-            formattedDiscoveryData['Running ads'] = trimmedValue;
-            console.log(`✅ Direct mapping: Running ads = "${trimmedValue}"`);
+        } else if (key === 'Home Type Preference' || key.includes('home') || key.includes('house') || key.includes('type')) {
+          if (!formattedDiscoveryData['Home Type Preference']) {
+            formattedDiscoveryData['Home Type Preference'] = trimmedValue;
+            console.log(`✅ Direct mapping: Home Type Preference = "${trimmedValue}"`);
           }
-        } else if (key === 'Using CRM' || key.includes('crm')) {
-          if (!formattedDiscoveryData['Using CRM']) {
-            formattedDiscoveryData['Using CRM'] = trimmedValue;
-            console.log(`✅ Direct mapping: Using CRM = "${trimmedValue}"`);
+        } else if (key === 'Must-Haves and Deal-Breakers' || key.includes('must') || key.includes('deal-breaker')) {
+          if (!formattedDiscoveryData['Must-Haves and Deal-Breakers']) {
+            formattedDiscoveryData['Must-Haves and Deal-Breakers'] = trimmedValue;
+            console.log(`✅ Direct mapping: Must-Haves and Deal-Breakers = "${trimmedValue}"`);
           }
-        } else if (key === 'Pain points' || key.includes('pain') || key.includes('problem') || key.includes('challenge')) {
-          if (!formattedDiscoveryData['Pain points']) {
-            formattedDiscoveryData['Pain points'] = trimmedValue;
-            console.log(`✅ Direct mapping: Pain points = "${trimmedValue}"`);
+        } else if (key === 'Current Agent Status' || key.includes('agent') || key.includes('realtor')) {
+          if (!formattedDiscoveryData['Current Agent Status']) {
+            formattedDiscoveryData['Current Agent Status'] = trimmedValue;
+            console.log(`✅ Direct mapping: Current Agent Status = "${trimmedValue}"`);
           }
         } else {
           // Keep original key if it doesn't match any pattern
@@ -239,12 +239,12 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       discovery_data: formattedDiscoveryData,
       formatted_discovery: formattedDiscoveryData, // Send both for compatibility
       // Also include individual fields for direct access
-      "How did you hear about us": formattedDiscoveryData["How did you hear about us"] || '',
-      "Business/Industry": formattedDiscoveryData["Business/Industry"] || '',
-      "Main product": formattedDiscoveryData["Main product"] || '',
-      "Running ads": formattedDiscoveryData["Running ads"] || '',
-      "Using CRM": formattedDiscoveryData["Using CRM"] || '',
-      "Pain points": formattedDiscoveryData["Pain points"] || ''
+      "Current Ownership Status": formattedDiscoveryData["Current Ownership Status"] || '',
+      "Ideal Price Range": formattedDiscoveryData["Ideal Price Range"] || '',
+      "Timeline to Buy": formattedDiscoveryData["Timeline to Buy"] || '',
+      "Home Type Preference": formattedDiscoveryData["Home Type Preference"] || '',
+      "Must-Haves and Deal-Breakers": formattedDiscoveryData["Must-Haves and Deal-Breakers"] || '',
+      "Current Agent Status": formattedDiscoveryData["Current Agent Status"] || ''
     };
     
     console.log('📤 COMPLETE WEBHOOK PAYLOAD:', JSON.stringify(webhookData, null, 2));
@@ -281,12 +281,12 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       // Process discovery data for fallback (same logic)
       const formattedDiscoveryData = {};
       const fieldMappings = {
-        'question_0': 'How did you hear about us',
-        'question_1': 'Business/Industry',
-        'question_2': 'Main product',
-        'question_3': 'Running ads',
-        'question_4': 'Using CRM',
-        'question_5': 'Pain points'
+        'question_0': 'Current Ownership Status',
+        'question_1': 'Ideal Price Range',
+        'question_2': 'Timeline to Buy',
+        'question_3': 'Home Type Preference',
+        'question_4': 'Must-Haves and Deal-Breakers',
+        'question_5': 'Current Agent Status'
       };
       
       Object.entries(discoveryData).forEach(([key, value]) => {
@@ -294,18 +294,18 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
           const trimmedValue = value.trim();
           if (key.startsWith('question_') && fieldMappings[key]) {
             formattedDiscoveryData[fieldMappings[key]] = trimmedValue;
-          } else if (key === 'How did you hear about us' || key.includes('hear about')) {
-            formattedDiscoveryData['How did you hear about us'] = trimmedValue;
-          } else if (key === 'Business/Industry' || key.includes('business') || key.includes('industry')) {
-            formattedDiscoveryData['Business/Industry'] = trimmedValue;
-          } else if (key === 'Main product' || key.includes('product')) {
-            formattedDiscoveryData['Main product'] = trimmedValue;
-          } else if (key === 'Running ads' || key.includes('ads')) {
-            formattedDiscoveryData['Running ads'] = trimmedValue;
-          } else if (key === 'Using CRM' || key.includes('crm')) {
-            formattedDiscoveryData['Using CRM'] = trimmedValue;
-          } else if (key === 'Pain points' || key.includes('pain') || key.includes('problem')) {
-            formattedDiscoveryData['Pain points'] = trimmedValue;
+          } else if (key === 'Current Ownership Status' || key.includes('ownership')) {
+            formattedDiscoveryData['Current Ownership Status'] = trimmedValue;
+          } else if (key === 'Ideal Price Range' || key.includes('price') || key.includes('budget')) {
+            formattedDiscoveryData['Ideal Price Range'] = trimmedValue;
+          } else if (key === 'Timeline to Buy' || key.includes('timeline')) {
+            formattedDiscoveryData['Timeline to Buy'] = trimmedValue;
+          } else if (key === 'Home Type Preference' || key.includes('home')) {
+            formattedDiscoveryData['Home Type Preference'] = trimmedValue;
+          } else if (key === 'Must-Haves and Deal-Breakers' || key.includes('must')) {
+            formattedDiscoveryData['Must-Haves and Deal-Breakers'] = trimmedValue;
+          } else if (key === 'Current Agent Status' || key.includes('agent')) {
+            formattedDiscoveryData['Current Agent Status'] = trimmedValue;
           } else {
             formattedDiscoveryData[key] = trimmedValue;
           }
@@ -321,12 +321,12 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
         schedulingComplete: true,
         discovery_data: formattedDiscoveryData,
         formatted_discovery: formattedDiscoveryData,
-        "How did you hear about us": formattedDiscoveryData["How did you hear about us"] || '',
-        "Business/Industry": formattedDiscoveryData["Business/Industry"] || '',
-        "Main product": formattedDiscoveryData["Main product"] || '',
-        "Running ads": formattedDiscoveryData["Running ads"] || '',
-        "Using CRM": formattedDiscoveryData["Using CRM"] || '',
-        "Pain points": formattedDiscoveryData["Pain points"] || ''
+        "Current Ownership Status": formattedDiscoveryData["Current Ownership Status"] || '',
+        "Ideal Price Range": formattedDiscoveryData["Ideal Price Range"] || '',
+        "Timeline to Buy": formattedDiscoveryData["Timeline to Buy"] || '',
+        "Home Type Preference": formattedDiscoveryData["Home Type Preference"] || '',
+        "Must-Haves and Deal-Breakers": formattedDiscoveryData["Must-Haves and Deal-Breakers"] || '',
+        "Current Agent Status": formattedDiscoveryData["Current Agent Status"] || ''
       };
       
       console.log('🔄 Fallback webhook data:', JSON.stringify(fallbackWebhookData, null, 2));
@@ -588,12 +588,12 @@ wss.on('connection', async (ws, req) => {
   
   // SIMPLIFIED: Discovery questions system
   const discoveryQuestions = [
-    { question: 'How did you hear about us?', field: 'How did you hear about us', asked: false, answered: false, answer: '' },
-    { question: 'What industry or business are you in?', field: 'Business/Industry', asked: false, answered: false, answer: '' },
-    { question: 'What\'s your main product or service?', field: 'Main product', asked: false, answered: false, answer: '' },
-    { question: 'Are you currently running any ads?', field: 'Running ads', asked: false, answered: false, answer: '' },
-    { question: 'Are you using any CRM system?', field: 'Using CRM', asked: false, answered: false, answer: '' },
-    { question: 'What are your biggest pain points or challenges?', field: 'Pain points', asked: false, answered: false, answer: '' }
+    { question: 'Are you currently renting or do you own?', field: 'Current Ownership Status', asked: false, answered: false, answer: '' },
+    { question: 'What\'s your ideal price range?', field: 'Ideal Price Range', asked: false, answered: false, answer: '' },
+    { question: 'How soon are you looking to buy?', field: 'Timeline to Buy', asked: false, answered: false, answer: '' },
+    { question: 'What type of home are you looking for?', field: 'Home Type Preference', asked: false, answered: false, answer: '' },
+    { question: 'Are there any must-haves or deal-breakers?', field: 'Must-Haves and Deal-Breakers', asked: false, answered: false, answer: '' },
+    { question: 'Are you working with another agent currently?', field: 'Current Agent Status', asked: false, answered: false, answer: '' }
   ];
   
   let discoveryProgress = {
@@ -609,78 +609,70 @@ wss.on('connection', async (ws, req) => {
     const answer = userAnswer.toLowerCase();
     
     switch (questionIndex) {
-      case 0: // How did you hear about us?
-        if (answer.includes('instagram') || answer.includes('social media')) {
-          return "Instagram, nice! Social media is huge these days.";
-        } else if (answer.includes('google') || answer.includes('search')) {
-          return "Found us through Google, perfect.";
-        } else if (answer.includes('referral') || answer.includes('friend') || answer.includes('recommend')) {
-          return "Word of mouth referrals are the best!";
+      case 0: // Are you currently renting or do you own?
+        if (answer.includes('rent') || answer.includes('renting')) {
+          return "Currently renting, perfect! That's great timing to buy.";
+        } else if (answer.includes('own') || answer.includes('owner')) {
+          return "You already own, excellent! Looking to upgrade or relocate?";
         } else {
           return "Great, thanks for sharing that.";
         }
         
-      case 1: // What industry or business are you in?
-        if (answer.includes('solar')) {
-          return "Solar industry, that's awesome! Clean energy is the future.";
-        } else if (answer.includes('real estate') || answer.includes('property')) {
-          return "Real estate, excellent! That's a great market.";
-        } else if (answer.includes('healthcare') || answer.includes('medical')) {
-          return "Healthcare, wonderful! Such important work.";
-        } else if (answer.includes('restaurant') || answer.includes('food')) {
-          return "Food industry, nice! Everyone loves good food.";
-        } else if (answer.includes('fitness') || answer.includes('gym')) {
-          return "Fitness industry, fantastic! Health is so important.";
-        } else if (answer.includes('e-commerce') || answer.includes('online')) {
-          return "E-commerce, perfect! Online business is booming.";
+      case 1: // What's your ideal price range?
+        if (answer.includes('k') || answer.includes('thousand')) {
+          return "Got it, that's a solid budget range.";
+        } else if (answer.includes('million')) {
+          return "Perfect, luxury market it is!";
+        } else if (answer.includes('flexible') || answer.includes('depends')) {
+          return "Flexible budget, that gives us good options.";
         } else {
-          return `So you're in the ${answer.split(' ')[0]} industry, that's great.`;
+          return "Great, I understand your price range.";
         }
         
-      case 2: // What's your main product or service?
-        if (answer.includes('solar')) {
-          return "Solar installations, excellent choice for the market.";
-        } else if (answer.includes('coaching') || answer.includes('consulting')) {
-          return "Coaching services, that's valuable work.";
-        } else if (answer.includes('software') || answer.includes('app')) {
-          return "Software solutions, perfect for today's market.";
+      case 2: // How soon are you looking to buy?
+        if (answer.includes('soon') || answer.includes('month') || answer.includes('asap')) {
+          return "Looking to move quickly, perfect timing!";
+        } else if (answer.includes('year') || answer.includes('six month')) {
+          return "Good timeline, that gives us time to find the perfect home.";
+        } else if (answer.includes('flexible') || answer.includes('right')) {
+          return "Waiting for the right property, smart approach.";
         } else {
-          return "Got it, that sounds like a great service.";
+          return "Perfect, I understand your timeline.";
         }
         
-      case 3: // Are you currently running any ads?
-        if (answer.includes('yes') || answer.includes('google') || answer.includes('facebook') || answer.includes('meta')) {
-          return "Great, so you're already running ads. That's smart.";
+      case 3: // What type of home are you looking for?
+        if (answer.includes('house') || answer.includes('single family')) {
+          return "Single family home, excellent choice!";
+        } else if (answer.includes('condo') || answer.includes('townhouse')) {
+          return "Condo or townhouse, great options for today's market.";
+        } else if (answer.includes('apartment')) {
+          return "Apartment style living, perfect!";
+        } else {
+          return "Got it, that sounds like a great fit for you.";
+        }
+        
+      case 4: // Are there any must-haves or deal-breakers?
+        if (answer.includes('pool') || answer.includes('yard')) {
+          return "Outdoor space is so important, I totally get that.";
+        } else if (answer.includes('school') || answer.includes('district')) {
+          return "Good schools are crucial, especially for families.";
+        } else if (answer.includes('garage') || answer.includes('parking')) {
+          return "Parking is definitely important, especially in busy areas.";
+        } else if (answer.includes('updated') || answer.includes('modern')) {
+          return "Updated features save so much time and hassle.";
+        } else {
+          return "Those are important considerations for sure.";
+        }
+        
+      case 5: // Are you working with another agent currently?
+        if (answer.includes('yes') || answer.includes('working with')) {
+          return "I see, it's always good to explore your options.";
         } else if (answer.includes('no') || answer.includes('not')) {
-          return "No ads currently, that's totally fine.";
+          return "Perfect, I'd love to help you with your home search.";
+        } else if (answer.includes('looking') || answer.includes('considering')) {
+          return "Smart to do your research on agents.";
         } else {
-          return "Got it, thanks for that info.";
-        }
-        
-      case 4: // Are you using any CRM system?
-        if (answer.includes('gohighlevel') || answer.includes('go high level')) {
-          return "GoHighLevel, excellent choice! That's a powerful platform.";
-        } else if (answer.includes('hubspot')) {
-          return "HubSpot, nice! That's a solid CRM.";
-        } else if (answer.includes('salesforce')) {
-          return "Salesforce, perfect! The industry standard.";
-        } else if (answer.includes('yes')) {
-          return "Great, having a CRM system is really important.";
-        } else if (answer.includes('no') || answer.includes('not')) {
-          return "No CRM currently, that's actually pretty common.";
-        } else {
-          return "Perfect, I understand.";
-        }
-        
-      case 5: // What are your biggest pain points?
-        if (answer.includes('lead') || answer.includes('follow up')) {
-          return "Lead follow-up challenges, I totally get that.";
-        } else if (answer.includes('time') || answer.includes('busy')) {
-          return "Time management issues, that's so common in business.";
-        } else if (answer.includes('money') || answer.includes('expensive')) {
-          return "Budget concerns, completely understandable.";
-        } else {
-          return "I see, those are definitely real challenges.";
+          return "Got it, thanks for letting me know.";
         }
         
       default:
@@ -711,23 +703,23 @@ wss.on('connection', async (ws, req) => {
     
     // Simple keyword detection for each question
     switch (nextQuestionIndex) {
-      case 0: // How did you hear about us?
-        detected = botContent.includes('hear about') || botContent.includes('find us') || botContent.includes('found us');
+      case 0: // Are you currently renting or do you own?
+        detected = (botContent.includes('renting') || botContent.includes('rent')) && botContent.includes('own');
         break;
-      case 1: // What industry or business are you in?
-        detected = (botContent.includes('industry') || botContent.includes('business')) && !botContent.includes('hear about');
+      case 1: // What's your ideal price range?
+        detected = (botContent.includes('price') || botContent.includes('budget')) && botContent.includes('range');
         break;
-      case 2: // What's your main product or service?
-        detected = (botContent.includes('product') || botContent.includes('service')) && !botContent.includes('industry');
+      case 2: // How soon are you looking to buy?
+        detected = botContent.includes('soon') || (botContent.includes('looking') && botContent.includes('buy'));
         break;
-      case 3: // Are you currently running any ads?
-        detected = (botContent.includes('running') && botContent.includes('ads')) || botContent.includes('advertising');
+      case 3: // What type of home are you looking for?
+        detected = (botContent.includes('type') && botContent.includes('home')) || (botContent.includes('looking') && botContent.includes('for'));
         break;
-      case 4: // Are you using any CRM system?
-        detected = botContent.includes('crm') || (botContent.includes('using') && botContent.includes('system'));
+      case 4: // Are there any must-haves or deal-breakers?
+        detected = botContent.includes('must-have') || botContent.includes('deal-breaker') || (botContent.includes('any') && (botContent.includes('must') || botContent.includes('deal')));
         break;
-      case 5: // What are your biggest pain points?
-        detected = botContent.includes('pain point') || botContent.includes('challenge') || botContent.includes('biggest');
+      case 5: // Are you working with another agent currently?
+        detected = (botContent.includes('working') && botContent.includes('agent')) || (botContent.includes('another') && botContent.includes('agent'));
         break;
     }
     
@@ -799,20 +791,20 @@ wss.on('connection', async (ws, req) => {
   let conversationHistory = [
     {
       role: 'system',
-      content: `You are a customer service/sales representative for Nexella.io named "Sarah". Always introduce yourself as Sarah from Nexella.
+      content: `You are a real estate agent named "Emma". Always introduce yourself as Emma, your local real estate expert.
 
 CONVERSATION FLOW:
 1. GREETING PHASE: Start with a warm greeting and ask how they're doing
 2. BRIEF CHAT: Engage in 1-2 exchanges of pleasantries before discovery
-3. TRANSITION: Naturally transition to discovery questions
+3. TRANSITION: Naturally transition to discovery questions about their home buying needs
 4. DISCOVERY PHASE: Ask all 6 discovery questions systematically
 5. SCHEDULING PHASE: Only after all 6 questions are complete
 
 GREETING & TRANSITION GUIDELINES:
-- Always start with: "Hi there! This is Sarah from Nexella AI. How are you doing today?"
+- Always start with: "Hi there! This is Emma, your local real estate expert. How are you doing today?"
 - When they respond to how they're doing, acknowledge it warmly
 - After 1-2 friendly exchanges, transition naturally with something like:
-  "That's great to hear! I'd love to learn a bit more about you and your business so I can better help you today."
+  "That's wonderful to hear! I'd love to learn more about what you're looking for in your home search so I can better help you."
 - Then start with the first discovery question
 
 CRITICAL DISCOVERY REQUIREMENTS:
@@ -822,12 +814,12 @@ CRITICAL DISCOVERY REQUIREMENTS:
 - After each answer, acknowledge it briefly before asking the next question
 
 DISCOVERY QUESTIONS (ask in this EXACT order):
-1. "How did you hear about us?"
-2. "What industry or business are you in?"
-3. "What's your main product or service?"
-4. "Are you currently running any ads?"
-5. "Are you using any CRM system?"
-6. "What are your biggest pain points or challenges?"
+1. "Are you currently renting or do you own?"
+2. "What's your ideal price range?"
+3. "How soon are you looking to buy?"
+4. "What type of home are you looking for?"
+5. "Are there any must-haves or deal-breakers?"
+6. "Are you working with another agent currently?"
 
 SPEAKING STYLE & PACING:
 - Speak at a SLOW, measured pace - never rush your words
@@ -864,7 +856,7 @@ DISCOVERY FLOW:
 
 SCHEDULING APPROACH:
 - ONLY after asking ALL 6 discovery questions, ask for scheduling preference
-- Say: "Perfect! I have all the information I need. Let's schedule a call to discuss how we can help. What day would work best for you?"
+- Say: "Perfect! I have all the information I need about your home search. Let's schedule a time to discuss properties that match your criteria. What day would work best for you?"
 - When they mention a day, acknowledge it and confirm scheduling
 
 Remember: Start with greeting, have brief pleasant conversation, then systematically complete ALL 6 discovery questions before any scheduling discussion.`
@@ -899,7 +891,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     if (!userHasSpoken) {
       console.log('🎙️ Sending auto-greeting message');
       ws.send(JSON.stringify({
-        content: "Hi there! This is Sarah from Nexella AI. How are you doing today?",
+        content: "Hi there! This is Emma, your local real estate expert. How are you doing today?",
         content_complete: true,
         actions: [],
         response_id: 1
@@ -912,7 +904,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     if (!userHasSpoken) {
       console.log('🎙️ Sending backup auto-greeting');
       ws.send(JSON.stringify({
-        content: "Hello! This is Sarah from Nexella AI. I'm here to help you today. How's everything going?",
+        content: "Hello! This is Emma, your local real estate expert. I'm here to help you find your perfect home today. How's everything going?",
         content_complete: true,
         actions: [],
         response_id: 2
@@ -1009,8 +1001,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
             if (bookingInfo.name) {
               const systemPrompt = conversationHistory[0].content;
               conversationHistory[0].content = systemPrompt
-                .replace(/\[Name\]/g, bookingInfo.name)
-                .replace(/Monica/g, bookingInfo.name);
+                .replace(/\[Name\]/g, bookingInfo.name);
               console.log(`Updated system prompt with customer name: ${bookingInfo.name}`);
             }
           }
@@ -1368,12 +1359,12 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
       if (Object.keys(discoveryData).length === 0 && call.transcript && call.transcript.length > 0) {
         // Use the discovery questions to match answers in the transcript
         const discoveryQuestions = [
-          'How did you hear about us?',
-          'What industry or business are you in?',
-          'What\'s your main product?',
-          'Are you running ads right now?',
-          'Are you using a CRM system?',
-          'What pain points are you experiencing?'
+          'Are you currently renting or do you own?',
+          'What\'s your ideal price range?',
+          'How soon are you looking to buy?',
+          'What type of home are you looking for?',
+          'Are there any must-haves or deal-breakers?',
+          'Are you working with another agent currently?'
         ];
         
         // Find questions and their answers in the transcript
