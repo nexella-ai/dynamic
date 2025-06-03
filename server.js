@@ -1127,12 +1127,17 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
           response_id: parsed.response_id
         }));
         
-        // FIXED: Enhanced webhook sending logic
-        if (schedulingDetected && discoveryProgress.allQuestionsCompleted && !webhookSent) {
+        // FIXED: Enhanced webhook sending logic - Send when discovery is complete OR scheduling detected
+        if (((schedulingDetected && discoveryProgress.allQuestionsCompleted) || 
+             (discoveryProgress.allQuestionsCompleted && discoveryProgress.questionsCompleted >= 6)) && !webhookSent) {
           console.log('🚀 SENDING WEBHOOK - All conditions met:');
           console.log('   ✅ All 6 discovery questions completed and answered');
-          console.log('   ✅ Scheduling preference detected');
           console.log('   ✅ Contact info available');
+          if (schedulingDetected) {
+            console.log('   ✅ Scheduling preference detected');
+          } else {
+            console.log('   ℹ️ Sending due to completed discovery (scheduling not explicitly mentioned)');
+          }
           
           // Final validation of discovery data
           const finalDiscoveryData = {};
@@ -1149,7 +1154,7 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
             bookingInfo.name || connectionData.customerName || '',
             bookingInfo.email || connectionData.customerEmail || '',
             bookingInfo.phone || connectionData.customerPhone || '',
-            bookingInfo.preferredDay,
+            bookingInfo.preferredDay || 'Discovery completed - no specific day mentioned',
             connectionData.callId,
             finalDiscoveryData
           );
@@ -1164,10 +1169,10 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
     } catch (error) {
       console.error('❌ Error handling message:', error.message);
       
-      // Enhanced emergency webhook logic
+      // Enhanced emergency webhook logic - Send if we have substantial discovery data
       if (!webhookSent && connectionData.callId && 
           (bookingInfo.email || connectionData.customerEmail) &&
-          discoveryProgress.questionsCompleted >= 4) {
+          discoveryProgress.questionsCompleted >= 3) {
         try {
           console.log('🚨 EMERGENCY WEBHOOK SEND - Substantial discovery data available');
           
@@ -1184,7 +1189,7 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
             bookingInfo.name || connectionData.customerName || '',
             bookingInfo.email || connectionData.customerEmail || '',
             bookingInfo.phone || connectionData.customerPhone || '',
-            bookingInfo.preferredDay || 'Error occurred',
+            bookingInfo.preferredDay || 'Error occurred - discovery data captured',
             connectionData.callId,
             emergencyDiscoveryData
           );
@@ -1262,7 +1267,7 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
           finalName,
           finalEmail,
           finalPhone,
-          bookingInfo.preferredDay || 'Call ended early',
+          bookingInfo.preferredDay || 'Call ended - discovery data captured',
           connectionData.callId,
           finalDiscoveryData
         );
