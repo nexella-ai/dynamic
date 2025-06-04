@@ -15,7 +15,7 @@ if (!process.env.TRIGGER_SERVER_URL) {
   process.env. TRIGGER_SERVER_URL = 'https://trigger-server-qt7u.onrender.com';
 }
 if (!process.env.N8N_WEBHOOK_URL) {
-  process.env.N8N_WEBHOOK_URL = 'https://n8n-clp2.onrender.com/webhook/retell-scheduling';
+  process.env.N8N_WEBHOOK_URL = 'https://n8n-clp2.onrender.com/webhook/6db89b9b-bbe3-4de8-95b3-2336f027006e';
 }
 
 // Store the latest Typeform submission for reference
@@ -249,6 +249,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     
     console.log('📤 COMPLETE WEBHOOK PAYLOAD:', JSON.stringify(webhookData, null, 2));
     console.log('✅ Sending scheduling preference to trigger server');
+    console.log('🎯 Trigger server URL:', process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com');
     
     const response = await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, webhookData, {
       headers: { 'Content-Type': 'application/json' },
@@ -256,6 +257,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     });
     
     console.log('✅ Scheduling preference sent successfully:', response.data);
+    console.log('✅ Trigger server response status:', response.status);
     return { success: true, data: response.data };
     
   } catch (error) {
@@ -264,7 +266,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     // Enhanced fallback to n8n with same data processing
     try {
       console.log('🔄 Attempting to send directly to n8n webhook as fallback');
-      const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL || 'https://n8n-clp2.onrender.com/webhook/retell-scheduling';
+      const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL || 'https://n8n-clp2.onrender.com/webhook/6db89b9b-bbe3-4de8-95b3-2336f027006e';
       
       // Use the same processing logic for fallback
       let fallbackEmail = email || (global.lastTypeformSubmission && global.lastTypeformSubmission.email) || '';
@@ -330,6 +332,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       };
       
       console.log('🔄 Fallback webhook data:', JSON.stringify(fallbackWebhookData, null, 2));
+      console.log('🔄 Sending to N8N URL:', n8nWebhookUrl);
       
       const n8nResponse = await axios.post(n8nWebhookUrl, fallbackWebhookData, {
         headers: { 'Content-Type': 'application/json' },
@@ -337,10 +340,13 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       });
       
       console.log('✅ Successfully sent directly to n8n:', n8nResponse.data);
+      console.log('✅ N8N Response status:', n8nResponse.status);
       return { success: true, fallback: true };
       
     } catch (n8nError) {
       console.error('❌ Error sending directly to n8n:', n8nError);
+      console.error('❌ N8N URL used:', n8nWebhookUrl);
+      console.error('❌ N8N payload sent:', JSON.stringify(fallbackWebhookData, null, 2));
       return { success: false, error: error.message };
     }
   }
