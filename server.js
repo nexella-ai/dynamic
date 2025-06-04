@@ -256,14 +256,37 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     console.log('✅ Sending scheduling preference to trigger server');
     console.log('🎯 Trigger server URL:', process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com');
     
-    const response = await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, webhookData, {
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 10000
-    });
-    
-    console.log('✅ Scheduling preference sent successfully:', response.data);
-    console.log('✅ Trigger server response status:', response.status);
-    return { success: true, data: response.data };
+    try {
+      const response = await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, webhookData, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 10000
+      });
+      
+      console.log('✅ Scheduling preference sent successfully:', response.data);
+      console.log('✅ Trigger server response status:', response.status);
+      return { success: true, data: response.data };
+    } catch (triggerError) {
+      console.error('❌ Trigger server failed:', triggerError.message);
+      console.log('🔄 Attempting direct N8N send as fallback...');
+      
+      // IMMEDIATE fallback to N8N
+      const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL || 'https://n8n-clp2.onrender.com/webhook/6db89b9b-bbe3-4de8-95b3-2336f027006e';
+      console.log('🔄 Direct N8N URL:', n8nWebhookUrl);
+      
+      try {
+        const n8nResponse = await axios.post(n8nWebhookUrl, webhookData, {
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 10000
+        });
+        
+        console.log('✅ Successfully sent directly to N8N:', n8nResponse.data);
+        console.log('✅ N8N Response status:', n8nResponse.status);
+        return { success: true, direct: true };
+      } catch (n8nError) {
+        console.error('❌ Direct N8N also failed:', n8nError.message);
+        throw triggerError; // Throw original error
+      }
+    }
     
   } catch (error) {
     console.error('❌ Error sending scheduling preference:', error);
