@@ -253,38 +253,40 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     };
     
     console.log('📤 COMPLETE WEBHOOK PAYLOAD:', JSON.stringify(webhookData, null, 2));
-    console.log('✅ Sending scheduling preference to trigger server');
-    console.log('🎯 Trigger server URL:', process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com');
+    
+    // PRIMARY: Send directly to N8N first (since trigger server has wrong URL)
+    const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL || 'https://n8n-clp2.onrender.com/webhook/6db89b9b-bbe3-4de8-95b3-2336f027006e';
+    console.log('🎯 Sending directly to N8N webhook URL:', n8nWebhookUrl);
     
     try {
-      const response = await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, webhookData, {
+      const n8nResponse = await axios.post(n8nWebhookUrl, webhookData, {
         headers: { 'Content-Type': 'application/json' },
         timeout: 10000
       });
       
-      console.log('✅ Scheduling preference sent successfully:', response.data);
-      console.log('✅ Trigger server response status:', response.status);
-      return { success: true, data: response.data };
-    } catch (triggerError) {
-      console.error('❌ Trigger server failed:', triggerError.message);
-      console.log('🔄 Attempting direct N8N send as fallback...');
+      console.log('✅ Successfully sent directly to N8N:', n8nResponse.data);
+      console.log('✅ N8N Response status:', n8nResponse.status);
+      return { success: true, direct: true, data: n8nResponse.data };
       
-      // IMMEDIATE fallback to N8N
-      const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL || 'https://n8n-clp2.onrender.com/webhook/6db89b9b-bbe3-4de8-95b3-2336f027006e';
-      console.log('🔄 Direct N8N URL:', n8nWebhookUrl);
+    } catch (n8nError) {
+      console.error('❌ Direct N8N failed:', n8nError.message);
+      console.log('🔄 Falling back to trigger server...');
       
+      // FALLBACK: Try trigger server (even though it has wrong URL)
       try {
-        const n8nResponse = await axios.post(n8nWebhookUrl, webhookData, {
+        console.log('🎯 Trigger server URL:', process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com');
+        const response = await axios.post(`${process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/process-scheduling-preference`, webhookData, {
           headers: { 'Content-Type': 'application/json' },
           timeout: 10000
         });
         
-        console.log('✅ Successfully sent directly to N8N:', n8nResponse.data);
-        console.log('✅ N8N Response status:', n8nResponse.status);
-        return { success: true, direct: true };
-      } catch (n8nError) {
-        console.error('❌ Direct N8N also failed:', n8nError.message);
-        throw triggerError; // Throw original error
+        console.log('✅ Trigger server sent successfully:', response.data);
+        console.log('✅ Trigger server response status:', response.status);
+        return { success: true, fallback: true, data: response.data };
+        
+      } catch (triggerError) {
+        console.error('❌ Trigger server also failed:', triggerError.message);
+        throw n8nError; // Throw original N8N error
       }
     }
     
