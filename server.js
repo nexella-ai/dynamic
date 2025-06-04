@@ -152,6 +152,11 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     // CRITICAL: Don't proceed if we still don't have an email
     if (!finalEmail || finalEmail.trim() === '') {
       console.error('❌ CRITICAL: No email found from any source. Cannot send webhook.');
+      console.error('❌ Email sources checked:');
+      console.error(`   - global.lastTypeformSubmission: ${global.lastTypeformSubmission?.email || 'null'}`);
+      console.error(`   - connectionData.customerEmail: ${connectionData.customerEmail || 'null'}`);
+      console.error(`   - bookingInfo.email: ${bookingInfo.email || 'null'}`);
+      console.error(`   - activeCallsMetadata for callId: ${activeCallsMetadata.get(callId)?.customer_email || 'null'}`);
       return { success: false, error: 'No email address available' };
     }
     
@@ -1349,14 +1354,25 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
       console.log(`Question ${index + 1}: Asked=${q.asked}, Answered=${q.answered}, Answer="${q.answer}"`);
     });
     
-    // FINAL webhook attempt - ALWAYS try if we have discovery data and webhook wasn't actually sent
-    if (!webhookSent && connectionData.callId && discoveryProgress.questionsCompleted >= 2) {
+    // FORCE WEBHOOK ATTEMPT - Always try when we have complete discovery data, even if marked as sent
+    if (connectionData.callId && discoveryProgress.questionsCompleted >= 6) {
       try {
-        // Try ALL possible sources for email
-        const finalEmail = connectionData.customerEmail || 
-                          bookingInfo.email || 
-                          global.lastTypeformSubmission?.email || 
-                          '';
+        console.log('🚨 FORCING WEBHOOK ATTEMPT - Complete discovery data available');
+        console.log(`   Previous webhookSent status: ${webhookSent}`);
+        
+        // Try ALL possible sources for email - BE MORE AGGRESSIVE
+        let finalEmail = connectionData.customerEmail || 
+                        bookingInfo.email || 
+                        global.lastTypeformSubmission?.email || 
+                        '';
+        
+        // Check activeCallsMetadata too
+        if (!finalEmail && connectionData.callId && activeCallsMetadata.has(connectionData.callId)) {
+          const callMetadata = activeCallsMetadata.get(connectionData.callId);
+          finalEmail = callMetadata?.customer_email || '';
+          console.log(`   Found email in activeCallsMetadata: ${finalEmail}`);
+        }
+        
         const finalName = connectionData.customerName || 
                          bookingInfo.name || 
                          global.lastTypeformSubmission?.name || 
@@ -1366,11 +1382,22 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
                           global.lastTypeformSubmission?.phone || 
                           '';
         
-        console.log('🚨 FINAL WEBHOOK ATTEMPT on connection close');
-        console.log(`📊 Sending with ${discoveryProgress.questionsCompleted}/6 questions completed`);
-        console.log(`📧 Final email check: "${finalEmail}"`);
-        console.log(`👤 Final name check: "${finalName}"`);
-        console.log(`📱 Final phone check: "${finalPhone}"`);
+        console.log('🚨 FORCE WEBHOOK - Contact info:');
+        console.log(`   Email: "${finalEmail}"`);
+        console.log(`   Name: "${finalName}"`);
+        console.log(`   Phone: "${finalPhone}"`);
+        console.log(`   Call ID: "${connectionData.callId}"`);
+        
+        // Only proceed if we have an email
+        if (!finalEmail || finalEmail.trim() === '') {
+          console.error('❌ FORCE WEBHOOK SKIPPED: No email address found');
+          console.error('❌ Email sources checked:');
+          console.error(`   - connectionData.customerEmail: ${connectionData.customerEmail || 'null'}`);
+          console.error(`   - bookingInfo.email: ${bookingInfo.email || 'null'}`);
+          console.error(`   - global.lastTypeformSubmission?.email: ${global.lastTypeformSubmission?.email || 'null'}`);
+          console.error(`   - activeCallsMetadata: ${activeCallsMetadata.get(connectionData.callId)?.customer_email || 'null'}`);
+          return;
+        }
         
         // Create final discovery data from answered questions
         const finalDiscoveryData = {};
@@ -1381,41 +1408,29 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
           }
         });
         
-        console.log('📋 Discovery data to send:', JSON.stringify(finalDiscoveryData, null, 2));
+        console.log('🚨 FORCE WEBHOOK - Discovery data:', JSON.stringify(finalDiscoveryData, null, 2));
         
-        // ALWAYS attempt the webhook, even without email (let the function handle it)
-        console.log('🔄 Attempting final webhook call...');
+        // FORCE the webhook call
+        console.log('🔄 FORCING webhook call...');
         const result = await sendSchedulingPreference(
           finalName,
-          finalEmail, // This might be empty, but the function has fallbacks
+          finalEmail,
           finalPhone,
-          bookingInfo.preferredDay || 'Call ended - discovery data captured',
+          'FORCED SEND - Discovery completed',
           connectionData.callId,
           finalDiscoveryData
         );
         
-        console.log('📤 Webhook result:', JSON.stringify(result, null, 2));
+        console.log('📤 FORCE WEBHOOK result:', JSON.stringify(result, null, 2));
         
         if (result.success) {
-          console.log('✅ Final webhook sent successfully on connection close');
-          webhookSent = true;
+          console.log('✅ FORCE webhook sent successfully');
         } else {
-          console.error('❌ Final webhook failed:', result.error || 'Unknown error');
-          console.error('❌ Full result object:', result);
+          console.error('❌ FORCE webhook failed:', result.error || 'Unknown error');
         }
       } catch (finalError) {
-        console.error('❌ Final webhook exception:', finalError.message);
+        console.error('❌ FORCE webhook exception:', finalError.message);
         console.error('❌ Full error stack:', finalError.stack);
-      }
-    } else {
-      console.log('🚫 Final webhook skipped:');
-      console.log(`   webhookSent: ${webhookSent}`);
-      console.log(`   callId: ${connectionData.callId}`);
-      console.log(`   questionsCompleted: ${discoveryProgress.questionsCompleted}`);
-      
-      if (webhookSent) {
-        console.log('   ℹ️ Webhook was marked as sent earlier in the conversation');
-        console.log('   🔍 Check logs above for when webhookSent was set to true');
       }
     }
     
