@@ -1193,21 +1193,28 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
             
             console.log('📋 Final discovery data being sent:', JSON.stringify(finalDiscoveryData, null, 2));
             
-            const result = await sendSchedulingPreference(
-              finalName,
-              finalEmail,
-              finalPhone,
-              bookingInfo.preferredDay || 'Discovery completed',
-              connectionData.callId,
-              finalDiscoveryData
-            );
-            
-            if (result.success) {
-              webhookSent = true;
-              conversationState = 'completed';
-              console.log('✅ Webhook sent successfully with all discovery data');
-            } else {
-              console.error('❌ Webhook failed:', result.error);
+            try {
+              const result = await sendSchedulingPreference(
+                finalName,
+                finalEmail,
+                finalPhone,
+                bookingInfo.preferredDay || 'Discovery completed',
+                connectionData.callId,
+                finalDiscoveryData
+              );
+              
+              if (result.success) {
+                webhookSent = true;
+                conversationState = 'completed';
+                console.log('✅ Webhook sent successfully with all discovery data');
+                console.log('✅ WEBHOOK STATUS: webhookSent = true');
+              } else {
+                console.error('❌ Webhook failed:', result.error);
+                console.log('⚠️ WEBHOOK STATUS: webhookSent remains false due to failure');
+              }
+            } catch (webhookError) {
+              console.error('❌ Webhook exception:', webhookError.message);
+              console.log('⚠️ WEBHOOK STATUS: webhookSent remains false due to exception');
             }
           } else {
             console.warn('⚠️ No email available - cannot send webhook yet');
@@ -1215,7 +1222,13 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
             console.log('   bookingInfo:', JSON.stringify(bookingInfo, null, 2));
             console.log('   connectionData email:', connectionData.customerEmail);
             console.log('   global.lastTypeformSubmission:', global.lastTypeformSubmission);
+            console.log('⚠️ WEBHOOK STATUS: webhookSent remains false - no email');
+            
+            // DON'T mark as sent if no email - let it try again later
           }
+        } else if (discoveryProgress.allQuestionsCompleted && webhookSent) {
+          console.log('🔄 All discovery complete but webhook already marked as sent');
+          console.log(`   webhookSent status: ${webhookSent}`);
         }
         
         // ORIGINAL: Also check for explicit scheduling mention
@@ -1330,7 +1343,7 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
       console.log(`Question ${index + 1}: Asked=${q.asked}, Answered=${q.answered}, Answer="${q.answer}"`);
     });
     
-    // FINAL webhook attempt - ALWAYS try if we have discovery data
+    // FINAL webhook attempt - ALWAYS try if we have discovery data and webhook wasn't actually sent
     if (!webhookSent && connectionData.callId && discoveryProgress.questionsCompleted >= 2) {
       try {
         // Try ALL possible sources for email
@@ -1365,6 +1378,7 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
         console.log('📋 Discovery data to send:', JSON.stringify(finalDiscoveryData, null, 2));
         
         // ALWAYS attempt the webhook, even without email (let the function handle it)
+        console.log('🔄 Attempting final webhook call...');
         const result = await sendSchedulingPreference(
           finalName,
           finalEmail, // This might be empty, but the function has fallbacks
@@ -1374,21 +1388,29 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
           finalDiscoveryData
         );
         
+        console.log('📤 Webhook result:', JSON.stringify(result, null, 2));
+        
         if (result.success) {
           console.log('✅ Final webhook sent successfully on connection close');
           webhookSent = true;
         } else {
           console.error('❌ Final webhook failed:', result.error || 'Unknown error');
+          console.error('❌ Full result object:', result);
         }
       } catch (finalError) {
         console.error('❌ Final webhook exception:', finalError.message);
-        console.error('❌ Full error:', finalError);
+        console.error('❌ Full error stack:', finalError.stack);
       }
     } else {
       console.log('🚫 Final webhook skipped:');
       console.log(`   webhookSent: ${webhookSent}`);
       console.log(`   callId: ${connectionData.callId}`);
       console.log(`   questionsCompleted: ${discoveryProgress.questionsCompleted}`);
+      
+      if (webhookSent) {
+        console.log('   ℹ️ Webhook was marked as sent earlier in the conversation');
+        console.log('   🔍 Check logs above for when webhookSent was set to true');
+      }
     }
     
     // Clean up
