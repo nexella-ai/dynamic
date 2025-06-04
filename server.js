@@ -1165,34 +1165,56 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
         
         // ENHANCED: Send webhook when all discovery is complete (regardless of scheduling mention)
         if (discoveryProgress.allQuestionsCompleted && discoveryProgress.questionsCompleted === 6 && !webhookSent) {
-          console.log('🚀 SENDING WEBHOOK - All discovery questions completed:');
+          console.log('🚀 ATTEMPTING WEBHOOK - All discovery questions completed:');
           console.log('   ✅ All 6 discovery questions completed and answered');
-          console.log('   ✅ Contact info available');
           
-          // Final validation of discovery data
-          const finalDiscoveryData = {};
-          discoveryQuestions.forEach((q, index) => {
-            if (q.answered && q.answer) {
-              finalDiscoveryData[q.field] = q.answer;
-              finalDiscoveryData[`question_${index}`] = q.answer;
+          // Check for contact info more aggressively
+          const finalEmail = bookingInfo.email || connectionData.customerEmail || global.lastTypeformSubmission?.email || '';
+          const finalName = bookingInfo.name || connectionData.customerName || global.lastTypeformSubmission?.name || '';
+          const finalPhone = bookingInfo.phone || connectionData.customerPhone || global.lastTypeformSubmission?.phone || '';
+          
+          console.log('📧 Contact info check:');
+          console.log(`   Email: "${finalEmail}"`);
+          console.log(`   Name: "${finalName}"`);
+          console.log(`   Phone: "${finalPhone}"`);
+          console.log(`   Call ID: "${connectionData.callId}"`);
+          
+          if (finalEmail && finalEmail.trim() !== '') {
+            console.log('   ✅ Email available - proceeding with webhook');
+            
+            // Final validation of discovery data
+            const finalDiscoveryData = {};
+            discoveryQuestions.forEach((q, index) => {
+              if (q.answered && q.answer) {
+                finalDiscoveryData[q.field] = q.answer;
+                finalDiscoveryData[`question_${index}`] = q.answer;
+              }
+            });
+            
+            console.log('📋 Final discovery data being sent:', JSON.stringify(finalDiscoveryData, null, 2));
+            
+            const result = await sendSchedulingPreference(
+              finalName,
+              finalEmail,
+              finalPhone,
+              bookingInfo.preferredDay || 'Discovery completed',
+              connectionData.callId,
+              finalDiscoveryData
+            );
+            
+            if (result.success) {
+              webhookSent = true;
+              conversationState = 'completed';
+              console.log('✅ Webhook sent successfully with all discovery data');
+            } else {
+              console.error('❌ Webhook failed:', result.error);
             }
-          });
-          
-          console.log('📋 Final discovery data being sent:', JSON.stringify(finalDiscoveryData, null, 2));
-          
-          const result = await sendSchedulingPreference(
-            bookingInfo.name || connectionData.customerName || '',
-            bookingInfo.email || connectionData.customerEmail || '',
-            bookingInfo.phone || connectionData.customerPhone || '',
-            bookingInfo.preferredDay || 'Discovery completed',
-            connectionData.callId,
-            finalDiscoveryData
-          );
-          
-          if (result.success) {
-            webhookSent = true;
-            conversationState = 'completed';
-            console.log('✅ Webhook sent successfully with all discovery data');
+          } else {
+            console.warn('⚠️ No email available - cannot send webhook yet');
+            console.log('📊 Available data sources:');
+            console.log('   bookingInfo:', JSON.stringify(bookingInfo, null, 2));
+            console.log('   connectionData email:', connectionData.customerEmail);
+            console.log('   global.lastTypeformSubmission:', global.lastTypeformSubmission);
           }
         }
         
@@ -1308,15 +1330,28 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
       console.log(`Question ${index + 1}: Asked=${q.asked}, Answered=${q.answered}, Answer="${q.answer}"`);
     });
     
-    // FINAL webhook attempt only if we have meaningful data and haven't sent yet
+    // FINAL webhook attempt - ALWAYS try if we have discovery data
     if (!webhookSent && connectionData.callId && discoveryProgress.questionsCompleted >= 2) {
       try {
-        const finalEmail = connectionData.customerEmail || bookingInfo.email || '';
-        const finalName = connectionData.customerName || bookingInfo.name || '';
-        const finalPhone = connectionData.customerPhone || bookingInfo.phone || '';
+        // Try ALL possible sources for email
+        const finalEmail = connectionData.customerEmail || 
+                          bookingInfo.email || 
+                          global.lastTypeformSubmission?.email || 
+                          '';
+        const finalName = connectionData.customerName || 
+                         bookingInfo.name || 
+                         global.lastTypeformSubmission?.name || 
+                         '';
+        const finalPhone = connectionData.customerPhone || 
+                          bookingInfo.phone || 
+                          global.lastTypeformSubmission?.phone || 
+                          '';
         
         console.log('🚨 FINAL WEBHOOK ATTEMPT on connection close');
         console.log(`📊 Sending with ${discoveryProgress.questionsCompleted}/6 questions completed`);
+        console.log(`📧 Final email check: "${finalEmail}"`);
+        console.log(`👤 Final name check: "${finalName}"`);
+        console.log(`📱 Final phone check: "${finalPhone}"`);
         
         // Create final discovery data from answered questions
         const finalDiscoveryData = {};
@@ -1327,20 +1362,33 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
           }
         });
         
-        await sendSchedulingPreference(
+        console.log('📋 Discovery data to send:', JSON.stringify(finalDiscoveryData, null, 2));
+        
+        // ALWAYS attempt the webhook, even without email (let the function handle it)
+        const result = await sendSchedulingPreference(
           finalName,
-          finalEmail,
+          finalEmail, // This might be empty, but the function has fallbacks
           finalPhone,
           bookingInfo.preferredDay || 'Call ended - discovery data captured',
           connectionData.callId,
           finalDiscoveryData
         );
         
-        console.log('✅ Final webhook sent successfully on connection close');
-        webhookSent = true;
+        if (result.success) {
+          console.log('✅ Final webhook sent successfully on connection close');
+          webhookSent = true;
+        } else {
+          console.error('❌ Final webhook failed:', result.error || 'Unknown error');
+        }
       } catch (finalError) {
-        console.error('❌ Final webhook failed:', finalError.message);
+        console.error('❌ Final webhook exception:', finalError.message);
+        console.error('❌ Full error:', finalError);
       }
+    } else {
+      console.log('🚫 Final webhook skipped:');
+      console.log(`   webhookSent: ${webhookSent}`);
+      console.log(`   callId: ${connectionData.callId}`);
+      console.log(`   questionsCompleted: ${discoveryProgress.questionsCompleted}`);
     }
     
     // Clean up
