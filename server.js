@@ -1673,4 +1673,4 @@ wss.on('connection', async (ws, req) => {
             break;
           }
         } catch (endpointError) {
-          console.log(`Endpoint ${endpoint} failed:`, endp
+          console.log(`Endpoint ${endpoint} failed:`, endpointError.message);
