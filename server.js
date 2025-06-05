@@ -1,4 +1,4 @@
-// Complete Calendly-Nexella-Sarah.js with Google Calendar integration - PART 1
+// Complete Calendly-Nexella-Sarah.js with Google Calendar integration - UPDATED
 require('dotenv').config();
 const express = require('express');
 const { WebSocketServer } = require('ws');
@@ -31,7 +31,107 @@ app.get('/', (req, res) => {
 });
 
 // Store active calls metadata
-const activeCallsMetadata = new Map();// PART 2: Helper Functions
+const activeCallsMetadata = new Map();
+
+// NEW: Calendar Debug Endpoints
+app.get('/debug-calendar', async (req, res) => {
+  try {
+    console.log('🧪 Testing calendar service...');
+    
+    // Check initialization
+    const isInitialized = calendarService && calendarService.initialized;
+    console.log('Calendar service initialized:', isInitialized);
+    
+    // Check environment variables
+    const envCheck = {
+      GOOGLE_PROJECT_ID: !!process.env.GOOGLE_PROJECT_ID,
+      GOOGLE_PRIVATE_KEY: !!process.env.GOOGLE_PRIVATE_KEY,
+      GOOGLE_CLIENT_EMAIL: !!process.env.GOOGLE_CLIENT_EMAIL,
+      GOOGLE_CALENDAR_ID: !!process.env.GOOGLE_CALENDAR_ID
+    };
+    console.log('Environment variables:', envCheck);
+    
+    let testResults = {
+      initialized: isInitialized,
+      environment: envCheck,
+      connectionTest: null,
+      availabilityTest: null,
+      error: null
+    };
+    
+    if (isInitialized) {
+      try {
+        // Test connection
+        await calendarService.testConnection();
+        testResults.connectionTest = 'SUCCESS';
+        console.log('✅ Connection test passed');
+        
+        // Test getting availability for today
+        const today = new Date();
+        const slots = await calendarService.getAvailableSlots(today);
+        testResults.availabilityTest = {
+          slotsFound: slots.length,
+          sampleSlots: slots.slice(0, 3)
+        };
+        console.log(`✅ Found ${slots.length} available slots`);
+        
+      } catch (testError) {
+        testResults.error = testError.message;
+        console.error('❌ Calendar test failed:', testError);
+      }
+    }
+    
+    res.json(testResults);
+  } catch (error) {
+    console.error('❌ Debug endpoint error:', error);
+    res.status(500).json({
+      error: error.message,
+      stack: error.stack
+    });
+  }
+});
+
+// Test specific Friday 10 AM availability
+app.get('/test-friday-10am', async (req, res) => {
+  try {
+    console.log('🧪 Testing Friday 10 AM availability...');
+    
+    // Create Friday 10 AM time slot
+    const now = new Date();
+    const friday = new Date(now);
+    
+    // Find next Friday
+    const dayOfWeek = friday.getDay();
+    const daysUntilFriday = (5 - dayOfWeek + 7) % 7 || 7; // 5 = Friday
+    friday.setDate(friday.getDate() + daysUntilFriday);
+    friday.setHours(10, 0, 0, 0); // 10 AM
+    
+    const endTime = new Date(friday);
+    endTime.setHours(11, 0, 0, 0); // 11 AM
+    
+    console.log('Testing slot:', friday.toISOString(), 'to', endTime.toISOString());
+    
+    const isAvailable = await calendarService.isSlotAvailable(
+      friday.toISOString(),
+      endTime.toISOString()
+    );
+    
+    console.log('Slot available:', isAvailable);
+    
+    res.json({
+      requestedTime: friday.toISOString(),
+      endTime: endTime.toISOString(),
+      available: isAvailable,
+      formatted: friday.toLocaleString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Friday test error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PART 2: Helper Functions
 
 // Enhanced function to store contact info globally with multiple fallbacks
 function storeContactInfoGlobally(name, email, phone, source = 'Unknown') {
@@ -90,6 +190,7 @@ async function updateConversationState(callId, discoveryComplete, preferredDay) 
     return false;
   }
 }
+
 // PART 3: Enhanced Webhook Function (First Half)
 
 // ENHANCED: Send scheduling data with Google Calendar booking
@@ -154,6 +255,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       console.error('❌ CRITICAL: No email found from any source. Cannot send webhook.');
       return { success: false, error: 'No email address available' };
     }
+
     // PART 4: Enhanced Webhook Function (Second Half)
 
     // ENHANCED: Process discovery data with better field mapping
@@ -226,7 +328,8 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     if (finalPhone && !finalPhone.startsWith('+')) {
       finalPhone = '+1' + finalPhone.replace(/[^0-9]/g, '');
     }
-    // PART 5: Google Calendar Booking Logic
+
+    // PART 5: Enhanced Google Calendar Booking Logic with Debug
 
     // NEW: Instead of just sending a scheduling link, now we create the actual calendar event
     let bookingResult = null;
@@ -235,63 +338,103 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     if (preferredDay && preferredDay !== 'Call ended early' && preferredDay !== 'Error occurred') {
       try {
         console.log('📅 Attempting to book Google Calendar appointment...');
+        console.log('📋 Calendar service initialized:', calendarService.initialized);
+        console.log('📋 Calendar service object:', calendarService);
         
-        // Parse the preferred day/time
-        const timePreference = calendarService.parseTimePreference('', preferredDay);
-        console.log('⏰ Parsed time preference:', timePreference);
-        
-        // Get available slots for the preferred day
-        const availableSlots = await getAvailableTimeSlots(timePreference.preferredDateTime);
-        console.log(`📋 Found ${availableSlots.length} available slots`);
-        
-        if (availableSlots.length > 0) {
-          // Use the first available slot closest to their preference
-          const selectedSlot = availableSlots[0];
+        // First, test if calendar service is working
+        if (!calendarService || !calendarService.initialized) {
+          console.error('❌ Calendar service not initialized properly');
+          console.log('Environment variables check:');
+          console.log('- GOOGLE_PROJECT_ID:', process.env.GOOGLE_PROJECT_ID ? 'Present' : 'Missing');
+          console.log('- GOOGLE_PRIVATE_KEY:', process.env.GOOGLE_PRIVATE_KEY ? 'Present' : 'Missing');
+          console.log('- GOOGLE_CLIENT_EMAIL:', process.env.GOOGLE_CLIENT_EMAIL ? 'Present' : 'Missing');
+          console.log('- GOOGLE_CALENDAR_ID:', process.env.GOOGLE_CALENDAR_ID ? 'Present' : 'Missing');
+        } else {
+          // Parse the preferred day/time
+          const timePreference = calendarService.parseTimePreference('', preferredDay);
+          console.log('⏰ Parsed time preference:', timePreference);
           
-          // Create the calendar event
-          bookingResult = await calendarService.createEvent({
-            summary: 'Nexella AI Consultation Call',
-            description: `Discovery call with ${finalName}\n\nDiscovery Notes:\n${Object.entries(formattedDiscoveryData).map(([key, value]) => `${key}: ${value}`).join('\n')}`,
-            startTime: selectedSlot.startTime,
-            endTime: selectedSlot.endTime,
-            attendeeEmail: finalEmail,
-            attendeeName: finalName
-          });
+          // Get available slots for the preferred day
+          console.log('📋 Getting available slots...');
+          const availableSlots = await getAvailableTimeSlots(timePreference.preferredDateTime);
+          console.log(`📋 Found ${availableSlots.length} available slots:`, availableSlots);
           
-          if (bookingResult.success) {
-            meetingDetails = {
-              eventId: bookingResult.eventId,
-              meetingLink: bookingResult.meetingLink,
-              eventLink: bookingResult.eventLink,
+          if (availableSlots.length > 0) {
+            // Use the first available slot closest to their preference
+            const selectedSlot = availableSlots[0];
+            console.log('📅 Selected slot:', selectedSlot);
+            
+            // Create the calendar event
+            console.log('📅 Creating calendar event...');
+            bookingResult = await calendarService.createEvent({
+              summary: 'Nexella AI Consultation Call',
+              description: `Discovery call with ${finalName}\n\nDiscovery Notes:\n${Object.entries(formattedDiscoveryData).map(([key, value]) => `${key}: ${value}`).join('\n')}`,
               startTime: selectedSlot.startTime,
               endTime: selectedSlot.endTime,
-              displayTime: selectedSlot.displayTime
-            };
-            console.log('✅ Calendar event created successfully:', meetingDetails);
+              attendeeEmail: finalEmail,
+              attendeeName: finalName
+            });
+            
+            console.log('📅 Calendar event creation result:', bookingResult);
+            
+            if (bookingResult.success) {
+              meetingDetails = {
+                eventId: bookingResult.eventId,
+                meetingLink: bookingResult.meetingLink,
+                eventLink: bookingResult.eventLink,
+                startTime: selectedSlot.startTime,
+                endTime: selectedSlot.endTime,
+                displayTime: selectedSlot.displayTime
+              };
+              console.log('✅ Calendar event created successfully:', meetingDetails);
+            } else {
+              console.error('❌ Calendar event creation failed:', bookingResult.error);
+            }
+          } else {
+            console.log('⚠️ No available slots found for the requested time');
           }
         }
       } catch (calendarError) {
-        console.error('❌ Error booking calendar appointment:', calendarError);
+        console.error('❌ Error in calendar booking process:', calendarError);
+        console.error('❌ Calendar error stack:', calendarError.stack);
       }
     }
     
-    // Create the webhook payload
+    // FIXED: Create the webhook payload with proper structure
     const webhookData = {
       name: finalName || '',
       email: finalEmail,
       phone: finalPhone || '',
       preferredDay: preferredDay || '',
       call_id: callId || '',
-      schedulingComplete: true,
+      
+      // CRITICAL: These fields control the N8N flow
+      schedulingComplete: true,  // This should always be true to continue the flow
+      scheduling_complete: true, // Alternative field name for compatibility
+      
+      // Discovery data
       discovery_data: formattedDiscoveryData,
       formatted_discovery: formattedDiscoveryData,
-      // Google Calendar specific fields
+      
+      // Google Calendar specific fields - set these based on booking success
       calendar_booking: bookingResult?.success || false,
-      meeting_link: meetingDetails?.meetingLink || '',
-      event_link: meetingDetails?.eventLink || '',
-      event_id: meetingDetails?.eventId || '',
-      scheduled_time: meetingDetails?.startTime || '',
-      // Individual fields for direct access
+      calendar_platform: 'google',
+      booking_method: bookingResult?.success ? 'automatic' : 'manual',
+      
+      // Only include these if booking was successful
+      ...(bookingResult?.success ? {
+        meeting_link: meetingDetails?.meetingLink || '',
+        event_link: meetingDetails?.eventLink || '',
+        event_id: meetingDetails?.eventId || '',
+        scheduled_time: meetingDetails?.startTime || '',
+      } : {
+        meeting_link: '',
+        event_link: '', 
+        event_id: '',
+        scheduled_time: '',
+      }),
+      
+      // Individual discovery fields for direct access in N8N
       "How did you hear about us": formattedDiscoveryData["How did you hear about us"] || '',
       "Business/Industry": formattedDiscoveryData["Business/Industry"] || '',
       "Main product": formattedDiscoveryData["Main product"] || '',
@@ -315,6 +458,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       booking: bookingResult,
       meetingDetails
     };
+
     // PART 6: Error Handling and Fallback Logic
 
   } catch (error) {
@@ -378,6 +522,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
         preferredDay: preferredDay || '',
         call_id: callId || '',
         schedulingComplete: true,
+        scheduling_complete: true,
         discovery_data: formattedDiscoveryData,
         formatted_discovery: formattedDiscoveryData,
         calendar_booking: false, // Failed to book
@@ -405,6 +550,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     }
   }
 } // End of sendSchedulingPreference function
+
 // PART 7: Scheduling Helper Functions
 
 // IMPROVED: Better detection of scheduling preferences with calendar integration
@@ -513,6 +659,7 @@ async function suggestAlternativeTime(preferredDate, userMessage) {
     return "Let me check my calendar and find some good times for our meeting.";
   }
 }
+
 // PART 8: HTTP Endpoint for Retell Calls
 
 // HTTP Request - Trigger Retell Call
@@ -573,6 +720,7 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
     });
   }
 });
+
 // PART 9: WebSocket Connection Handler - Setup
 
 // ENHANCED WEBSOCKET CONNECTION HANDLER
@@ -665,6 +813,7 @@ wss.on('connection', async (ws, req) => {
   }
   
   console.log('Retell connected via WebSocket.');
+
   // PART 10: Discovery Questions System
 
   const discoveryQuestions = [
@@ -766,6 +915,7 @@ wss.on('connection', async (ws, req) => {
         return "Perfect, thank you.";
     }
   }
+
   // PART 11: Question Detection and Answer Capture
 
   function detectQuestionAsked(botMessage) {
@@ -862,6 +1012,7 @@ wss.on('connection', async (ws, req) => {
       
     }, 3000);
   }
+
   // PART 12: System Prompt and Initial Setup
 
   let conversationHistory = [
@@ -993,6 +1144,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
       }));
     }
   }, 8000);
+
   // PART 13: Message Handler - First Half
 
   ws.on('message', async (data) => {
@@ -1084,6 +1236,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
           console.log('⚠️ Could not fetch contact info from trigger server:', triggerError.message);
         }
       }
+
       // PART 14: Message Handler - Response Processing
 
       if (parsed.interaction_type === 'response_required') {
@@ -1178,6 +1331,7 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
             contextPrompt = '\n\nAll 6 discovery questions completed. Ask for their preferred day and time for scheduling.';
           }
         }
+
         // PART 15: OpenAI Processing and Webhook Logic
 
         const messages = [...conversationHistory];
@@ -1291,6 +1445,7 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
       }));
     }
   });
+
   // PART 16: Connection Close Handler and Final Endpoints
 
   ws.on('close', async () => {
@@ -1468,6 +1623,7 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
             call_status: call.call_status,
             discovery_data: discoveryData,
             schedulingComplete: true,
+            scheduling_complete: true,
             calendar_platform: 'google',
             calendar_booking: false
           });
