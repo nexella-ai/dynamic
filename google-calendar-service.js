@@ -86,7 +86,7 @@ class GoogleCalendarService {
     }
   }
 
-  // Enhanced availability checking with detailed logging
+  // FIXED: Enhanced availability checking with detailed logging
   async isSlotAvailable(startTime, endTime) {
     if (!this.initialized) {
       console.warn('⚠️ Google Calendar service not initialized - returning false');
@@ -97,25 +97,78 @@ class GoogleCalendarService {
       console.log(`🔍 Checking availability for slot: ${startTime} to ${endTime}`);
       const calendarId = process.env.GOOGLE_CALENDAR_ID || 'primary';
       
-      // Use freebusy query for more accurate availability checking
-      const response = await this.calendar.freebusy.query({
-        resource: {
+      // Convert to Date objects for easier comparison
+      const requestStart = new Date(startTime);
+      const requestEnd = new Date(endTime);
+      
+      console.log('📅 Converted times:', {
+        requestStart: requestStart.toISOString(),
+        requestEnd: requestEnd.toISOString(),
+        requestStartLocal: requestStart.toLocaleString(),
+        requestEndLocal: requestEnd.toLocaleString()
+      });
+      
+      // Use both freebusy and events list for double-checking
+      const [freebusyResponse, eventsResponse] = await Promise.all([
+        this.calendar.freebusy.query({
+          resource: {
+            timeMin: startTime,
+            timeMax: endTime,
+            timeZone: 'America/Los_Angeles',
+            items: [{ id: calendarId }]
+          }
+        }),
+        this.calendar.events.list({
+          calendarId: calendarId,
           timeMin: startTime,
           timeMax: endTime,
-          timeZone: 'America/Los_Angeles',
-          items: [{ id: calendarId }]
+          singleEvents: true,
+          orderBy: 'startTime'
+        })
+      ]);
+
+      console.log('📊 Freebusy response:', JSON.stringify(freebusyResponse.data, null, 2));
+      console.log('📊 Events response:', JSON.stringify(eventsResponse.data.items, null, 2));
+
+      const busyTimes = freebusyResponse.data.calendars[calendarId]?.busy || [];
+      const existingEvents = eventsResponse.data.items || [];
+      
+      // Check freebusy conflicts
+      const freebusyConflict = busyTimes.length > 0;
+      console.log(`⏰ Freebusy conflicts: ${freebusyConflict}`, busyTimes);
+      
+      // Check events conflicts with detailed logging
+      let eventsConflict = false;
+      existingEvents.forEach(event => {
+        const eventStart = new Date(event.start.dateTime || event.start.date);
+        const eventEnd = new Date(event.end.dateTime || event.end.date);
+        
+        console.log(`📅 Checking event: "${event.summary}"`, {
+          eventStart: eventStart.toISOString(),
+          eventEnd: eventEnd.toISOString(),
+          eventStartLocal: eventStart.toLocaleString(),
+          eventEndLocal: eventEnd.toLocaleString()
+        });
+        
+        // Check for time overlap: events overlap if start < otherEnd && end > otherStart
+        const hasOverlap = requestStart < eventEnd && requestEnd > eventStart;
+        
+        if (hasOverlap) {
+          console.log(`❌ CONFLICT DETECTED with event: "${event.summary}"`);
+          console.log(`   Requested: ${requestStart.toLocaleString()} - ${requestEnd.toLocaleString()}`);
+          console.log(`   Existing:  ${eventStart.toLocaleString()} - ${eventEnd.toLocaleString()}`);
+          eventsConflict = true;
+        } else {
+          console.log(`✅ No conflict with event: "${event.summary}"`);
         }
       });
-
-      console.log('📊 Freebusy response:', JSON.stringify(response.data, null, 2));
-
-      const busyTimes = response.data.calendars[calendarId]?.busy || [];
-      const isAvailable = busyTimes.length === 0;
       
-      console.log(`📅 Slot ${startTime} to ${endTime}: ${isAvailable ? 'AVAILABLE' : 'BUSY'}`);
-      if (!isAvailable) {
-        console.log('⏰ Busy times found:', busyTimes);
-      }
+      const isAvailable = !freebusyConflict && !eventsConflict;
+      
+      console.log(`📅 AVAILABILITY RESULT for ${requestStart.toLocaleString()}-${requestEnd.toLocaleString()}:`);
+      console.log(`   Freebusy conflict: ${freebusyConflict}`);
+      console.log(`   Events conflict: ${eventsConflict}`);
+      console.log(`   FINAL RESULT: ${isAvailable ? 'AVAILABLE' : 'NOT AVAILABLE'}`);
       
       return isAvailable;
     } catch (error) {
@@ -125,7 +178,7 @@ class GoogleCalendarService {
     }
   }
 
-  // Enhanced method to get available slots with better conflict detection
+  // FIXED: Enhanced method to get available slots with better conflict detection
   async getAvailableSlots(date, duration = 60) {
     if (!this.initialized) {
       console.warn('⚠️ Google Calendar service not initialized - returning empty array');
@@ -174,14 +227,18 @@ class GoogleCalendarService {
       if (existingEvents.length > 0) {
         console.log('📅 Existing events:');
         existingEvents.forEach(event => {
-          console.log(`   - ${event.summary}: ${event.start.dateTime || event.start.date} to ${event.end.dateTime || event.end.date}`);
+          const start = new Date(event.start.dateTime || event.start.date);
+          const end = new Date(event.end.dateTime || event.end.date);
+          console.log(`   - "${event.summary}": ${start.toLocaleString()} to ${end.toLocaleString()}`);
         });
       }
 
       if (busyTimes.length > 0) {
         console.log('⏰ Busy times:');
         busyTimes.forEach(busy => {
-          console.log(`   - ${busy.start} to ${busy.end}`);
+          const start = new Date(busy.start);
+          const end = new Date(busy.end);
+          console.log(`   - ${start.toLocaleString()} to ${end.toLocaleString()}`);
         });
       }
 
@@ -193,22 +250,40 @@ class GoogleCalendarService {
       while (current < endOfDay) {
         const slotEnd = new Date(current.getTime() + slotDuration);
         
+        // Don't go past business hours
+        if (slotEnd > endOfDay) {
+          break;
+        }
+        
+        console.log(`🕐 Testing slot: ${current.toLocaleString()} - ${slotEnd.toLocaleString()}`);
+        
         // Check conflicts with both events and busy times
         const hasEventConflict = existingEvents.some(event => {
           const eventStart = new Date(event.start.dateTime || event.start.date);
           const eventEnd = new Date(event.end.dateTime || event.end.date);
-          return (current < eventEnd && slotEnd > eventStart);
+          const overlap = current < eventEnd && slotEnd > eventStart;
+          
+          if (overlap) {
+            console.log(`   ❌ Conflicts with event: "${event.summary}" (${eventStart.toLocaleString()} - ${eventEnd.toLocaleString()})`);
+          }
+          return overlap;
         });
 
         const hasBusyConflict = busyTimes.some(busy => {
           const busyStart = new Date(busy.start);
           const busyEnd = new Date(busy.end);
-          return (current < busyEnd && slotEnd > busyStart);
+          const overlap = current < busyEnd && slotEnd > busyStart;
+          
+          if (overlap) {
+            console.log(`   ❌ Conflicts with busy time: ${busyStart.toLocaleString()} - ${busyEnd.toLocaleString()}`);
+          }
+          return overlap;
         });
 
         const hasConflict = hasEventConflict || hasBusyConflict;
 
         if (!hasConflict) {
+          console.log(`   ✅ Slot is available`);
           availableSlots.push({
             startTime: current.toISOString(),
             endTime: slotEnd.toISOString(),
@@ -217,16 +292,23 @@ class GoogleCalendarService {
               minute: '2-digit',
               hour12: true
             }),
-            date: current.toLocaleDateString()
+            date: current.toLocaleDateString(),
+            dateTime: current.toLocaleString()
           });
-        } else {
-          console.log(`❌ Slot ${current.toLocaleTimeString()} blocked by ${hasEventConflict ? 'event' : 'busy time'}`);
         }
 
         current.setMinutes(current.getMinutes() + 30); // 30-minute intervals
       }
 
-      console.log(`✅ Found ${availableSlots.length} available slots`);
+      console.log(`✅ Found ${availableSlots.length} available slots for ${targetDate.toDateString()}`);
+      
+      if (availableSlots.length > 0) {
+        console.log('Available slots:');
+        availableSlots.slice(0, 5).forEach((slot, index) => {
+          console.log(`   ${index + 1}. ${slot.displayTime} (${slot.dateTime})`);
+        });
+      }
+
       return availableSlots;
     } catch (error) {
       console.error('❌ Error getting available slots:', error.message);
@@ -345,61 +427,106 @@ class GoogleCalendarService {
     }
   }
 
-  // Parse user input for preferred times (same as before but with logging)
+  // ENHANCED: Parse user input for preferred times with better time extraction
   parseTimePreference(userInput, preferredDay) {
     console.log(`🔤 Parsing time preference: "${userInput}" for day: "${preferredDay}"`);
     
-    const input = userInput.toLowerCase();
+    // Combine both inputs for parsing
+    const fullInput = `${userInput} ${preferredDay}`.toLowerCase();
     const today = new Date();
     let targetDate = new Date();
 
-    // Handle day preferences
-    if (preferredDay) {
-      const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-      const dayIndex = days.findIndex(day => preferredDay.toLowerCase().includes(day));
+    // Handle day preferences with better parsing
+    const dayMatch = fullInput.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\b/i);
+    const timeMatch = fullInput.match(/\b(\d{1,2})\s*(am|pm|a\.?m\.?|p\.?m\.?)\b/i);
+    const hourMatch = fullInput.match(/\b(\d{1,2})\b/);
+    
+    console.log('🔍 Parsing matches:', {
+      dayMatch: dayMatch?.[0],
+      timeMatch: timeMatch?.[0], 
+      hourMatch: hourMatch?.[0],
+      fullInput
+    });
+
+    if (dayMatch) {
+      const preferredDayName = dayMatch[0].toLowerCase();
+      console.log('📅 Found day:', preferredDayName);
       
-      if (dayIndex !== -1) {
-        const currentDay = today.getDay();
-        let daysToAdd = dayIndex - currentDay;
-        if (daysToAdd <= 0) daysToAdd += 7; // Next week if day has passed
+      if (preferredDayName === 'tomorrow') {
+        targetDate.setDate(targetDate.getDate() + 1);
+      } else if (preferredDayName === 'today') {
+        // Keep today's date
+      } else {
+        // Handle specific day of week
+        const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+        const dayIndex = days.indexOf(preferredDayName);
         
-        targetDate.setDate(today.getDate() + daysToAdd);
+        if (dayIndex !== -1) {
+          const currentDay = today.getDay();
+          let daysToAdd = dayIndex - currentDay;
+          if (daysToAdd <= 0) daysToAdd += 7; // Next week if day has passed
+          
+          targetDate.setDate(today.getDate() + daysToAdd);
+          console.log('📅 Calculated target date:', targetDate.toDateString());
+        }
       }
     }
 
-    // Handle time preferences
+    // Handle time preferences with better parsing
     let preferredHour = 10; // Default 10 AM
     
-    // Morning preferences
-    if (input.includes('morning') || input.includes('9') || input.includes('10') || input.includes('11')) {
-      if (input.includes('9')) preferredHour = 9;
-      else if (input.includes('10')) preferredHour = 10;
-      else if (input.includes('11')) preferredHour = 11;
-      else preferredHour = 10; // Default morning
+    if (timeMatch) {
+      // Parse specific time like "10am" or "2pm"
+      const hour = parseInt(timeMatch[1]);
+      const ampm = timeMatch[2].toLowerCase();
+      
+      if (ampm.includes('p') && hour !== 12) {
+        preferredHour = hour + 12; // Convert PM to 24-hour
+      } else if (ampm.includes('a') && hour === 12) {
+        preferredHour = 0; // 12 AM = 0 hours
+      } else {
+        preferredHour = hour;
+      }
+      
+      console.log(`⏰ Parsed specific time: ${hour}${ampm} -> ${preferredHour}:00`);
+    } else if (hourMatch && !timeMatch) {
+      // Just a number like "10" - assume AM for business hours
+      const hour = parseInt(hourMatch[1]);
+      if (hour >= 8 && hour <= 12) {
+        preferredHour = hour; // Morning hours
+      } else if (hour >= 1 && hour <= 5) {
+        preferredHour = hour + 12; // Afternoon hours
+      }
+      console.log(`⏰ Parsed hour only: ${hour} -> ${preferredHour}:00`);
+    } else if (fullInput.includes('morning')) {
+      preferredHour = 10;
+      console.log('⏰ Defaulted to morning: 10:00');
+    } else if (fullInput.includes('afternoon')) {
+      preferredHour = 14; // 2 PM
+      console.log('⏰ Defaulted to afternoon: 14:00');
+    } else if (fullInput.includes('evening')) {
+      preferredHour = 16; // 4 PM
+      console.log('⏰ Defaulted to evening: 16:00');
     }
-    // Afternoon preferences
-    else if (input.includes('afternoon') || input.includes('1') || input.includes('2') || input.includes('3')) {
-      if (input.includes('1')) preferredHour = 13;
-      else if (input.includes('2')) preferredHour = 14;
-      else if (input.includes('3')) preferredHour = 15;
-      else preferredHour = 14; // Default afternoon
-    }
-    // Evening preferences
-    else if (input.includes('evening') || input.includes('4') || input.includes('5')) {
-      if (input.includes('4')) preferredHour = 16;
-      else if (input.includes('5')) preferredHour = 17;
-      else preferredHour = 16; // Default evening
-    }
+
+    // Ensure hour is within business hours (9 AM - 5 PM)
+    if (preferredHour < 9) preferredHour = 9;
+    if (preferredHour > 17) preferredHour = 17;
 
     targetDate.setHours(preferredHour, 0, 0, 0);
     
     const result = {
       preferredDateTime: targetDate,
       preferredHour,
-      dayName: targetDate.toLocaleDateString('en-US', { weekday: 'long' })
+      dayName: targetDate.toLocaleDateString('en-US', { weekday: 'long' }),
+      timeString: targetDate.toLocaleTimeString('en-US', { 
+        hour: 'numeric', 
+        minute: '2-digit', 
+        hour12: true 
+      })
     };
     
-    console.log('📅 Parsed time preference result:', result);
+    console.log('📅 Final parsed time preference:', result);
     return result;
   }
 
