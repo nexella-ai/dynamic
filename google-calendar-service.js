@@ -1,4 +1,4 @@
-// google-calendar-service.js - Complete Google Calendar Integration - FIXED VERSION
+// google-calendar-service.js - REAL Google Calendar Integration Only - NO MOCK DATA
 const { google } = require('googleapis');
 const fs = require('fs').promises;
 const path = require('path');
@@ -22,29 +22,31 @@ class GoogleCalendarService {
 
   async initialize() {
     try {
-      console.log('🔧 Initializing Google Calendar service...');
+      console.log('🔧 Initializing REAL Google Calendar service...');
       
       // Try different authentication methods
       await this.setupAuthentication();
       
       if (this.auth) {
         this.calendar = google.calendar({ version: 'v3', auth: this.auth });
-        console.log('✅ Google Calendar service initialized successfully');
+        console.log('✅ REAL Google Calendar service initialized successfully');
         
         // Test the connection
         await this.testConnection();
       } else {
-        console.warn('⚠️ Google Calendar authentication not configured. Calendar features will be disabled.');
+        console.error('❌ Google Calendar authentication FAILED - Calendar features will NOT work');
+        throw new Error('Calendar authentication required but not configured');
       }
     } catch (error) {
-      console.error('❌ Failed to initialize Google Calendar service:', error.message);
-      console.warn('⚠️ Calendar features will be disabled.');
+      console.error('❌ CRITICAL: Failed to initialize Google Calendar service:', error.message);
+      console.error('❌ Calendar features are DISABLED. Fix authentication to enable scheduling.');
+      throw error; // Don't allow fallback - require real calendar
     }
   }
 
   async setupAuthentication() {
     try {
-      // Method 1: Individual Environment Variables (NEW - for your setup)
+      // Method 1: Individual Environment Variables (PRIMARY - for your setup)
       if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_PRIVATE_KEY && process.env.GOOGLE_CLIENT_EMAIL) {
         console.log('🔐 Using individual environment variables for authentication...');
         
@@ -74,9 +76,9 @@ class GoogleCalendarService {
         return;
       }
 
-      // Method 2: Service Account JSON (Original method)
+      // Method 2: Service Account JSON (Fallback)
       if (process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
-        console.log('🔐 Using Service Account authentication...');
+        console.log('🔐 Using Service Account JSON authentication...');
         const serviceAccountKey = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY);
         
         this.auth = new google.auth.GoogleAuth({
@@ -84,11 +86,11 @@ class GoogleCalendarService {
           scopes: ['https://www.googleapis.com/auth/calendar']
         });
         
-        console.log('✅ Service Account authentication configured');
+        console.log('✅ Service Account JSON authentication configured');
         return;
       }
 
-      // Method 3: Service Account from file
+      // Method 3: Service Account from file (Development only)
       const serviceAccountPath = path.join(__dirname, 'service-account.json');
       try {
         await fs.access(serviceAccountPath);
@@ -105,7 +107,7 @@ class GoogleCalendarService {
         console.log('ℹ️ No service account file found');
       }
 
-      // Method 4: OAuth2 (for development)
+      // Method 4: OAuth2 (Development only)
       if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_REFRESH_TOKEN) {
         console.log('🔐 Using OAuth2 authentication...');
         
@@ -124,11 +126,11 @@ class GoogleCalendarService {
         return;
       }
 
-      throw new Error('No valid Google Calendar authentication method found. Please check your environment variables.');
+      throw new Error('CRITICAL: No valid Google Calendar authentication method found. Please check your environment variables.');
       
     } catch (error) {
-      console.error('❌ Authentication setup failed:', error.message);
-      console.log('🔍 Available environment variables:');
+      console.error('❌ Authentication setup FAILED:', error.message);
+      console.log('🔍 Required environment variables:');
       console.log('   GOOGLE_PROJECT_ID:', !!process.env.GOOGLE_PROJECT_ID);
       console.log('   GOOGLE_PRIVATE_KEY:', !!process.env.GOOGLE_PRIVATE_KEY);
       console.log('   GOOGLE_CLIENT_EMAIL:', !!process.env.GOOGLE_CLIENT_EMAIL);
@@ -139,14 +141,14 @@ class GoogleCalendarService {
 
   async testConnection() {
     try {
-      console.log('🧪 Testing Google Calendar connection...');
+      console.log('🧪 Testing REAL Google Calendar connection...');
       console.log('📅 Using calendar ID:', this.calendarId);
       
       const response = await this.calendar.calendars.get({
         calendarId: this.calendarId
       });
       
-      console.log(`✅ Connected to calendar: ${response.data.summary}`);
+      console.log(`✅ Connected to REAL calendar: ${response.data.summary}`);
       console.log(`📅 Calendar ID: ${this.calendarId}`);
       console.log(`🌍 Timezone: ${response.data.timeZone || this.timezone}`);
       
@@ -157,7 +159,7 @@ class GoogleCalendarService {
       
       return true;
     } catch (error) {
-      console.error('❌ Calendar connection test failed:', error.message);
+      console.error('❌ REAL Calendar connection test FAILED:', error.message);
       if (error.message.includes('Not Found')) {
         console.error('🔍 Calendar not found. Check your GOOGLE_CALENDAR_ID and ensure the calendar is shared with the service account.');
       }
@@ -165,14 +167,12 @@ class GoogleCalendarService {
     }
   }
 
-  // FIXED: Get available time slots for a specific date with detailed debugging
+  // REAL CALENDAR ONLY: Get available time slots for a specific date
   async getAvailableSlots(date) {
     try {
       if (!this.calendar) {
-        console.error('❌ Calendar not initialized - this should not happen!');
-        console.log('🔧 Auth status:', !!this.auth);
-        console.log('🔧 Calendar ID:', this.calendarId);
-        return [];
+        console.error('❌ CRITICAL: Calendar not initialized - cannot get slots');
+        throw new Error('Calendar service not available - check authentication');
       }
 
       console.log(`📅 [REAL CALENDAR] Getting available slots for: ${date}`);
@@ -196,7 +196,7 @@ class GoogleCalendarService {
         return [];
       }
 
-      // Get start and end of day in Phoenix timezone
+      // Get start and end of day in timezone
       const startOfDay = new Date(targetDate);
       startOfDay.setHours(this.businessHours.start, 0, 0, 0);
       
@@ -286,19 +286,19 @@ class GoogleCalendarService {
     } catch (error) {
       console.error('❌ [REAL CALENDAR] Error getting available slots:', error.message);
       console.error('❌ Full error:', error);
-      return []; // Return empty array instead of mock data
+      throw error; // Don't return empty array - let caller handle the error
     }
   }
 
-  // Check if a specific time slot is available
+  // REAL CALENDAR ONLY: Check if a specific time slot is available
   async isSlotAvailable(startTime, endTime) {
     try {
       if (!this.calendar) {
-        console.warn('⚠️ Calendar not initialized, returning mock availability');
-        return Math.random() > 0.3; // 70% chance of being available
+        console.error('❌ CRITICAL: Calendar not initialized - cannot check availability');
+        throw new Error('Calendar service not available - check authentication');
       }
 
-      console.log(`🔍 Checking if slot is available: ${startTime} to ${endTime}`);
+      console.log(`🔍 [REAL CALENDAR] Checking if slot is available: ${startTime} to ${endTime}`);
 
       const response = await this.calendar.events.list({
         calendarId: this.calendarId,
@@ -310,32 +310,28 @@ class GoogleCalendarService {
       const events = response.data.items || [];
       const isAvailable = events.length === 0;
       
-      console.log(`📊 Slot availability: ${isAvailable ? 'Available ✅' : 'Booked ❌'}`);
+      console.log(`📊 [REAL CALENDAR] Slot availability: ${isAvailable ? 'Available ✅' : 'Booked ❌'}`);
+      if (!isAvailable) {
+        console.log(`📋 Conflicts with ${events.length} event(s):`, events.map(e => e.summary).join(', '));
+      }
       
       return isAvailable;
 
     } catch (error) {
-      console.error('❌ Error checking slot availability:', error.message);
-      // Fallback: assume available
-      return true;
+      console.error('❌ [REAL CALENDAR] Error checking slot availability:', error.message);
+      throw error; // Don't fallback - require real calendar data
     }
   }
 
-  // Create a calendar event
+  // REAL CALENDAR ONLY: Create a calendar event
   async createEvent(eventDetails) {
     try {
       if (!this.calendar) {
-        console.warn('⚠️ Calendar not initialized, simulating event creation');
-        return {
-          success: true,
-          eventId: `mock_event_${Date.now()}`,
-          meetingLink: 'https://meet.google.com/mock-meeting',
-          eventLink: `https://calendar.google.com/event?mock=${Date.now()}`,
-          message: 'Mock event created (calendar not configured)'
-        };
+        console.error('❌ CRITICAL: Calendar not initialized - cannot create event');
+        throw new Error('Calendar service not available - check authentication');
       }
 
-      console.log('📅 Creating calendar event:', eventDetails);
+      console.log('📅 [REAL CALENDAR] Creating calendar event:', eventDetails);
 
       const event = {
         summary: eventDetails.summary || 'Nexella AI Consultation Call',
@@ -380,7 +376,8 @@ class GoogleCalendarService {
 
       const createdEvent = response.data;
       
-      console.log('✅ Calendar event created successfully:', createdEvent.id);
+      console.log('✅ [REAL CALENDAR] Event created successfully:', createdEvent.id);
+      console.log('📧 Calendar invitation sent to:', eventDetails.attendeeEmail);
 
       return {
         success: true,
@@ -391,7 +388,8 @@ class GoogleCalendarService {
       };
 
     } catch (error) {
-      console.error('❌ Error creating calendar event:', error.message);
+      console.error('❌ [REAL CALENDAR] Error creating calendar event:', error.message);
+      console.error('❌ Event creation failed for:', eventDetails.attendeeEmail);
       return {
         success: false,
         error: error.message,
@@ -463,10 +461,15 @@ class GoogleCalendarService {
     };
   }
 
-  // Get next 7 days of available slots
+  // REAL CALENDAR ONLY: Get next 7 days of available slots
   async getUpcomingAvailableSlots(daysAhead = 7) {
     try {
-      console.log(`📅 Getting upcoming available slots for next ${daysAhead} days`);
+      if (!this.calendar) {
+        console.error('❌ CRITICAL: Calendar not initialized - cannot get upcoming slots');
+        throw new Error('Calendar service not available - check authentication');
+      }
+
+      console.log(`📅 [REAL CALENDAR] Getting upcoming available slots for next ${daysAhead} days`);
       
       const allSlots = [];
       const today = new Date();
@@ -475,30 +478,80 @@ class GoogleCalendarService {
         const date = new Date(today);
         date.setDate(today.getDate() + i);
         
-        const slots = await this.getAvailableSlots(date);
-        if (slots.length > 0) {
-          allSlots.push({
-            date: date.toDateString(),
-            dayName: date.toLocaleDateString('en-US', { weekday: 'long' }),
-            slots: slots.slice(0, 3) // Limit to first 3 slots per day
-          });
+        try {
+          const slots = await this.getAvailableSlots(date);
+          if (slots.length > 0) {
+            allSlots.push({
+              date: date.toDateString(),
+              dayName: date.toLocaleDateString('en-US', { weekday: 'long' }),
+              slots: slots.slice(0, 3) // Limit to first 3 slots per day
+            });
+          }
+        } catch (dayError) {
+          console.error(`❌ Error getting slots for ${date.toDateString()}:`, dayError.message);
+          // Continue to next day
         }
       }
       
-      console.log(`✅ Found available slots across ${allSlots.length} days`);
+      console.log(`✅ [REAL CALENDAR] Found available slots across ${allSlots.length} days`);
       return allSlots;
       
     } catch (error) {
-      console.error('❌ Error getting upcoming slots:', error.message);
-      return [];
+      console.error('❌ [REAL CALENDAR] Error getting upcoming slots:', error.message);
+      throw error; // Don't return empty array - let caller handle
     }
   }
 
-  // REMOVED: Mock available slots function - forces real calendar usage
-  getMockAvailableSlots(date) {
-    console.error('⚠️ getMockAvailableSlots called - this should not happen if calendar is connected');
-    console.error('🔧 Forcing return of empty array to use real calendar');
-    return []; // Return empty array to force real calendar usage
+  // REMOVED: All mock functions - Real calendar only
+  // No getMockAvailableSlots or any mock functionality
+  
+  // Utility function to validate business hours
+  isBusinessHours(dateTime) {
+    const date = new Date(dateTime);
+    const dayOfWeek = date.getDay(); // 0 = Sunday, 6 = Saturday
+    const hour = date.getHours();
+    
+    // Monday to Friday (1-5), 9 AM to 5 PM
+    return this.businessHours.days.includes(dayOfWeek) && 
+           hour >= this.businessHours.start && 
+           hour < this.businessHours.end;
+  }
+
+  // Get business hours for a specific day
+  getBusinessHoursForDay(date) {
+    const targetDate = new Date(date);
+    const dayOfWeek = targetDate.getDay();
+    
+    if (!this.businessHours.days.includes(dayOfWeek)) {
+      return null; // Not a business day
+    }
+    
+    const startTime = new Date(targetDate);
+    startTime.setHours(this.businessHours.start, 0, 0, 0);
+    
+    const endTime = new Date(targetDate);
+    endTime.setHours(this.businessHours.end, 0, 0, 0);
+    
+    return {
+      start: startTime,
+      end: endTime,
+      dayName: targetDate.toLocaleDateString('en-US', { weekday: 'long' })
+    };
+  }
+
+  // Check if calendar service is properly initialized
+  isInitialized() {
+    return !!(this.calendar && this.auth);
+  }
+
+  // Get calendar info
+  getCalendarInfo() {
+    return {
+      calendarId: this.calendarId,
+      timezone: this.timezone,
+      businessHours: this.businessHours,
+      initialized: this.isInitialized()
+    };
   }
 }
 
