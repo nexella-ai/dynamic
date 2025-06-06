@@ -1,4 +1,4 @@
-// COMPLETE server.js with enhanced Google Calendar integration - FULLY FIXED VERSION
+// COMPLETE server.js - PART 1 OF 4 (Setup & Helper Functions)
 require('dotenv').config();
 const express = require('express');
 const { WebSocketServer } = require('ws');
@@ -72,33 +72,39 @@ async function checkAvailability(startTime, endTime) {
   }
 }
 
-// FIXED: Enhanced function to get available time slots
+// FIXED: Enhanced function to get available time slots with debug logging
 async function getAvailableTimeSlots(date) {
   try {
     console.log('📅 Getting available slots for:', date);
+    console.log('🔧 Calendar service status:', !!calendarService.calendar ? 'CONNECTED' : 'NOT CONNECTED');
     
     const availableSlots = await calendarService.getAvailableSlots(date);
     console.log(`📋 Calendar service returned ${availableSlots.length} slots`);
     
-    // Log first few slots for debugging
+    // Debug: Show what slots were returned
     if (availableSlots.length > 0) {
-      console.log('📋 Sample available slots:');
-      availableSlots.slice(0, 3).forEach((slot, index) => {
-        console.log(`   ${index + 1}. ${slot.displayTime} (${slot.dateTime})`);
+      console.log('📋 Returned slots:');
+      availableSlots.forEach((slot, index) => {
+        const slotTime = new Date(slot.startTime);
+        console.log(`   ${index + 1}. ${slotTime.toLocaleString()} - ${slot.displayTime}`);
       });
+    } else {
+      console.log('❌ No slots returned from calendar service');
     }
     
     return availableSlots;
   } catch (error) {
     console.error('❌ Error getting available slots:', error.message);
+    console.log('🔧 Returning empty array due to error');
     return [];
   }
 }
 
-// Enhanced function to get and format available slots for user
+// FIXED: Enhanced function to get and format available slots for user
 async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
   try {
     const today = new Date();
+    today.setHours(0, 0, 0, 0); // Set to start of day for comparison
     const searchStart = startDate ? new Date(startDate) : today;
     
     console.log(`📅 Getting formatted available slots starting from: ${searchStart.toDateString()}`);
@@ -110,9 +116,14 @@ async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
       checkDate.setDate(searchStart.getDate() + i);
       
       // Skip if date is in the past
-      if (checkDate < today) continue;
+      if (checkDate < today) {
+        console.log(`⏭️ Skipping past date: ${checkDate.toDateString()}`);
+        continue;
+      }
       
+      console.log(`🔍 Checking slots for: ${checkDate.toDateString()}`);
       const slots = await getAvailableTimeSlots(checkDate);
+      console.log(`📋 Found ${slots.length} slots for ${checkDate.toDateString()}`);
       
       if (slots.length > 0) {
         const dayName = checkDate.toLocaleDateString('en-US', { 
@@ -121,16 +132,39 @@ async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
           day: 'numeric'
         });
         
-        allAvailableSlots.push({
-          date: checkDate.toDateString(),
-          dayName: dayName,
-          slots: slots.slice(0, 4), // Show up to 4 slots per day
-          formattedSlots: slots.slice(0, 4).map(slot => slot.displayTime).join(', ')
+        // Take only business hour slots (9 AM to 5 PM)
+        const businessHourSlots = slots.filter(slot => {
+          const slotTime = new Date(slot.startTime);
+          const hour = slotTime.getHours();
+          return hour >= 9 && hour < 17;
         });
+        
+        if (businessHourSlots.length > 0) {
+          allAvailableSlots.push({
+            date: checkDate.toDateString(),
+            dayName: dayName,
+            slots: businessHourSlots.slice(0, 4), // Show up to 4 slots per day
+            formattedSlots: businessHourSlots.slice(0, 4).map(slot => {
+              const slotTime = new Date(slot.startTime);
+              return slotTime.toLocaleTimeString('en-US', {
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true,
+                timeZone: 'America/Phoenix'
+              });
+            }).join(', ')
+          });
+          
+          console.log(`✅ Added ${businessHourSlots.length} business hour slots for ${dayName}`);
+        }
       }
     }
     
-    console.log(`✅ Found available slots across ${allAvailableSlots.length} days`);
+    console.log(`✅ Final result: Found available slots across ${allAvailableSlots.length} days`);
+    allAvailableSlots.forEach((day, index) => {
+      console.log(`   ${index + 1}. ${day.dayName}: ${day.formattedSlots}`);
+    });
+    
     return allAvailableSlots;
     
   } catch (error) {
@@ -139,10 +173,12 @@ async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
   }
 }
 
-// Enhanced function to generate availability response for user
+// FIXED: Enhanced function to generate availability response for user
 async function generateAvailabilityResponse() {
   try {
+    console.log('🤖 Generating availability response...');
     const availableSlots = await getFormattedAvailableSlots();
+    console.log(`📊 Got ${availableSlots.length} days with availability`);
     
     if (availableSlots.length === 0) {
       return "I don't have any availability in the next week. Let me check for times the following week.";
@@ -161,10 +197,12 @@ async function generateAvailabilityResponse() {
     
     // 3 or more days available
     let response = "I have several times available this week. ";
-    availableSlots.slice(0, 3).forEach((day, index) => {
+    const daysToShow = availableSlots.slice(0, 3);
+    
+    daysToShow.forEach((day, index) => {
       if (index === 0) {
         response += `${day.dayName} at ${day.formattedSlots}`;
-      } else if (index === availableSlots.length - 1 || index === 2) {
+      } else if (index === daysToShow.length - 1) {
         response += `, or ${day.dayName} at ${day.formattedSlots}`;
       } else {
         response += `, ${day.dayName} at ${day.formattedSlots}`;
@@ -172,6 +210,7 @@ async function generateAvailabilityResponse() {
     });
     response += ". Which day and time would work best for you?";
     
+    console.log(`✅ Generated response: ${response}`);
     return response;
     
   } catch (error) {
@@ -179,6 +218,8 @@ async function generateAvailabilityResponse() {
     return "Let me check my calendar and get back to you with some available times.";
   }
 }
+
+// COMPLETE server.js - PART 2 OF 4 (Utility Functions & Webhook Handler)
 
 // Function to format a date range for display
 function formatDateRange(startDate, endDate) {
@@ -716,6 +757,8 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
   }
 });
 
+// COMPLETE server.js - PART 3 OF 4 (WebSocket Connection & Discovery System)
+
 // ENHANCED WEBSOCKET CONNECTION HANDLER
 wss.on('connection', async (ws, req) => {
   console.log('🔗 NEW WEBSOCKET CONNECTION ESTABLISHED');
@@ -1139,6 +1182,8 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     }
   }, 8000);
 
+       // COMPLETE server.js - PART 4 OF 4 (Message Handler & Server Initialization)
+
   // ENHANCED Message Handler with Fixed Calendar Integration
   ws.on('message', async (data) => {
     try {
@@ -1358,6 +1403,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
 
         conversationHistory.push({ role: 'user', content: userMessage });
 
+        // FIXED: Context prompt section with proper await for availability response
         let contextPrompt = '';
         if (!discoveryProgress.allQuestionsCompleted) {
           const nextUnanswered = discoveryQuestions.find(q => !q.answered);
@@ -1403,12 +1449,22 @@ All 6 discovery questions completed. Time slot confirmed as available and BOOKED
 RESPOND EXACTLY WITH: "${calendarCheckResponse}"
 Do not add any other text. Confirm the booking.`;
           } else {
-            // Generate availability response
-            const availabilityResponse = await generateAvailabilityResponse();
-            contextPrompt = `
+            // Generate availability response with proper await
+            console.log('🤖 All discovery complete, generating availability response...');
+            try {
+              const availabilityResponse = await generateAvailabilityResponse();
+              console.log('✅ Got availability response:', availabilityResponse);
+              contextPrompt = `
 
 All 6 discovery questions completed. Show available times and ask for scheduling preference.
 RESPOND EXACTLY WITH: "Perfect! I have all the information I need. Let's schedule a call to discuss how we can help. ${availabilityResponse}"`;
+            } catch (availabilityError) {
+              console.error('❌ Error generating availability:', availabilityError);
+              contextPrompt = `
+
+All 6 discovery questions completed. Show available times and ask for scheduling preference.
+RESPOND EXACTLY WITH: "Perfect! I have all the information I need. Let's schedule a call to discuss how we can help. What day and time would work best for you?"`;
+            }
           }
         }
 
