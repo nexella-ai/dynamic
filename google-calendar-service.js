@@ -297,3 +297,209 @@ class GoogleCalendarService {
         console.warn('⚠️ Calendar not initialized, returning mock availability');
         return Math.random() > 0.3; // 70% chance of being available
       }
+
+      console.log(`🔍 Checking if slot is available: ${startTime} to ${endTime}`);
+
+      const response = await this.calendar.events.list({
+        calendarId: this.calendarId,
+        timeMin: startTime,
+        timeMax: endTime,
+        singleEvents: true
+      });
+
+      const events = response.data.items || [];
+      const isAvailable = events.length === 0;
+      
+      console.log(`📊 Slot availability: ${isAvailable ? 'Available ✅' : 'Booked ❌'}`);
+      
+      return isAvailable;
+
+    } catch (error) {
+      console.error('❌ Error checking slot availability:', error.message);
+      // Fallback: assume available
+      return true;
+    }
+  }
+
+  // Create a calendar event
+  async createEvent(eventDetails) {
+    try {
+      if (!this.calendar) {
+        console.warn('⚠️ Calendar not initialized, simulating event creation');
+        return {
+          success: true,
+          eventId: `mock_event_${Date.now()}`,
+          meetingLink: 'https://meet.google.com/mock-meeting',
+          eventLink: `https://calendar.google.com/event?mock=${Date.now()}`,
+          message: 'Mock event created (calendar not configured)'
+        };
+      }
+
+      console.log('📅 Creating calendar event:', eventDetails);
+
+      const event = {
+        summary: eventDetails.summary || 'Nexella AI Consultation Call',
+        description: eventDetails.description || 'Discovery call scheduled via Nexella AI',
+        start: {
+          dateTime: eventDetails.startTime,
+          timeZone: this.timezone
+        },
+        end: {
+          dateTime: eventDetails.endTime,
+          timeZone: this.timezone
+        },
+        attendees: [
+          {
+            email: eventDetails.attendeeEmail,
+            displayName: eventDetails.attendeeName || eventDetails.attendeeEmail
+          }
+        ],
+        conferenceData: {
+          createRequest: {
+            requestId: `meet_${Date.now()}`,
+            conferenceSolutionKey: {
+              type: 'hangoutsMeet'
+            }
+          }
+        },
+        reminders: {
+          useDefault: false,
+          overrides: [
+            { method: 'email', minutes: 24 * 60 }, // 24 hours before
+            { method: 'popup', minutes: 30 }       // 30 minutes before
+          ]
+        }
+      };
+
+      const response = await this.calendar.events.insert({
+        calendarId: this.calendarId,
+        resource: event,
+        conferenceDataVersion: 1,
+        sendUpdates: 'all' // Send invitations to attendees
+      });
+
+      const createdEvent = response.data;
+      
+      console.log('✅ Calendar event created successfully:', createdEvent.id);
+
+      return {
+        success: true,
+        eventId: createdEvent.id,
+        meetingLink: createdEvent.conferenceData?.entryPoints?.[0]?.uri || createdEvent.hangoutLink,
+        eventLink: createdEvent.htmlLink,
+        message: 'Event created and invitation sent'
+      };
+
+    } catch (error) {
+      console.error('❌ Error creating calendar event:', error.message);
+      return {
+        success: false,
+        error: error.message,
+        message: 'Failed to create calendar event'
+      };
+    }
+  }
+
+  // Parse time preference from user input
+  parseTimePreference(userMessage, preferredDay) {
+    console.log('🔍 Parsing time preference:', { userMessage, preferredDay });
+    
+    let targetDate = new Date();
+    
+    // Parse the day
+    if (preferredDay.toLowerCase().includes('tomorrow')) {
+      targetDate.setDate(targetDate.getDate() + 1);
+    } else if (preferredDay.toLowerCase().includes('today')) {
+      // Keep today
+    } else if (preferredDay.toLowerCase().includes('next week')) {
+      targetDate.setDate(targetDate.getDate() + 7);
+    } else {
+      // Try to parse specific day name
+      const daysOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+      const dayMatch = preferredDay.toLowerCase().match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/);
+      
+      if (dayMatch) {
+        const requestedDayName = dayMatch[0];
+        const requestedDayIndex = daysOfWeek.indexOf(requestedDayName);
+        const currentDayIndex = targetDate.getDay();
+        
+        let daysToAdd = requestedDayIndex - currentDayIndex;
+        if (daysToAdd <= 0) {
+          daysToAdd += 7; // Next week
+        }
+        
+        targetDate.setDate(targetDate.getDate() + daysToAdd);
+      }
+    }
+    
+    // Parse time
+    let preferredHour = 10; // Default 10 AM
+    const timeMatch = preferredDay.match(/(\d{1,2})\s*(am|pm)/i);
+    if (timeMatch) {
+      let hour = parseInt(timeMatch[1]);
+      const period = timeMatch[2].toLowerCase();
+      
+      if (period === 'pm' && hour !== 12) {
+        hour += 12;
+      } else if (period === 'am' && hour === 12) {
+        hour = 0;
+      }
+      
+      preferredHour = hour;
+    } else if (preferredDay.toLowerCase().includes('morning')) {
+      preferredHour = 10;
+    } else if (preferredDay.toLowerCase().includes('afternoon')) {
+      preferredHour = 14;
+    } else if (preferredDay.toLowerCase().includes('evening')) {
+      preferredHour = 16;
+    }
+    
+    targetDate.setHours(preferredHour, 0, 0, 0);
+    
+    return {
+      preferredDateTime: targetDate,
+      dayName: preferredDay,
+      hour: preferredHour
+    };
+  }
+
+  // Get next 7 days of available slots
+  async getUpcomingAvailableSlots(daysAhead = 7) {
+    try {
+      console.log(`📅 Getting upcoming available slots for next ${daysAhead} days`);
+      
+      const allSlots = [];
+      const today = new Date();
+      
+      for (let i = 0; i < daysAhead; i++) {
+        const date = new Date(today);
+        date.setDate(today.getDate() + i);
+        
+        const slots = await this.getAvailableSlots(date);
+        if (slots.length > 0) {
+          allSlots.push({
+            date: date.toDateString(),
+            dayName: date.toLocaleDateString('en-US', { weekday: 'long' }),
+            slots: slots.slice(0, 3) // Limit to first 3 slots per day
+          });
+        }
+      }
+      
+      console.log(`✅ Found available slots across ${allSlots.length} days`);
+      return allSlots;
+      
+    } catch (error) {
+      console.error('❌ Error getting upcoming slots:', error.message);
+      return [];
+    }
+  }
+
+  // REMOVED: Mock available slots function - forces real calendar usage
+  getMockAvailableSlots(date) {
+    console.error('⚠️ getMockAvailableSlots called - this should not happen if calendar is connected');
+    console.error('🔧 Forcing return of empty array to use real calendar');
+    return []; // Return empty array to force real calendar usage
+  }
+}
+
+module.exports = GoogleCalendarService;
