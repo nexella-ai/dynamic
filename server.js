@@ -1,4 +1,4 @@
-// server.js - Main Server Entry Point (Modular Version)
+// server.js - Main Server Entry Point (Fixed Status Display)
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const http = require('http');
@@ -30,28 +30,6 @@ if (!validation.isValid) {
 
 // Initialize services
 let calendarInitialized = false;
-
-(async () => {
-  try {
-    console.log('🚀 Initializing Nexella WebSocket Server...');
-    
-    // Initialize Google Calendar service
-    calendarInitialized = await initializeCalendarService();
-    
-    if (calendarInitialized) {
-      console.log('✅ Google Calendar service ready');
-    } else {
-      console.log('⚠️ Google Calendar service disabled - using demo mode');
-      console.log('💡 Add Google Calendar environment variables for real scheduling');
-    }
-    
-    console.log('✅ Server initialization complete');
-    
-  } catch (error) {
-    console.error('❌ Server initialization error:', error.message);
-    console.log('⚠️ Some features may be limited');
-  }
-})();
 
 // API Routes
 app.use('/', apiRoutes);
@@ -96,20 +74,33 @@ process.on('SIGINT', () => {
   });
 });
 
-// Start server
+// Start server and initialize services
 const PORT = config.PORT;
-server.listen(PORT, () => {
-  const status = calendarInitialized ? 'Real Google Calendar' : 'Demo Mode';
+server.listen(PORT, async () => {
   console.log(`✅ Nexella WebSocket Server listening on port ${PORT}`);
-  console.log(`📅 Calendar Status: ${status}`);
   console.log(`🌐 Server URL: http://localhost:${PORT}`);
   console.log(`🔗 WebSocket URL: ws://localhost:${PORT}`);
   
-  if (!validation.hasGoogleCalendar) {
-    console.log('💡 To enable real Google Calendar:');
-    console.log('   1. Add GOOGLE_PROJECT_ID to environment');
-    console.log('   2. Add GOOGLE_PRIVATE_KEY to environment');
-    console.log('   3. Add GOOGLE_CLIENT_EMAIL to environment');
-    console.log('   4. Add GOOGLE_CALENDAR_ID to environment');
+  // Initialize Google Calendar service after server starts
+  try {
+    console.log('🚀 Initializing Nexella WebSocket Server...');
+    
+    calendarInitialized = await initializeCalendarService();
+    
+    if (calendarInitialized) {
+      console.log('✅ Google Calendar service ready');
+      console.log('📅 Calendar Status: Real Google Calendar ✅');
+    } else {
+      console.log('⚠️ Google Calendar service disabled - using demo mode');
+      console.log('📅 Calendar Status: Demo Mode ⚠️');
+      console.log('💡 Add Google Calendar environment variables for real scheduling');
+    }
+    
+    console.log('✅ Server initialization complete');
+    
+  } catch (error) {
+    console.error('❌ Server initialization error:', error.message);
+    console.log('⚠️ Some features may be limited');
+    console.log('📅 Calendar Status: Error ❌');
   }
 });
