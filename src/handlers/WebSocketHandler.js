@@ -1,4 +1,4 @@
-// src/handlers/WebSocketHandler.js - WebSocket Connection Management
+// src/handlers/WebSocketHandler.js - Fixed Discovery Flow
 const axios = require('axios');
 const config = require('../config/environment');
 const DiscoveryService = require('../services/discovery/DiscoveryService');
@@ -34,29 +34,39 @@ class WebSocketHandler {
     this.conversationHistory = [
       {
         role: 'system',
-        content: `You are Sarah from Nexella AI. Follow this exact flow:
+        content: `You are Sarah from Nexella AI. Follow this EXACT flow:
 
+STRICT CONVERSATION FLOW:
 1. GREETING: "Hi there! This is Sarah from Nexella AI. How are you doing today?"
-2. DISCOVERY: Ask ALL 6 questions in order, one at a time
-3. SCHEDULING: Only after all 6 questions, show available times
+2. BRIEF CHAT: Have 1-2 friendly exchanges
+3. TRANSITION: "That's great! I'd love to learn a bit more about you and your business so I can better help you today."
+4. DISCOVERY: Ask ALL 6 questions in EXACT order, ONE AT A TIME
+5. SCHEDULING: Only after all 6 questions are complete
 
-DISCOVERY QUESTIONS (exact order):
+DISCOVERY QUESTIONS (ask in this EXACT order, ONE AT A TIME):
 1. "How did you hear about us?"
 2. "What industry or business are you in?"
-3. "What's your main product or service?"  
+3. "What's your main product or service?"
 4. "Are you currently running any ads?"
 5. "Are you using any CRM system?"
 6. "What are your biggest pain points or challenges?"
 
-After each answer, briefly acknowledge then ask the next question.
+CRITICAL RULES:
+- Ask ONLY ONE question at a time
+- Wait for user's answer before asking the next question
+- After each answer, briefly acknowledge: "Got it, thank you." then ask the next question
+- Do NOT repeat questions you've already asked
+- Do NOT skip questions
+- Do NOT start scheduling until ALL 6 questions are answered
+- If user tries to schedule early, say: "Let me finish getting some information first, then we'll find you a perfect time."
 
 SCHEDULING RULES:
-- ONLY start scheduling after all 6 questions complete
-- Present specific available times from calendar
-- If requested time unavailable, suggest alternatives
+- ONLY start scheduling after all 6 questions are complete
+- Present available times from real calendar
+- If time unavailable, suggest alternatives
 - Confirm bookings immediately
 
-Speak calmly and naturally. Never repeat questions or get stuck in loops.`
+Keep responses short and conversational. Never ask multiple questions at once.`
       }
     ];
     
@@ -70,6 +80,8 @@ Speak calmly and naturally. Never repeat questions or get stuck in loops.`
     
     this.userHasSpoken = false;
     this.webhookSent = false;
+    this.lastBotMessage = '';
+    this.questionAskedTimestamp = 0;
     
     console.log('🔗 NEW WEBSOCKET CONNECTION');
     console.log('📞 Extracted Call ID:', this.callId);
@@ -172,12 +184,17 @@ Speak calmly and naturally. Never repeat questions or get stuck in loops.`
   }
 
   sendResponse(content, responseId = null) {
+    this.lastBotMessage = content;
+    this.questionAskedTimestamp = Date.now();
+    
     this.ws.send(JSON.stringify({
       content: content,
       content_complete: true,
       actions: [],
       response_id: responseId || Date.now()
     }));
+    
+    console.log('🤖 Bot sent:', content);
   }
 
   async handleMessage(data) {
@@ -250,20 +267,36 @@ Speak calmly and naturally. Never repeat questions or get stuck in loops.`
 
     console.log('🗣️ User said:', userMessage);
     console.log('📊 Discovery progress:', this.discovery.progress.questionsCompleted, '/6');
+    console.log('🤖 Last bot message:', this.lastBotMessage);
 
-    // Detect questions and capture answers
-    if (this.conversationHistory.length >= 2) {
-      const lastBotMessage = this.conversationHistory[this.conversationHistory.length - 1];
-      if (lastBotMessage && lastBotMessage.role === 'assistant') {
-        this.discovery.detectQuestionAsked(lastBotMessage.content);
+    // IMPROVED: Question detection logic
+    const timeSinceLastQuestion = Date.now() - this.questionAskedTimestamp;
+    const isRecentBotMessage = timeSinceLastQuestion < 10000; // 10 seconds
+    
+    if (isRecentBotMessage && this.lastBotMessage) {
+      console.log('🔍 Checking if last bot message was a discovery question...');
+      this.discovery.detectQuestionAsked(this.lastBotMessage);
+    }
+
+    // IMPROVED: Answer capture logic
+    if (this.discovery.progress.waitingForAnswer && userMessage.trim().length > 2) {
+      console.log('📝 Attempting to capture user answer...');
+      
+      // Check if this is actually a scheduling request
+      const schedulingKeywords = ['schedule', 'book', 'appointment', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'tomorrow', 'today', 'am', 'pm'];
+      const isSchedulingRequest = schedulingKeywords.some(keyword => 
+        userMessage.toLowerCase().includes(keyword)
+      );
+      
+      if (isSchedulingRequest && this.discovery.progress.questionsCompleted >= 4) {
+        console.log('🗓️ User is trying to schedule, but discovery not complete');
+        // Don't capture as answer, let AI handle it
+      } else {
+        this.discovery.captureUserAnswer(userMessage);
       }
     }
 
-    if (this.discovery.progress.waitingForAnswer && userMessage.trim().length > 2) {
-      this.discovery.captureUserAnswer(userMessage);
-    }
-
-    // Handle scheduling detection
+    // IMPROVED: Scheduling detection
     await this.handleSchedulingLogic(userMessage);
 
     // Add user message to conversation history
@@ -290,10 +323,11 @@ Speak calmly and naturally. Never repeat questions or get stuck in loops.`
     let schedulingDetected = false;
     let calendarCheckResponse = '';
     
-    if (this.discovery.canStartScheduling() && 
+    // Only allow scheduling if all discovery questions are complete
+    if (this.discovery.progress.allQuestionsCompleted && 
         userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today|\d{1,2}\s*(am|pm)|morning|afternoon|evening)\b/)) {
       
-      console.log('🗓️ SCHEDULING DETECTED - Starting booking process');
+      console.log('🗓️ SCHEDULING DETECTED - All discovery complete, starting booking process');
       this.discovery.markSchedulingStarted();
       
       const dayInfo = handleSchedulingPreference(userMessage);
@@ -342,6 +376,10 @@ Speak calmly and naturally. Never repeat questions or get stuck in loops.`
           calendarCheckResponse = `Let me check my calendar and get back to you with available times.`;
         }
       }
+    } else if (userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today|\d{1,2}\s*(am|pm)|morning|afternoon|evening)\b/)) {
+      // User trying to schedule but discovery not complete
+      console.log('⚠️ User trying to schedule but discovery not complete');
+      this.schedulingInterrupted = true;
     }
     
     this.schedulingDetected = schedulingDetected;
@@ -387,6 +425,15 @@ Speak calmly and naturally. Never repeat questions or get stuck in loops.`
   }
 
   generateContextPrompt() {
+    // Handle scheduling interruption
+    if (this.schedulingInterrupted) {
+      this.schedulingInterrupted = false;
+      return `
+
+User is trying to schedule but discovery is not complete.
+RESPOND EXACTLY WITH: "Let me finish getting some information first, then we'll find you a perfect time. ${this.getNextQuestionPrompt()}"`;
+    }
+    
     if (!this.discovery.progress.allQuestionsCompleted) {
       return this.discovery.generateContextPrompt();
     } else if (this.calendarCheckResponse) {
@@ -396,6 +443,15 @@ All 6 discovery questions completed. Calendar response ready.
 RESPOND EXACTLY WITH: "${this.calendarCheckResponse}"`;
     } else if (!this.discovery.progress.schedulingStarted) {
       return this.generateAvailabilityPrompt();
+    }
+    return '';
+  }
+
+  getNextQuestionPrompt() {
+    const nextUnanswered = this.discovery.getNextUnansweredQuestion();
+    if (nextUnanswered) {
+      const questionNumber = this.discovery.questions.indexOf(nextUnanswered) + 1;
+      return `Question ${questionNumber}: ${nextUnanswered.question}`;
     }
     return '';
   }
@@ -521,7 +577,7 @@ RESPOND EXACTLY WITH: "Perfect! I have all the information I need. Let's schedul
     
     const discoveryInfo = this.discovery.getDiscoveryInfo();
     discoveryInfo.questions.forEach((q, index) => {
-      console.log(`Question ${index + 1}: Asked=${q.asked}, Answered=${q.answered}, Answer="${this.discovery.questions[index].answer}"`);
+      console.log(`Question ${index + 1}: Asked=${q.asked}, Answered=${q.answered}, Answer="${q.answer}"`);
     });
     
     // Final webhook attempt if we have substantial data
@@ -565,4 +621,3 @@ RESPOND EXACTLY WITH: "Perfect! I have all the information I need. Let's schedul
 }
 
 module.exports = WebSocketHandler;
-        
