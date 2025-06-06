@@ -1,4 +1,4 @@
-// server.js - Main Server Entry Point (Fixed Status Display)
+// server.js - Main Server Entry Point (Fixed URLs for Production)
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const http = require('http');
@@ -77,9 +77,22 @@ process.on('SIGINT', () => {
 // Start server and initialize services
 const PORT = config.PORT;
 server.listen(PORT, async () => {
+  // Determine if we're in production or development
+  const isProduction = process.env.NODE_ENV === 'production' || process.env.RENDER;
+  const host = isProduction ? process.env.RENDER_EXTERNAL_URL || 'https://your-app.onrender.com' : 'localhost';
+  const protocol = isProduction ? 'https:' : 'http:';
+  const wsProtocol = isProduction ? 'wss:' : 'ws:';
+  
   console.log(`✅ Nexella WebSocket Server listening on port ${PORT}`);
-  console.log(`🌐 Server URL: http://localhost:${PORT}`);
-  console.log(`🔗 WebSocket URL: ws://localhost:${PORT}`);
+  
+  if (isProduction) {
+    console.log(`🌐 Production Server URL: ${host}`);
+    console.log(`🔗 Production WebSocket URL: ${host.replace('https:', 'wss:')}`);
+    console.log(`🚀 Server is LIVE and accessible 24/7 from anywhere!`);
+  } else {
+    console.log(`🌐 Development Server URL: http://localhost:${PORT}`);
+    console.log(`🔗 Development WebSocket URL: ws://localhost:${PORT}`);
+  }
   
   // Initialize Google Calendar service after server starts
   try {
@@ -97,6 +110,10 @@ server.listen(PORT, async () => {
     }
     
     console.log('✅ Server initialization complete');
+    
+    if (isProduction) {
+      console.log('🎉 Production deployment successful! Server running 24/7.');
+    }
     
   } catch (error) {
     console.error('❌ Server initialization error:', error.message);
