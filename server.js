@@ -1,4 +1,4 @@
-// COMPLETE server.js - PART 1 OF 4 (Setup & Helper Functions)
+// COMPLETE server.js - FIXED VERSION WITH REAL GOOGLE CALENDAR ONLY
 require('dotenv').config();
 const express = require('express');
 const { WebSocketServer } = require('ws');
@@ -33,7 +33,7 @@ app.get('/', (req, res) => {
 // Store active calls metadata
 const activeCallsMetadata = new Map();
 
-// ENHANCED: Helper function to store contact info globally
+// Helper function to store contact info globally
 function storeContactInfoGlobally(name, email, phone, source = 'Unknown') {
   console.log(`📝 Storing contact info globally from ${source}:`, { name, email, phone });
   
@@ -53,61 +53,77 @@ function storeContactInfoGlobally(name, email, phone, source = 'Unknown') {
   }
 }
 
-// FIXED: Enhanced availability checking function
+// FIXED: Real calendar availability checking function - NO MOCK DATA
 async function checkAvailability(startTime, endTime) {
   try {
-    console.log('🔍 Checking availability via calendar service...');
+    console.log('🔍 Checking REAL calendar availability...');
     console.log('⏰ Start time:', startTime);
     console.log('⏰ End time:', endTime);
     
+    // MUST use real calendar - no fallback to mock
+    if (!calendarService.calendar) {
+      console.error('❌ Calendar service not initialized! Cannot check availability.');
+      throw new Error('Calendar service not available');
+    }
+    
     const available = await calendarService.isSlotAvailable(startTime, endTime);
-    console.log('📊 Calendar service result:', available);
+    console.log('📊 REAL calendar result:', available);
     
     return available;
   } catch (error) {
-    console.error('❌ Error checking availability:', error.message);
-    // Fallback: assume available if calendar check fails
-    console.log('⚠️ Falling back to assuming slot is available');
-    return true;
+    console.error('❌ Error checking REAL calendar availability:', error.message);
+    throw error; // Don't fallback to assuming available
   }
 }
 
-// FIXED: Enhanced function to get available time slots with debug logging
+// FIXED: Real calendar slots function - NO MOCK DATA
 async function getAvailableTimeSlots(date) {
   try {
-    console.log('📅 Getting available slots for:', date);
-    console.log('🔧 Calendar service status:', !!calendarService.calendar ? 'CONNECTED' : 'NOT CONNECTED');
+    console.log('📅 Getting REAL available slots for:', date);
+    
+    // MUST use real calendar - no mock fallback
+    if (!calendarService.calendar) {
+      console.error('❌ Calendar service not initialized! Cannot get slots.');
+      throw new Error('Calendar service not available');
+    }
+    
+    console.log('🔧 Calendar service status:', calendarService.calendar ? 'CONNECTED' : 'NOT CONNECTED');
     
     const availableSlots = await calendarService.getAvailableSlots(date);
-    console.log(`📋 Calendar service returned ${availableSlots.length} slots`);
+    console.log(`📋 REAL calendar returned ${availableSlots.length} slots`);
     
     // Debug: Show what slots were returned
     if (availableSlots.length > 0) {
-      console.log('📋 Returned slots:');
+      console.log('📋 Real calendar slots:');
       availableSlots.forEach((slot, index) => {
         const slotTime = new Date(slot.startTime);
         console.log(`   ${index + 1}. ${slotTime.toLocaleString()} - ${slot.displayTime}`);
       });
     } else {
-      console.log('❌ No slots returned from calendar service');
+      console.log('❌ No slots returned from REAL calendar');
     }
     
     return availableSlots;
   } catch (error) {
-    console.error('❌ Error getting available slots:', error.message);
-    console.log('🔧 Returning empty array due to error');
-    return [];
+    console.error('❌ Error getting REAL calendar slots:', error.message);
+    throw error; // Don't return empty array - let caller handle the error
   }
 }
 
-// FIXED: Enhanced function to get and format available slots for user
+// FIXED: Real calendar formatted slots - NO MOCK DATA
 async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
   try {
     const today = new Date();
-    today.setHours(0, 0, 0, 0); // Set to start of day for comparison
+    today.setHours(0, 0, 0, 0);
     const searchStart = startDate ? new Date(startDate) : today;
     
-    console.log(`📅 Getting formatted available slots starting from: ${searchStart.toDateString()}`);
+    console.log(`📅 Getting REAL formatted available slots starting from: ${searchStart.toDateString()}`);
+    
+    // MUST use real calendar
+    if (!calendarService.calendar) {
+      console.error('❌ Calendar service not initialized! Cannot get formatted slots.');
+      throw new Error('Calendar service not available');
+    }
     
     const allAvailableSlots = [];
     
@@ -121,46 +137,51 @@ async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
         continue;
       }
       
-      console.log(`🔍 Checking slots for: ${checkDate.toDateString()}`);
-      const slots = await getAvailableTimeSlots(checkDate);
-      console.log(`📋 Found ${slots.length} slots for ${checkDate.toDateString()}`);
-      
-      if (slots.length > 0) {
-        const dayName = checkDate.toLocaleDateString('en-US', { 
-          weekday: 'long',
-          month: 'long', 
-          day: 'numeric'
-        });
+      try {
+        console.log(`🔍 Checking REAL calendar for: ${checkDate.toDateString()}`);
+        const slots = await getAvailableTimeSlots(checkDate);
+        console.log(`📋 Found ${slots.length} REAL slots for ${checkDate.toDateString()}`);
         
-        // Take only business hour slots (9 AM to 5 PM)
-        const businessHourSlots = slots.filter(slot => {
-          const slotTime = new Date(slot.startTime);
-          const hour = slotTime.getHours();
-          return hour >= 9 && hour < 17;
-        });
-        
-        if (businessHourSlots.length > 0) {
-          allAvailableSlots.push({
-            date: checkDate.toDateString(),
-            dayName: dayName,
-            slots: businessHourSlots.slice(0, 4), // Show up to 4 slots per day
-            formattedSlots: businessHourSlots.slice(0, 4).map(slot => {
-              const slotTime = new Date(slot.startTime);
-              return slotTime.toLocaleTimeString('en-US', {
-                hour: 'numeric',
-                minute: '2-digit',
-                hour12: true,
-                timeZone: 'America/Phoenix'
-              });
-            }).join(', ')
+        if (slots.length > 0) {
+          const dayName = checkDate.toLocaleDateString('en-US', { 
+            weekday: 'long',
+            month: 'long', 
+            day: 'numeric'
           });
           
-          console.log(`✅ Added ${businessHourSlots.length} business hour slots for ${dayName}`);
+          // Take only business hour slots (9 AM to 5 PM)
+          const businessHourSlots = slots.filter(slot => {
+            const slotTime = new Date(slot.startTime);
+            const hour = slotTime.getHours();
+            return hour >= 9 && hour < 17;
+          });
+          
+          if (businessHourSlots.length > 0) {
+            allAvailableSlots.push({
+              date: checkDate.toDateString(),
+              dayName: dayName,
+              slots: businessHourSlots.slice(0, 4), // Show up to 4 slots per day
+              formattedSlots: businessHourSlots.slice(0, 4).map(slot => {
+                const slotTime = new Date(slot.startTime);
+                return slotTime.toLocaleTimeString('en-US', {
+                  hour: 'numeric',
+                  minute: '2-digit',
+                  hour12: true,
+                  timeZone: 'America/Phoenix'
+                });
+              }).join(', ')
+            });
+            
+            console.log(`✅ Added ${businessHourSlots.length} REAL business hour slots for ${dayName}`);
+          }
         }
+      } catch (dayError) {
+        console.error(`❌ Error getting slots for ${checkDate.toDateString()}:`, dayError.message);
+        // Continue to next day instead of failing completely
       }
     }
     
-    console.log(`✅ Final result: Found available slots across ${allAvailableSlots.length} days`);
+    console.log(`✅ Final REAL calendar result: Found available slots across ${allAvailableSlots.length} days`);
     allAvailableSlots.forEach((day, index) => {
       console.log(`   ${index + 1}. ${day.dayName}: ${day.formattedSlots}`);
     });
@@ -168,17 +189,24 @@ async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
     return allAvailableSlots;
     
   } catch (error) {
-    console.error('❌ Error getting formatted available slots:', error.message);
-    return [];
+    console.error('❌ Error getting REAL formatted available slots:', error.message);
+    throw error; // Don't return empty array - let caller handle
   }
 }
 
-// FIXED: Enhanced function to generate availability response for user
+// FIXED: Real calendar availability response - NO MOCK DATA
 async function generateAvailabilityResponse() {
   try {
-    console.log('🤖 Generating availability response...');
+    console.log('🤖 Generating REAL availability response...');
+    
+    // MUST use real calendar
+    if (!calendarService.calendar) {
+      console.error('❌ Calendar service not initialized!');
+      return "I'm sorry, I'm having trouble accessing my calendar right now. Let me get this fixed and call you back.";
+    }
+    
     const availableSlots = await getFormattedAvailableSlots();
-    console.log(`📊 Got ${availableSlots.length} days with availability`);
+    console.log(`📊 Got ${availableSlots.length} days with REAL availability`);
     
     if (availableSlots.length === 0) {
       return "I don't have any availability in the next week. Let me check for times the following week.";
@@ -210,16 +238,14 @@ async function generateAvailabilityResponse() {
     });
     response += ". Which day and time would work best for you?";
     
-    console.log(`✅ Generated response: ${response}`);
+    console.log(`✅ Generated REAL availability response: ${response}`);
     return response;
     
   } catch (error) {
-    console.error('❌ Error generating availability response:', error.message);
-    return "Let me check my calendar and get back to you with some available times.";
+    console.error('❌ Error generating REAL availability response:', error.message);
+    return "I'm having trouble accessing my calendar right now. Let me get this resolved and get back to you.";
   }
 }
-
-// COMPLETE server.js - PART 2 OF 4 (Utility Functions & Webhook Handler)
 
 // Function to format a date range for display
 function formatDateRange(startDate, endDate) {
@@ -291,7 +317,7 @@ async function updateConversationState(callId, discoveryComplete, preferredDay) 
   }
 }
 
-// FIXED: Enhanced scheduling preference detection
+// FIXED: Real calendar scheduling preference detection - NO MOCK
 function handleSchedulingPreference(userMessage) {
   console.log('🔍 Analyzing user message for scheduling:', userMessage);
   
@@ -366,22 +392,34 @@ function handleSchedulingPreference(userMessage) {
   return null;
 }
 
-// FIXED: Enhanced function to suggest alternative times
+// FIXED: Real calendar alternative time suggestions - NO MOCK
 async function suggestAlternativeTime(preferredDate, userMessage) {
   try {
+    // MUST use real calendar
+    if (!calendarService.calendar) {
+      console.error('❌ Calendar service not initialized!');
+      return "I'm having trouble accessing my calendar. Let me get this resolved and call you back.";
+    }
+    
     const availableSlots = await getAvailableTimeSlots(preferredDate);
     
     if (availableSlots.length === 0) {
       // Try next day
       const nextDay = new Date(preferredDate);
       nextDay.setDate(nextDay.getDate() + 1);
-      const nextDaySlots = await getAvailableTimeSlots(nextDay);
       
-      if (nextDaySlots.length > 0) {
-        const nextDayName = nextDay.toLocaleDateString('en-US', { weekday: 'long' });
-        return `I don't have any availability that day. How about ${nextDayName} at ${nextDaySlots[0].displayTime}?`;
-      } else {
-        return "Let me check my calendar for the best available times this week and get back to you.";
+      try {
+        const nextDaySlots = await getAvailableTimeSlots(nextDay);
+        
+        if (nextDaySlots.length > 0) {
+          const nextDayName = nextDay.toLocaleDateString('en-US', { weekday: 'long' });
+          return `I don't have any availability that day. How about ${nextDayName} at ${nextDaySlots[0].displayTime}?`;
+        } else {
+          return "Let me check my calendar for the best available times this week and get back to you.";
+        }
+      } catch (nextDayError) {
+        console.error('❌ Error checking next day:', nextDayError.message);
+        return "Let me check my calendar for alternative times and get back to you.";
       }
     }
     
@@ -393,12 +431,12 @@ async function suggestAlternativeTime(preferredDate, userMessage) {
     
     return "Let me check what times I have available and get back to you.";
   } catch (error) {
-    console.error('Error suggesting alternative time:', error);
-    return "Let me check my calendar and find some good times for our meeting.";
+    console.error('❌ Error suggesting alternative time from REAL calendar:', error.message);
+    return "I'm having trouble accessing my calendar. Let me resolve this and get back to you.";
   }
 }
 
-// ENHANCED: Send scheduling data with Google Calendar booking
+// ENHANCED: Send scheduling data with REAL Google Calendar booking
 async function sendSchedulingPreference(name, email, phone, preferredDay, callId, discoveryData = {}) {
   try {
     console.log('=== ENHANCED WEBHOOK SENDING DEBUG ===');
@@ -455,7 +493,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       return { success: false, error: 'No email address available' };
     }
 
-    // ENHANCED: Process discovery data with better field mapping
+    // Process discovery data with better field mapping
     console.log('🔧 PROCESSING DISCOVERY DATA:');
     console.log('Raw discoveryData input:', JSON.stringify(discoveryData, null, 2));
     
@@ -522,27 +560,33 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       finalPhone = '+1' + finalPhone.replace(/[^0-9]/g, '');
     }
 
-    // ENHANCED: Google Calendar booking logic
+    // FIXED: REAL Google Calendar booking logic - NO MOCK
     let bookingResult = null;
     let meetingDetails = null;
 
     if (preferredDay && preferredDay !== 'Call ended early' && preferredDay !== 'Error occurred') {
       try {
-        console.log('📅 Attempting to book Google Calendar appointment...');
+        console.log('📅 Attempting to book REAL Google Calendar appointment...');
+        
+        // MUST use real calendar
+        if (!calendarService.calendar) {
+          console.error('❌ Calendar service not initialized! Cannot book appointment.');
+          throw new Error('Calendar service not available');
+        }
         
         // Parse the preferred day/time
         const timePreference = calendarService.parseTimePreference('', preferredDay);
         console.log('⏰ Parsed time preference:', timePreference);
         
-        // Get available slots for the preferred day
+        // Get available slots for the preferred day from REAL calendar
         const availableSlots = await getAvailableTimeSlots(timePreference.preferredDateTime);
-        console.log(`📋 Found ${availableSlots.length} available slots`);
+        console.log(`📋 Found ${availableSlots.length} REAL available slots`);
         
         if (availableSlots.length > 0) {
           // Use the first available slot closest to their preference
           const selectedSlot = availableSlots[0];
           
-          // Create the calendar event
+          // Create the REAL calendar event
           bookingResult = await calendarService.createEvent({
             summary: 'Nexella AI Consultation Call',
             description: `Discovery call with ${finalName}\n\nDiscovery Notes:\n${Object.entries(formattedDiscoveryData).map(([key, value]) => `${key}: ${value}`).join('\n')}`,
@@ -561,11 +605,15 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
               endTime: selectedSlot.endTime,
               displayTime: selectedSlot.displayTime
             };
-            console.log('✅ Calendar event created successfully:', meetingDetails);
+            console.log('✅ REAL calendar event created successfully:', meetingDetails);
+          } else {
+            console.error('❌ Failed to create REAL calendar event:', bookingResult.error);
           }
+        } else {
+          console.log('❌ No available slots found in REAL calendar for preferred time');
         }
       } catch (calendarError) {
-        console.error('❌ Error booking calendar appointment:', calendarError);
+        console.error('❌ Error booking REAL calendar appointment:', calendarError.message);
       }
     }
     
@@ -579,7 +627,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       schedulingComplete: true,
       discovery_data: formattedDiscoveryData,
       formatted_discovery: formattedDiscoveryData,
-      // Google Calendar specific fields
+      // REAL Google Calendar specific fields
       calendar_booking: bookingResult?.success || false,
       meeting_link: meetingDetails?.meetingLink || '',
       event_link: meetingDetails?.eventLink || '',
@@ -757,9 +805,7 @@ app.post('/trigger-retell-call', express.json(), async (req, res) => {
   }
 });
 
-// COMPLETE server.js - PART 3 OF 4 (WebSocket Connection & Discovery System)
-
-// ENHANCED WEBSOCKET CONNECTION HANDLER
+// ENHANCED WEBSOCKET CONNECTION HANDLER - REAL CALENDAR ONLY
 wss.on('connection', async (ws, req) => {
   console.log('🔗 NEW WEBSOCKET CONNECTION ESTABLISHED');
   console.log('Connection URL:', req.url);
@@ -850,7 +896,7 @@ wss.on('connection', async (ws, req) => {
   
   console.log('Retell connected via WebSocket.');
 
-  // ENHANCED Discovery Questions System
+  // Discovery Questions System
   const discoveryQuestions = [
     { question: 'How did you hear about us?', field: 'How did you hear about us', asked: false, answered: false, answer: '' },
     { question: 'What industry or business are you in?', field: 'Business/Industry', asked: false, answered: false, answer: '' },
@@ -1046,7 +1092,7 @@ wss.on('connection', async (ws, req) => {
     }, 3000);
   }
 
-  // Enhanced system prompt with Google Calendar integration
+  // Enhanced system prompt with REAL Google Calendar integration
   let conversationHistory = [
     {
       role: 'system',
@@ -1114,9 +1160,9 @@ DISCOVERY FLOW:
 - Count your questions mentally: 1, 2, 3, 4, 5, 6
 
 SCHEDULING APPROACH - REAL GOOGLE CALENDAR INTEGRATION:
-- ONLY after asking ALL 6 discovery questions, present available times from the actual calendar
+- ONLY after asking ALL 6 discovery questions, present available times from the REAL calendar
 - When showing availability, be specific: "I have [day] at [time], [time], and [time]. Which works best?"
-- ALWAYS check the real calendar before confirming any time
+- ALWAYS check the REAL calendar before confirming any time
 - When they request a specific time:
   * If available: "Perfect! Let me book that for you right now." Then actually create the calendar event
   * If NOT available: "I'm sorry, that time is already booked. I do have [alternative times] available. Which would work better?"
@@ -1131,9 +1177,9 @@ CALENDAR RESPONSES:
 - Always confirm bookings immediately: "Done! You're all set for [confirmed time]."
 - If no availability exists, suggest the earliest available times in the following weeks
 
-IMPORTANT: Use real calendar data to provide accurate availability. Never make assumptions about open times.
+IMPORTANT: Use REAL calendar data to provide accurate availability. Never make assumptions about open times.
 
-Remember: Start with greeting, have brief pleasant conversation, then systematically complete ALL 6 discovery questions before showing real available calendar times.`
+Remember: Start with greeting, have brief pleasant conversation, then systematically complete ALL 6 discovery questions before showing REAL available calendar times.`
     }
   ];
 
@@ -1182,9 +1228,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     }
   }, 8000);
 
-       // COMPLETE server.js - PART 4 OF 4 (Message Handler & Server Initialization)
-
-  // ENHANCED Message Handler with Fixed Calendar Integration
+  // ENHANCED Message Handler with REAL Calendar Integration Only
   ws.on('message', async (data) => {
     try {
       clearTimeout(autoGreetingTimer);
@@ -1258,142 +1302,153 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
         let alternativeTimeNeeded = false;
         let calendarCheckResponse = '';
         
-        // ENHANCED: Scheduling detection with Google Calendar integration
+        // FIXED: Scheduling detection with REAL Google Calendar integration ONLY
         if (discoveryProgress.allQuestionsCompleted && 
             userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today|\d{1,2}\s*(am|pm)|morning|afternoon|evening)\b/)) {
           
           console.log('🗓️ User mentioned scheduling after completing ALL discovery questions');
           console.log('🔍 User message:', userMessage);
           
-          const dayInfo = handleSchedulingPreference(userMessage);
-          console.log('📅 Parsed day info:', dayInfo);
-          
-          if (dayInfo && !webhookSent) {
-            try {
-              console.log('📅 Checking Google Calendar availability for:', dayInfo.date);
-              
-              // Enhanced calendar checking with specific time
-              let preferredHour = 10; // Default 10 AM
-              
-              // Parse specific time from user input
-              if (dayInfo.timePreference) {
-                const timeStr = dayInfo.timePreference.toLowerCase();
-                if (timeStr.includes('morning') || timeStr.includes('am')) {
-                  preferredHour = timeStr.includes('early') ? 9 : 10;
-                } else if (timeStr.includes('afternoon') || timeStr.includes('pm')) {
-                  preferredHour = timeStr.includes('late') ? 15 : 14;
-                } else if (timeStr.includes('evening')) {
-                  preferredHour = 16;
-                }
+          // MUST use real calendar - no fallbacks
+          if (!calendarService.calendar) {
+            console.error('❌ Calendar service not initialized! Cannot schedule.');
+            calendarCheckResponse = "I'm sorry, I'm having trouble accessing my calendar right now. Let me get this resolved and call you back to schedule our meeting.";
+            schedulingDetected = false;
+          } else {
+            const dayInfo = handleSchedulingPreference(userMessage);
+            console.log('📅 Parsed day info:', dayInfo);
+            
+            if (dayInfo && !webhookSent) {
+              try {
+                console.log('📅 Checking REAL Google Calendar availability for:', dayInfo.date);
                 
-                // Extract specific hour if mentioned
-                const hourMatch = timeStr.match(/(\d{1,2})/);
-                if (hourMatch) {
-                  const hour = parseInt(hourMatch[1]);
-                  if (timeStr.includes('pm') && hour !== 12) {
-                    preferredHour = hour + 12;
-                  } else if (timeStr.includes('am') && hour === 12) {
-                    preferredHour = 0;
-                  } else if (timeStr.includes('am') || hour >= 8) {
-                    preferredHour = hour;
+                // Enhanced calendar checking with specific time
+                let preferredHour = 10; // Default 10 AM
+                
+                // Parse specific time from user input
+                if (dayInfo.timePreference) {
+                  const timeStr = dayInfo.timePreference.toLowerCase();
+                  if (timeStr.includes('morning') || timeStr.includes('am')) {
+                    preferredHour = timeStr.includes('early') ? 9 : 10;
+                  } else if (timeStr.includes('afternoon') || timeStr.includes('pm')) {
+                    preferredHour = timeStr.includes('late') ? 15 : 14;
+                  } else if (timeStr.includes('evening')) {
+                    preferredHour = 16;
                   }
-                }
-              }
-              
-              // Set the preferred time
-              const preferredDateTime = new Date(dayInfo.date);
-              preferredDateTime.setHours(preferredHour, 0, 0, 0);
-              
-              console.log('⏰ Preferred date/time:', preferredDateTime.toLocaleString());
-              
-              // Check if this specific time is available
-              const endDateTime = new Date(preferredDateTime);
-              endDateTime.setHours(preferredDateTime.getHours() + 1); // 1-hour meeting
-              
-              const isSpecificTimeAvailable = await checkAvailability(
-                preferredDateTime.toISOString(), 
-                endDateTime.toISOString()
-              );
-              
-              console.log(`📊 Specific time availability: ${isSpecificTimeAvailable}`);
-              
-              if (isSpecificTimeAvailable) {
-                // Time is available - book it
-                console.log('✅ Time available - proceeding with booking');
-                
-                // Create the calendar event immediately
-                const bookingResult = await calendarService.createEvent({
-                  summary: 'Nexella AI Consultation Call',
-                  description: `Discovery call with ${bookingInfo.name || connectionData.customerName || 'Customer'}\n\nDiscovery Notes:\n${Object.entries(discoveryData).map(([key, value]) => `${key}: ${value}`).join('\n')}`,
-                  startTime: preferredDateTime.toISOString(),
-                  endTime: endDateTime.toISOString(),
-                  attendeeEmail: bookingInfo.email || connectionData.customerEmail,
-                  attendeeName: bookingInfo.name || connectionData.customerName || 'Customer'
-                });
-                
-                if (bookingResult.success) {
-                  bookingInfo.preferredDay = `${dayInfo.dayName} at ${preferredDateTime.toLocaleTimeString('en-US', { 
-                    hour: 'numeric', 
-                    minute: '2-digit', 
-                    hour12: true 
-                  })}`;
-                  schedulingDetected = true;
                   
-                  calendarCheckResponse = `Perfect! I've booked you for ${dayInfo.dayName} at ${preferredDateTime.toLocaleTimeString('en-US', { 
-                    hour: 'numeric', 
-                    minute: '2-digit', 
-                    hour12: true 
-                  })}. You'll receive a calendar invitation with the meeting details shortly.`;
-                  
-                  console.log('✅ Calendar event created and confirmed');
-                } else {
-                  calendarCheckResponse = `Great! Let me schedule you for ${dayInfo.dayName}. I'll send you the calendar invitation shortly.`;
-                  schedulingDetected = true;
-                }
-              } else {
-                // Time not available - suggest alternatives
-                console.log('❌ Preferred time not available, finding alternatives...');
-                
-                const availableSlots = await getAvailableTimeSlots(dayInfo.date);
-                console.log(`📋 Found ${availableSlots.length} alternative slots for ${dayInfo.dayName}`);
-                
-                if (availableSlots.length > 0) {
-                  alternativeTimeNeeded = true;
-                  const firstSlot = availableSlots[0];
-                  const secondSlot = availableSlots[1];
-                  
-                  if (secondSlot) {
-                    calendarCheckResponse = `I'm sorry, that time is already booked. I do have ${firstSlot.displayTime} or ${secondSlot.displayTime} available on ${dayInfo.dayName}. Which would work better for you?`;
-                  } else {
-                    calendarCheckResponse = `I'm sorry, that time is already booked. I do have ${firstSlot.displayTime} available on ${dayInfo.dayName}. Would that work for you?`;
-                  }
-                } else {
-                  // No slots available that day - suggest next available slots
-                  console.log('❌ No slots available on requested day, getting upcoming availability...');
-                  
-                  const upcomingSlots = await getFormattedAvailableSlots(dayInfo.date, 14); // Check next 2 weeks
-                  
-                  if (upcomingSlots.length > 0) {
-                    const nextDay = upcomingSlots[0];
-                    if (upcomingSlots.length === 1) {
-                      calendarCheckResponse = `I don't have any availability on ${dayInfo.dayName}. My next available time is ${nextDay.dayName} at ${nextDay.formattedSlots}. Would any of those work?`;
-                    } else {
-                      const secondDay = upcomingSlots[1];
-                      calendarCheckResponse = `I don't have any availability on ${dayInfo.dayName}. I do have times available on ${nextDay.dayName} at ${nextDay.formattedSlots}, or ${secondDay.dayName} at ${secondDay.formattedSlots}. What works better for you?`;
+                  // Extract specific hour if mentioned
+                  const hourMatch = timeStr.match(/(\d{1,2})/);
+                  if (hourMatch) {
+                    const hour = parseInt(hourMatch[1]);
+                    if (timeStr.includes('pm') && hour !== 12) {
+                      preferredHour = hour + 12;
+                    } else if (timeStr.includes('am') && hour === 12) {
+                      preferredHour = 0;
+                    } else if (timeStr.includes('am') || hour >= 8) {
+                      preferredHour = hour;
                     }
-                    alternativeTimeNeeded = true;
-                  } else {
-                    calendarCheckResponse = "I don't have any availability that week. Let me check my calendar for the following weeks and get back to you.";
-                    alternativeTimeNeeded = true;
                   }
                 }
+                
+                // Set the preferred time
+                const preferredDateTime = new Date(dayInfo.date);
+                preferredDateTime.setHours(preferredHour, 0, 0, 0);
+                
+                console.log('⏰ Preferred date/time:', preferredDateTime.toLocaleString());
+                
+                // Check if this specific time is available in REAL calendar
+                const endDateTime = new Date(preferredDateTime);
+                endDateTime.setHours(preferredDateTime.getHours() + 1); // 1-hour meeting
+                
+                const isSpecificTimeAvailable = await checkAvailability(
+                  preferredDateTime.toISOString(), 
+                  endDateTime.toISOString()
+                );
+                
+                console.log(`📊 REAL calendar specific time availability: ${isSpecificTimeAvailable}`);
+                
+                if (isSpecificTimeAvailable) {
+                  // Time is available - book it in REAL calendar
+                  console.log('✅ Time available in REAL calendar - proceeding with booking');
+                  
+                  // Create the REAL calendar event immediately
+                  const bookingResult = await calendarService.createEvent({
+                    summary: 'Nexella AI Consultation Call',
+                    description: `Discovery call with ${bookingInfo.name || connectionData.customerName || 'Customer'}\n\nDiscovery Notes:\n${Object.entries(discoveryData).map(([key, value]) => `${key}: ${value}`).join('\n')}`,
+                    startTime: preferredDateTime.toISOString(),
+                    endTime: endDateTime.toISOString(),
+                    attendeeEmail: bookingInfo.email || connectionData.customerEmail,
+                    attendeeName: bookingInfo.name || connectionData.customerName || 'Customer'
+                  });
+                  
+                  if (bookingResult.success) {
+                    bookingInfo.preferredDay = `${dayInfo.dayName} at ${preferredDateTime.toLocaleTimeString('en-US', { 
+                      hour: 'numeric', 
+                      minute: '2-digit', 
+                      hour12: true 
+                    })}`;
+                    schedulingDetected = true;
+                    
+                    calendarCheckResponse = `Perfect! I've booked you for ${dayInfo.dayName} at ${preferredDateTime.toLocaleTimeString('en-US', { 
+                      hour: 'numeric', 
+                      minute: '2-digit', 
+                      hour12: true 
+                    })}. You'll receive a calendar invitation with the meeting details shortly.`;
+                    
+                    console.log('✅ REAL calendar event created and confirmed');
+                  } else {
+                    console.error('❌ Failed to create REAL calendar event:', bookingResult.error);
+                    calendarCheckResponse = `I'm having trouble creating the calendar event right now. Let me try again and get back to you.`;
+                    schedulingDetected = false;
+                  }
+                } else {
+                  // Time not available - suggest alternatives from REAL calendar
+                  console.log('❌ Preferred time not available in REAL calendar, finding alternatives...');
+                  
+                  const availableSlots = await getAvailableTimeSlots(dayInfo.date);
+                  console.log(`📋 Found ${availableSlots.length} REAL alternative slots for ${dayInfo.dayName}`);
+                  
+                  if (availableSlots.length > 0) {
+                    alternativeTimeNeeded = true;
+                    const firstSlot = availableSlots[0];
+                    const secondSlot = availableSlots[1];
+                    
+                    if (secondSlot) {
+                      calendarCheckResponse = `I'm sorry, that time is already booked. I do have ${firstSlot.displayTime} or ${secondSlot.displayTime} available on ${dayInfo.dayName}. Which would work better for you?`;
+                    } else {
+                      calendarCheckResponse = `I'm sorry, that time is already booked. I do have ${firstSlot.displayTime} available on ${dayInfo.dayName}. Would that work for you?`;
+                    }
+                  } else {
+                    // No slots available that day - suggest next available slots from REAL calendar
+                    console.log('❌ No slots available on requested day in REAL calendar, getting upcoming availability...');
+                    
+                    try {
+                      const upcomingSlots = await getFormattedAvailableSlots(dayInfo.date, 14); // Check next 2 weeks
+                      
+                      if (upcomingSlots.length > 0) {
+                        const nextDay = upcomingSlots[0];
+                        if (upcomingSlots.length === 1) {
+                          calendarCheckResponse = `I don't have any availability on ${dayInfo.dayName}. My next available time is ${nextDay.dayName} at ${nextDay.formattedSlots}. Would any of those work?`;
+                        } else {
+                          const secondDay = upcomingSlots[1];
+                          calendarCheckResponse = `I don't have any availability on ${dayInfo.dayName}. I do have times available on ${nextDay.dayName} at ${nextDay.formattedSlots}, or ${secondDay.dayName} at ${secondDay.formattedSlots}. What works better for you?`;
+                        }
+                        alternativeTimeNeeded = true;
+                      } else {
+                        calendarCheckResponse = "I don't have any availability that week. Let me check my calendar for the following weeks and get back to you.";
+                        alternativeTimeNeeded = true;
+                      }
+                    } catch (upcomingError) {
+                      console.error('❌ Error getting upcoming REAL calendar slots:', upcomingError.message);
+                      calendarCheckResponse = "I'm having trouble accessing my calendar right now. Let me get this resolved and call you back.";
+                    }
+                  }
+                }
+              } catch (calendarError) {
+                console.error('❌ Error checking REAL calendar:', calendarError.message);
+                calendarCheckResponse = "I'm having trouble accessing my calendar right now. Let me get this resolved and call you back to schedule our meeting.";
+                schedulingDetected = false;
               }
-            } catch (calendarError) {
-              console.error('❌ Error checking calendar:', calendarError);
-              // Fallback to basic scheduling
-              bookingInfo.preferredDay = dayInfo.dayName;
-              schedulingDetected = true;
-              calendarCheckResponse = `Great! Let me schedule you for ${dayInfo.dayName}. I'll check my calendar and confirm the exact time.`;
             }
           }
         } else if (!discoveryProgress.allQuestionsCompleted && 
@@ -1403,7 +1458,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
 
         conversationHistory.push({ role: 'user', content: userMessage });
 
-        // FIXED: Context prompt section with proper await for availability response
+        // FIXED: Context prompt section with REAL calendar availability
         let contextPrompt = '';
         if (!discoveryProgress.allQuestionsCompleted) {
           const nextUnanswered = discoveryQuestions.find(q => !q.answered);
@@ -1435,35 +1490,44 @@ ${questionNumber}. ${nextUnanswered.question}${acknowledgmentInstruction}
 CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions. Do NOT skip to scheduling until all 6 are done.`;
           }
         } else {
-          // ENHANCED: Context prompts for calendar integration
+          // FIXED: Context prompts for REAL calendar integration only
           if (alternativeTimeNeeded) {
             contextPrompt = `
 
-All 6 discovery questions completed. The user's preferred time is not available. 
+All 6 discovery questions completed. The user's preferred time is not available in REAL calendar. 
 RESPOND EXACTLY WITH: "${calendarCheckResponse}"
-Do not add any other text or explanation. Just provide the alternative time options.`;
+Do not add any other text or explanation. Just provide the alternative time options from REAL calendar.`;
           } else if (schedulingDetected) {
             contextPrompt = `
 
-All 6 discovery questions completed. Time slot confirmed as available and BOOKED. 
+All 6 discovery questions completed. Time slot confirmed as available and BOOKED in REAL calendar. 
 RESPOND EXACTLY WITH: "${calendarCheckResponse}"
-Do not add any other text. Confirm the booking.`;
+Do not add any other text. Confirm the REAL booking.`;
           } else {
-            // Generate availability response with proper await
-            console.log('🤖 All discovery complete, generating availability response...');
+            // Generate availability response with REAL calendar data only
+            console.log('🤖 All discovery complete, generating REAL availability response...');
             try {
-              const availabilityResponse = await generateAvailabilityResponse();
-              console.log('✅ Got availability response:', availabilityResponse);
-              contextPrompt = `
+              // MUST use real calendar
+              if (!calendarService.calendar) {
+                console.error('❌ Calendar service not initialized!');
+                contextPrompt = `
 
-All 6 discovery questions completed. Show available times and ask for scheduling preference.
+All 6 discovery questions completed. Calendar service not available.
+RESPOND EXACTLY WITH: "Perfect! I have all the information I need. I'm having trouble accessing my calendar right now. Let me get this resolved and call you back to schedule our meeting."`;
+              } else {
+                const availabilityResponse = await generateAvailabilityResponse();
+                console.log('✅ Got REAL availability response:', availabilityResponse);
+                contextPrompt = `
+
+All 6 discovery questions completed. Show available times from REAL calendar and ask for scheduling preference.
 RESPOND EXACTLY WITH: "Perfect! I have all the information I need. Let's schedule a call to discuss how we can help. ${availabilityResponse}"`;
+              }
             } catch (availabilityError) {
-              console.error('❌ Error generating availability:', availabilityError);
+              console.error('❌ Error generating REAL availability:', availabilityError.message);
               contextPrompt = `
 
-All 6 discovery questions completed. Show available times and ask for scheduling preference.
-RESPOND EXACTLY WITH: "Perfect! I have all the information I need. Let's schedule a call to discuss how we can help. What day and time would work best for you?"`;
+All 6 discovery questions completed. Error accessing REAL calendar.
+RESPOND EXACTLY WITH: "Perfect! I have all the information I need. I'm having trouble accessing my calendar right now. Let me get this resolved and call you back to schedule our meeting."`;
             }
           }
         }
@@ -1502,12 +1566,13 @@ RESPOND EXACTLY WITH: "Perfect! I have all the information I need. Let's schedul
           response_id: parsed.response_id
         }));
         
-        // ENHANCED: Webhook sending with Google Calendar integration
+        // ENHANCED: Webhook sending with REAL Google Calendar integration
         if (schedulingDetected && discoveryProgress.allQuestionsCompleted && !webhookSent) {
           console.log('🚀 SENDING WEBHOOK - All conditions met:');
           console.log('   ✅ All 6 discovery questions completed and answered');
           console.log('   ✅ Scheduling preference detected');
           console.log('   ✅ Contact info available');
+          console.log('   ✅ REAL calendar booking attempted');
           
           const finalDiscoveryData = {};
           discoveryQuestions.forEach((q, index) => {
@@ -1531,11 +1596,11 @@ RESPOND EXACTLY WITH: "Perfect! I have all the information I need. Let's schedul
           if (result.success) {
             webhookSent = true;
             conversationState = 'completed';
-            console.log('✅ Webhook sent successfully with all discovery data');
+            console.log('✅ Webhook sent successfully with all discovery data and REAL calendar booking');
             
-            // Log booking details if calendar event was created
+            // Log REAL booking details if calendar event was created
             if (result.booking && result.booking.success) {
-              console.log('📅 Calendar event created:', result.meetingDetails);
+              console.log('📅 REAL calendar event created:', result.meetingDetails);
             }
           }
         }
@@ -1664,7 +1729,7 @@ server.on('error', (error) => {
   console.error('❌ HTTP Server Error:', error);
 });
 
-// ENHANCED: Retell webhook handler with Google Calendar integration
+// ENHANCED: Retell webhook handler with REAL Google Calendar integration
 app.post('/retell-webhook', express.json(), async (req, res) => {
   try {
     const { event, call } = req.body;
@@ -1764,7 +1829,7 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
             discovery_data: discoveryData,
             schedulingComplete: true,
             calendar_platform: 'google',
-            calendar_booking: false
+            calendar_booking: false // Will be true only if REAL calendar booking succeeded
           });
           
           console.log(`Successfully sent webhook for ${event}`);
@@ -1785,5 +1850,5 @@ app.post('/retell-webhook', express.json(), async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Nexella WebSocket Server with Google Calendar integration is listening on port ${PORT}`);
+  console.log(`Nexella WebSocket Server with REAL Google Calendar integration is listening on port ${PORT}`);
 });
