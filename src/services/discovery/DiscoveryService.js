@@ -1,4 +1,4 @@
-// src/services/discovery/DiscoveryService.js - Discovery Questions Management
+// src/services/discovery/DiscoveryService.js - Improved Question Detection
 class DiscoveryService {
   constructor() {
     this.questions = [
@@ -15,7 +15,8 @@ class DiscoveryService {
       questionsCompleted: 0,
       allQuestionsCompleted: false,
       waitingForAnswer: false,
-      schedulingStarted: false
+      schedulingStarted: false,
+      lastQuestionAsked: null
     };
     
     this.userResponseBuffer = [];
@@ -37,7 +38,8 @@ class DiscoveryService {
       questionsCompleted: 0,
       allQuestionsCompleted: false,
       waitingForAnswer: false,
-      schedulingStarted: false
+      schedulingStarted: false,
+      lastQuestionAsked: null
     };
     
     this.userResponseBuffer = [];
@@ -55,7 +57,7 @@ class DiscoveryService {
     const answer = userAnswer.toLowerCase();
     
     switch (questionIndex) {
-      case 0:
+      case 0: // How did you hear about us?
         if (answer.includes('instagram') || answer.includes('social media')) {
           return "Instagram, nice! Social media is huge these days.";
         } else if (answer.includes('google') || answer.includes('search')) {
@@ -66,7 +68,7 @@ class DiscoveryService {
           return "Great, thanks for sharing that.";
         }
         
-      case 1:
+      case 1: // Industry/Business
         if (answer.includes('solar')) {
           return "Solar industry, that's awesome! Clean energy is the future.";
         } else if (answer.includes('real estate') || answer.includes('property')) {
@@ -80,10 +82,10 @@ class DiscoveryService {
         } else if (answer.includes('e-commerce') || answer.includes('online')) {
           return "E-commerce, perfect! Online business is booming.";
         } else {
-          return `So you're in the ${answer.split(' ')[0]} industry, that's great.`;
+          return `The ${answer.split(' ')[0]} industry, that's great.`;
         }
         
-      case 2:
+      case 2: // Main product/service
         if (answer.includes('solar')) {
           return "Solar installations, excellent choice for the market.";
         } else if (answer.includes('coaching') || answer.includes('consulting')) {
@@ -94,7 +96,7 @@ class DiscoveryService {
           return "Got it, that sounds like a great service.";
         }
         
-      case 3:
+      case 3: // Running ads
         if (answer.includes('yes') || answer.includes('google') || answer.includes('facebook') || answer.includes('meta')) {
           return "Great, so you're already running ads. That's smart.";
         } else if (answer.includes('no') || answer.includes('not')) {
@@ -103,7 +105,7 @@ class DiscoveryService {
           return "Got it, thanks for that info.";
         }
         
-      case 4:
+      case 4: // Using CRM
         if (answer.includes('gohighlevel') || answer.includes('go high level')) {
           return "GoHighLevel, excellent choice! That's a powerful platform.";
         } else if (answer.includes('hubspot')) {
@@ -118,13 +120,15 @@ class DiscoveryService {
           return "Perfect, I understand.";
         }
         
-      case 5:
+      case 5: // Pain points
         if (answer.includes('lead') || answer.includes('follow up')) {
           return "Lead follow-up challenges, I totally get that.";
         } else if (answer.includes('time') || answer.includes('busy')) {
           return "Time management issues, that's so common in business.";
         } else if (answer.includes('money') || answer.includes('expensive')) {
           return "Budget concerns, completely understandable.";
+        } else if (answer.includes('appointment') || answer.includes('booking')) {
+          return "Getting more appointments, that's a common challenge.";
         } else {
           return "I see, those are definitely real challenges.";
         }
@@ -145,48 +149,70 @@ class DiscoveryService {
     }
   }
 
-  // Detect if a question was asked in the bot's message
+  // IMPROVED: More precise question detection
   detectQuestionAsked(botMessage) {
     const botContent = botMessage.toLowerCase();
     const nextQuestionIndex = this.questions.findIndex(q => !q.asked);
     
     if (nextQuestionIndex === -1) {
+      console.log('✅ All questions have been asked');
       return false;
     }
     
     if (this.progress.waitingForAnswer) {
+      console.log(`⚠️ Already waiting for answer to question ${this.progress.currentQuestionIndex + 1} - ignoring detection`);
       return false;
     }
     
     const nextQuestion = this.questions[nextQuestionIndex];
     let detected = false;
     
+    // More specific detection patterns
     switch (nextQuestionIndex) {
-      case 0:
-        detected = botContent.includes('hear about') || botContent.includes('find us');
+      case 0: // How did you hear about us?
+        detected = (botContent.includes('hear about') && botContent.includes('us')) || 
+                  (botContent.includes('find') && botContent.includes('us')) ||
+                  (botContent.includes('found') && botContent.includes('us'));
         break;
-      case 1:
-        detected = (botContent.includes('industry') || botContent.includes('business')) && !botContent.includes('hear about');
+        
+      case 1: // What industry or business are you in?
+        detected = (botContent.includes('industry') || 
+                   (botContent.includes('business') && botContent.includes('in'))) && 
+                   !botContent.includes('hear about');
         break;
-      case 2:
-        detected = (botContent.includes('product') || botContent.includes('service')) && !botContent.includes('industry');
+        
+      case 2: // What's your main product or service?
+        detected = ((botContent.includes('product') || botContent.includes('service')) && 
+                   (botContent.includes('main') || botContent.includes('your'))) && 
+                   !botContent.includes('industry') && !botContent.includes('business');
         break;
-      case 3:
-        detected = (botContent.includes('running') && botContent.includes('ads')) || botContent.includes('advertising');
+        
+      case 3: // Are you currently running any ads?
+        detected = (botContent.includes('running') && botContent.includes('ads')) || 
+                  (botContent.includes('advertising') && botContent.includes('currently')) ||
+                  (botContent.includes('ads') && botContent.includes('any'));
         break;
-      case 4:
-        detected = botContent.includes('crm') || (botContent.includes('using') && botContent.includes('system'));
+        
+      case 4: // Are you using any CRM system?
+        detected = botContent.includes('crm') || 
+                  (botContent.includes('using') && botContent.includes('system')) ||
+                  (botContent.includes('customer') && botContent.includes('management'));
         break;
-      case 5:
-        detected = botContent.includes('pain point') || botContent.includes('challenge') || botContent.includes('biggest');
+        
+      case 5: // What are your biggest pain points or challenges?
+        detected = (botContent.includes('pain point') || botContent.includes('challenge')) && 
+                  (botContent.includes('biggest') || botContent.includes('main'));
         break;
     }
     
     if (detected) {
       console.log(`✅ DETECTED Question ${nextQuestionIndex + 1}: "${nextQuestion.question}"`);
+      console.log(`🎯 Question content that triggered detection: "${botContent}"`);
+      
       nextQuestion.asked = true;
       this.progress.currentQuestionIndex = nextQuestionIndex;
       this.progress.waitingForAnswer = true;
+      this.progress.lastQuestionAsked = nextQuestion.question;
       this.userResponseBuffer = [];
       return true;
     }
@@ -194,7 +220,7 @@ class DiscoveryService {
     return false;
   }
 
-  // Capture user's answer to the current question
+  // IMPROVED: Better answer validation
   captureUserAnswer(userMessage) {
     if (!this.progress.waitingForAnswer || this.isCapturingAnswer) {
       return;
@@ -205,7 +231,19 @@ class DiscoveryService {
       return;
     }
     
+    // Don't capture scheduling requests as discovery answers
+    const schedulingKeywords = ['schedule', 'book', 'appointment', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'am', 'pm'];
+    const isSchedulingRequest = schedulingKeywords.some(keyword => 
+      userMessage.toLowerCase().includes(keyword)
+    );
+    
+    if (isSchedulingRequest && this.progress.questionsCompleted >= 4) {
+      console.log(`⚠️ Detected scheduling request, not capturing as discovery answer: "${userMessage}"`);
+      return;
+    }
+    
     console.log(`📝 Buffering answer for Q${this.progress.currentQuestionIndex + 1}: "${userMessage}"`);
+    console.log(`🎯 This is for question: "${currentQ.question}"`);
     
     this.userResponseBuffer.push(userMessage.trim());
     
@@ -213,6 +251,7 @@ class DiscoveryService {
       clearTimeout(this.answerCaptureTimer);
     }
     
+    // Shorter timer for faster response
     this.answerCaptureTimer = setTimeout(() => {
       if (this.isCapturingAnswer) return;
       
@@ -220,23 +259,49 @@ class DiscoveryService {
       
       const completeAnswer = this.userResponseBuffer.join(' ');
       
-      currentQ.answered = true;
-      currentQ.answer = completeAnswer;
-      this.discoveryData[currentQ.field] = completeAnswer;
-      this.discoveryData[`question_${this.progress.currentQuestionIndex}`] = completeAnswer;
-      
-      this.progress.questionsCompleted++;
-      this.progress.waitingForAnswer = false;
-      this.progress.allQuestionsCompleted = this.questions.every(q => q.answered);
-      
-      console.log(`✅ CAPTURED Q${this.progress.currentQuestionIndex + 1}: "${completeAnswer}"`);
-      console.log(`📊 Progress: ${this.progress.questionsCompleted}/6 questions completed`);
+      // Validate answer makes sense for the question
+      if (this.isValidAnswerForQuestion(completeAnswer, this.progress.currentQuestionIndex)) {
+        currentQ.answered = true;
+        currentQ.answer = completeAnswer;
+        this.discoveryData[currentQ.field] = completeAnswer;
+        this.discoveryData[`question_${this.progress.currentQuestionIndex}`] = completeAnswer;
+        
+        this.progress.questionsCompleted++;
+        this.progress.waitingForAnswer = false;
+        this.progress.allQuestionsCompleted = this.questions.every(q => q.answered);
+        
+        console.log(`✅ CAPTURED Q${this.progress.currentQuestionIndex + 1}: "${completeAnswer}"`);
+        console.log(`📊 Progress: ${this.progress.questionsCompleted}/6 questions completed`);
+      } else {
+        console.log(`⚠️ Answer doesn't seem to match question ${this.progress.currentQuestionIndex + 1}, waiting for better answer`);
+        // Don't mark as answered, keep waiting
+      }
       
       this.userResponseBuffer = [];
       this.isCapturingAnswer = false;
       this.answerCaptureTimer = null;
       
-    }, 3000);
+    }, 2000); // Reduced from 3000ms to 2000ms
+  }
+
+  // NEW: Validate if answer makes sense for the question
+  isValidAnswerForQuestion(answer, questionIndex) {
+    const answerLower = answer.toLowerCase();
+    
+    // Very basic validation - just check it's not obviously wrong
+    switch (questionIndex) {
+      case 0: // How did you hear about us?
+        // Should not contain scheduling words
+        return !answerLower.includes('tuesday') && !answerLower.includes('monday') && 
+               !answerLower.includes('10') && !answerLower.includes('am');
+               
+      case 5: // Pain points
+        // Should not be a scheduling request
+        return !answerLower.includes('tuesday at') && !answerLower.includes('monday at');
+        
+      default:
+        return answer.length > 1; // Basic check
+    }
   }
 
   // Get next unanswered question
@@ -252,7 +317,7 @@ class DiscoveryService {
       .join('\n');
   }
 
-  // Generate context prompt for AI
+  // Generate context prompt for AI with stricter instructions
   generateContextPrompt() {
     if (!this.progress.allQuestionsCompleted) {
       const nextUnanswered = this.getNextUnansweredQuestion();
@@ -281,7 +346,12 @@ ${completed || 'None yet'}
 NEXT TO ASK:
 ${questionNumber}. ${nextUnanswered.question}${acknowledgmentInstruction}
 
-CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions. Do NOT skip to scheduling until all 6 are done.`;
+CRITICAL INSTRUCTIONS:
+- Ask question ${questionNumber} EXACTLY as written above
+- Wait for a complete answer before moving to the next question  
+- Do NOT skip questions or assume answers
+- Do NOT start scheduling until ALL 6 questions are complete
+- If user tries to schedule, say "Let me finish getting some information first"`;
       }
     }
     return null;
@@ -332,11 +402,13 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
       allQuestionsCompleted: this.progress.allQuestionsCompleted,
       waitingForAnswer: this.progress.waitingForAnswer,
       schedulingStarted: this.progress.schedulingStarted,
+      lastQuestionAsked: this.progress.lastQuestionAsked,
       questions: this.questions.map(q => ({
         question: q.question,
         field: q.field,
         asked: q.asked,
         answered: q.answered,
+        answer: q.answer || '',
         hasAnswer: !!q.answer
       }))
     };
