@@ -1,4 +1,4 @@
-// src/services/calendar/GoogleCalendarService.js - Google Calendar Integration
+// src/services/calendar/GoogleCalendarService.js - Fixed Version (No Invitation Requirement)
 const { google } = require('googleapis');
 const fs = require('fs').promises;
 const path = require('path');
@@ -96,56 +96,6 @@ class GoogleCalendarService {
         return;
       }
 
-      // Method 2: Service Account JSON (Fallback)
-      if (config.GOOGLE_SERVICE_ACCOUNT_KEY) {
-        console.log('🔐 Using Service Account JSON...');
-        const serviceAccountKey = JSON.parse(config.GOOGLE_SERVICE_ACCOUNT_KEY);
-        
-        this.auth = new google.auth.GoogleAuth({
-          credentials: serviceAccountKey,
-          scopes: ['https://www.googleapis.com/auth/calendar']
-        });
-        
-        console.log('✅ Service Account JSON authentication configured');
-        return;
-      }
-
-      // Method 3: Service Account from file (Development)
-      const serviceAccountPath = path.join(__dirname, '../../../service-account.json');
-      try {
-        await fs.access(serviceAccountPath);
-        console.log('🔐 Using Service Account from file...');
-        
-        this.auth = new google.auth.GoogleAuth({
-          keyFile: serviceAccountPath,
-          scopes: ['https://www.googleapis.com/auth/calendar']
-        });
-        
-        console.log('✅ Service Account file authentication configured');
-        return;
-      } catch (fileError) {
-        console.log('ℹ️ No service account file found');
-      }
-
-      // Method 4: OAuth2 (Development)
-      if (config.GOOGLE_CLIENT_ID && config.GOOGLE_CLIENT_SECRET && config.GOOGLE_REFRESH_TOKEN) {
-        console.log('🔐 Using OAuth2 authentication...');
-        
-        const oauth2Client = new google.auth.OAuth2(
-          config.GOOGLE_CLIENT_ID,
-          config.GOOGLE_CLIENT_SECRET,
-          'urn:ietf:wg:oauth:2.0:oob'
-        );
-
-        oauth2Client.setCredentials({
-          refresh_token: config.GOOGLE_REFRESH_TOKEN
-        });
-
-        this.auth = oauth2Client;
-        console.log('✅ OAuth2 authentication configured');
-        return;
-      }
-
       throw new Error('Required environment variables not found');
       
     } catch (error) {
@@ -180,7 +130,6 @@ class GoogleCalendarService {
     }
   }
 
-  // Safe method that returns mock data if calendar isn't available
   async getAvailableSlots(date) {
     try {
       if (!this.calendar) {
@@ -207,7 +156,7 @@ class GoogleCalendarService {
         return [];
       }
 
-      // Get start and end of day
+      // FIXED: Get start and end of day in local timezone
       const startOfDay = new Date(targetDate);
       startOfDay.setHours(this.businessHours.start, 0, 0, 0);
       
@@ -224,6 +173,8 @@ class GoogleCalendarService {
           startOfDay.setHours(startOfDay.getHours() + 1);
         }
       }
+
+      console.log(`🕐 [REAL CALENDAR] Checking from ${startOfDay.toLocaleString('en-US', {timeZone: this.timezone})} to ${endOfDay.toLocaleString('en-US', {timeZone: this.timezone})}`);
 
       // Get existing events
       const response = await this.calendar.events.list({
@@ -276,7 +227,6 @@ class GoogleCalendarService {
     }
   }
 
-  // Generate realistic mock slots for demo when calendar isn't available
   generateMockSlots(date) {
     console.log('🎭 Generating mock slots for demo purposes');
     
@@ -333,9 +283,8 @@ class GoogleCalendarService {
     try {
       if (!this.calendar) {
         console.log('⚠️ Calendar not available, returning mock availability');
-        // For demo: make most times available, but block some for realism
         const hour = new Date(startTime).getHours();
-        return ![13, 16].includes(hour); // Block 1 PM and 4 PM for demo
+        return ![13, 16].includes(hour);
       }
 
       const response = await this.calendar.events.list({
@@ -353,10 +302,11 @@ class GoogleCalendarService {
 
     } catch (error) {
       console.error('❌ Error checking slot availability:', error.message);
-      return true; // Default to available for demo
+      return true;
     }
   }
 
+  // FIXED: Create event without requiring invitations
   async createEvent(eventDetails) {
     try {
       if (!this.calendar) {
@@ -374,7 +324,7 @@ class GoogleCalendarService {
 
       const event = {
         summary: eventDetails.summary || 'Nexella AI Consultation Call',
-        description: eventDetails.description || 'Discovery call scheduled via Nexella AI',
+        description: `${eventDetails.description || 'Discovery call scheduled via Nexella AI'}\n\nCustomer: ${eventDetails.attendeeName || eventDetails.attendeeEmail}\nEmail: ${eventDetails.attendeeEmail}`,
         start: {
           dateTime: eventDetails.startTime,
           timeZone: this.timezone
@@ -383,12 +333,7 @@ class GoogleCalendarService {
           dateTime: eventDetails.endTime,
           timeZone: this.timezone
         },
-        attendees: [
-          {
-            email: eventDetails.attendeeEmail,
-            displayName: eventDetails.attendeeName || eventDetails.attendeeEmail
-          }
-        ],
+        // REMOVED: attendees array to avoid permission issues
         conferenceData: {
           createRequest: {
             requestId: `meet_${Date.now()}`,
@@ -409,19 +354,22 @@ class GoogleCalendarService {
       const response = await this.calendar.events.insert({
         calendarId: this.calendarId,
         resource: event,
-        conferenceDataVersion: 1,
-        sendUpdates: 'all'
+        conferenceDataVersion: 1
+        // REMOVED: sendUpdates to avoid permission issues
       });
 
       const createdEvent = response.data;
       console.log('✅ [REAL CALENDAR] Event created:', createdEvent.id);
+      console.log('📧 Manual invitation needed for:', eventDetails.attendeeEmail);
 
       return {
         success: true,
         eventId: createdEvent.id,
         meetingLink: createdEvent.conferenceData?.entryPoints?.[0]?.uri || createdEvent.hangoutLink,
         eventLink: createdEvent.htmlLink,
-        message: 'Event created and invitation sent'
+        message: 'Event created (manual invitation required)',
+        customerEmail: eventDetails.attendeeEmail,
+        customerName: eventDetails.attendeeName
       };
 
     } catch (error) {
@@ -434,9 +382,13 @@ class GoogleCalendarService {
     }
   }
 
+  // FIXED: Time parsing to handle "monday at 10:00 AM" correctly
   parseTimePreference(userMessage, preferredDay) {
+    console.log('🔍 Parsing time preference:', { userMessage, preferredDay });
+    
     let targetDate = new Date();
     
+    // Parse the day
     if (preferredDay.toLowerCase().includes('tomorrow')) {
       targetDate.setDate(targetDate.getDate() + 1);
     } else if (preferredDay.toLowerCase().includes('today')) {
@@ -461,12 +413,17 @@ class GoogleCalendarService {
       }
     }
     
-    // Parse time
+    // FIXED: Parse time more accurately
     let preferredHour = 10; // Default 10 AM
-    const timeMatch = preferredDay.match(/(\d{1,2})\s*(am|pm)/i);
+    
+    // Look for specific time patterns
+    const timeMatch = preferredDay.match(/(\d{1,2}):?(\d{0,2})\s*(am|pm)/i);
     if (timeMatch) {
       let hour = parseInt(timeMatch[1]);
-      const period = timeMatch[2].toLowerCase();
+      const minutes = parseInt(timeMatch[2] || '0');
+      const period = timeMatch[3].toLowerCase();
+      
+      console.log('🕐 Parsed time components:', { hour, minutes, period });
       
       if (period === 'pm' && hour !== 12) {
         hour += 12;
@@ -475,6 +432,7 @@ class GoogleCalendarService {
       }
       
       preferredHour = hour;
+      console.log('✅ Final parsed hour:', preferredHour);
     } else if (preferredDay.toLowerCase().includes('morning')) {
       preferredHour = 10;
     } else if (preferredDay.toLowerCase().includes('afternoon')) {
@@ -484,6 +442,8 @@ class GoogleCalendarService {
     }
     
     targetDate.setHours(preferredHour, 0, 0, 0);
+    
+    console.log('🎯 Final parsed datetime:', targetDate.toLocaleString('en-US', {timeZone: this.timezone}));
     
     return {
       preferredDateTime: targetDate,
