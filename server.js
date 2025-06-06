@@ -1,4 +1,4 @@
-// COMPLETE server.js with enhanced Google Calendar integration - FIXED VERSION
+// COMPLETE server.js with enhanced Google Calendar integration - FULLY FIXED VERSION
 require('dotenv').config();
 const express = require('express');
 const { WebSocketServer } = require('ws');
@@ -93,6 +93,145 @@ async function getAvailableTimeSlots(date) {
     console.error('❌ Error getting available slots:', error.message);
     return [];
   }
+}
+
+// Enhanced function to get and format available slots for user
+async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
+  try {
+    const today = new Date();
+    const searchStart = startDate ? new Date(startDate) : today;
+    
+    console.log(`📅 Getting formatted available slots starting from: ${searchStart.toDateString()}`);
+    
+    const allAvailableSlots = [];
+    
+    for (let i = 0; i < daysAhead; i++) {
+      const checkDate = new Date(searchStart);
+      checkDate.setDate(searchStart.getDate() + i);
+      
+      // Skip if date is in the past
+      if (checkDate < today) continue;
+      
+      const slots = await getAvailableTimeSlots(checkDate);
+      
+      if (slots.length > 0) {
+        const dayName = checkDate.toLocaleDateString('en-US', { 
+          weekday: 'long',
+          month: 'long', 
+          day: 'numeric'
+        });
+        
+        allAvailableSlots.push({
+          date: checkDate.toDateString(),
+          dayName: dayName,
+          slots: slots.slice(0, 4), // Show up to 4 slots per day
+          formattedSlots: slots.slice(0, 4).map(slot => slot.displayTime).join(', ')
+        });
+      }
+    }
+    
+    console.log(`✅ Found available slots across ${allAvailableSlots.length} days`);
+    return allAvailableSlots;
+    
+  } catch (error) {
+    console.error('❌ Error getting formatted available slots:', error.message);
+    return [];
+  }
+}
+
+// Enhanced function to generate availability response for user
+async function generateAvailabilityResponse() {
+  try {
+    const availableSlots = await getFormattedAvailableSlots();
+    
+    if (availableSlots.length === 0) {
+      return "I don't have any availability in the next week. Let me check for times the following week.";
+    }
+    
+    if (availableSlots.length === 1) {
+      const day = availableSlots[0];
+      return `I have availability on ${day.dayName} at ${day.formattedSlots}. Which time works best for you?`;
+    }
+    
+    if (availableSlots.length === 2) {
+      const day1 = availableSlots[0];
+      const day2 = availableSlots[1];
+      return `I have a few options available. On ${day1.dayName}, I have ${day1.formattedSlots}. Or on ${day2.dayName}, I have ${day2.formattedSlots}. What works better for you?`;
+    }
+    
+    // 3 or more days available
+    let response = "I have several times available this week. ";
+    availableSlots.slice(0, 3).forEach((day, index) => {
+      if (index === 0) {
+        response += `${day.dayName} at ${day.formattedSlots}`;
+      } else if (index === availableSlots.length - 1 || index === 2) {
+        response += `, or ${day.dayName} at ${day.formattedSlots}`;
+      } else {
+        response += `, ${day.dayName} at ${day.formattedSlots}`;
+      }
+    });
+    response += ". Which day and time would work best for you?";
+    
+    return response;
+    
+  } catch (error) {
+    console.error('❌ Error generating availability response:', error.message);
+    return "Let me check my calendar and get back to you with some available times.";
+  }
+}
+
+// Function to format a date range for display
+function formatDateRange(startDate, endDate) {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  
+  if (start.toDateString() === end.toDateString()) {
+    return `${start.toLocaleDateString('en-US', { 
+      weekday: 'long', 
+      month: 'long', 
+      day: 'numeric' 
+    })} from ${start.toLocaleTimeString('en-US', { 
+      hour: 'numeric', 
+      minute: '2-digit', 
+      hour12: true 
+    })} to ${end.toLocaleTimeString('en-US', { 
+      hour: 'numeric', 
+      minute: '2-digit', 
+      hour12: true 
+    })}`;
+  } else {
+    return `${start.toLocaleDateString('en-US', { 
+      weekday: 'long', 
+      month: 'long', 
+      day: 'numeric' 
+    })} at ${start.toLocaleTimeString('en-US', { 
+      hour: 'numeric', 
+      minute: '2-digit', 
+      hour12: true 
+    })}`;
+  }
+}
+
+// Function to validate business hours
+function isBusinessHours(dateTime) {
+  const date = new Date(dateTime);
+  const dayOfWeek = date.getDay(); // 0 = Sunday, 6 = Saturday
+  const hour = date.getHours();
+  
+  // Monday to Friday (1-5), 9 AM to 5 PM
+  return dayOfWeek >= 1 && dayOfWeek <= 5 && hour >= 9 && hour < 17;
+}
+
+// Function to get next business day
+function getNextBusinessDay(fromDate = new Date()) {
+  const date = new Date(fromDate);
+  date.setDate(date.getDate() + 1);
+  
+  while (date.getDay() === 0 || date.getDay() === 6) { // Skip weekends
+    date.setDate(date.getDate() + 1);
+  }
+  
+  return date;
 }
 
 // Update conversation state in trigger server
@@ -931,22 +1070,27 @@ DISCOVERY FLOW:
 - Do NOT skip questions or assume answers
 - Count your questions mentally: 1, 2, 3, 4, 5, 6
 
-SCHEDULING APPROACH - GOOGLE CALENDAR INTEGRATION:
-- ONLY after asking ALL 6 discovery questions, ask for scheduling preference
-- Say: "Perfect! I have all the information I need. Let's schedule a call to discuss how we can help. What day and time would work best for you?"
-- When they mention a day/time, check your calendar availability
-- If the time is available: "Great! Let me book that time for you right now."
-- If the time is NOT available: "I'm sorry, I already have something scheduled at that time. I do have [alternative time] available. Would that work?"
-- Always offer specific alternative times when their preferred time is unavailable
-- Once a time is agreed upon, confirm the booking: "Perfect! I've scheduled our meeting for [day/time]. You'll receive a calendar invitation with all the details."
+SCHEDULING APPROACH - REAL GOOGLE CALENDAR INTEGRATION:
+- ONLY after asking ALL 6 discovery questions, present available times from the actual calendar
+- When showing availability, be specific: "I have [day] at [time], [time], and [time]. Which works best?"
+- ALWAYS check the real calendar before confirming any time
+- When they request a specific time:
+  * If available: "Perfect! Let me book that for you right now." Then actually create the calendar event
+  * If NOT available: "I'm sorry, that time is already booked. I do have [alternative times] available. Which would work better?"
+- After booking: "Great! I've scheduled our meeting for [confirmed time]. You'll receive a calendar invitation with all the details."
+- Always provide specific alternative times when their preference isn't available
+- Never say "let me check" - you have real-time access to the calendar
 
-CALENDAR AVAILABILITY RESPONSES:
-- When checking availability, you can say: "Let me check my calendar for that time..."
-- For unavailable times: "I'm sorry, that time is already booked. How about [specific alternative]?"
-- Always be specific with alternative times rather than vague
-- Confirm bookings immediately: "Done! You're all set for [confirmed time]."
+CALENDAR RESPONSES:
+- Show only FUTURE available times (never past dates)
+- Show only BUSINESS HOURS (Monday-Friday, 9 AM - 5 PM)
+- Present 2-4 specific time options when possible
+- Always confirm bookings immediately: "Done! You're all set for [confirmed time]."
+- If no availability exists, suggest the earliest available times in the following weeks
 
-Remember: Start with greeting, have brief pleasant conversation, then systematically complete ALL 6 discovery questions before any scheduling discussion. Use real-time calendar checking for scheduling.`
+IMPORTANT: Use real calendar data to provide accurate availability. Never make assumptions about open times.
+
+Remember: Start with greeting, have brief pleasant conversation, then systematically complete ALL 6 discovery questions before showing real available calendar times.`
     }
   ];
 
@@ -1130,25 +1274,43 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
               
               if (isSpecificTimeAvailable) {
                 // Time is available - book it
-                bookingInfo.preferredDay = `${dayInfo.dayName} at ${preferredDateTime.toLocaleTimeString('en-US', { 
-                  hour: 'numeric', 
-                  minute: '2-digit', 
-                  hour12: true 
-                })}`;
-                schedulingDetected = true;
-                calendarCheckResponse = `Perfect! I can book you for ${dayInfo.dayName} at ${preferredDateTime.toLocaleTimeString('en-US', { 
-                  hour: 'numeric', 
-                  minute: '2-digit', 
-                  hour12: true 
-                })}. Let me schedule that right now.`;
-                
                 console.log('✅ Time available - proceeding with booking');
+                
+                // Create the calendar event immediately
+                const bookingResult = await calendarService.createEvent({
+                  summary: 'Nexella AI Consultation Call',
+                  description: `Discovery call with ${bookingInfo.name || connectionData.customerName || 'Customer'}\n\nDiscovery Notes:\n${Object.entries(discoveryData).map(([key, value]) => `${key}: ${value}`).join('\n')}`,
+                  startTime: preferredDateTime.toISOString(),
+                  endTime: endDateTime.toISOString(),
+                  attendeeEmail: bookingInfo.email || connectionData.customerEmail,
+                  attendeeName: bookingInfo.name || connectionData.customerName || 'Customer'
+                });
+                
+                if (bookingResult.success) {
+                  bookingInfo.preferredDay = `${dayInfo.dayName} at ${preferredDateTime.toLocaleTimeString('en-US', { 
+                    hour: 'numeric', 
+                    minute: '2-digit', 
+                    hour12: true 
+                  })}`;
+                  schedulingDetected = true;
+                  
+                  calendarCheckResponse = `Perfect! I've booked you for ${dayInfo.dayName} at ${preferredDateTime.toLocaleTimeString('en-US', { 
+                    hour: 'numeric', 
+                    minute: '2-digit', 
+                    hour12: true 
+                  })}. You'll receive a calendar invitation with the meeting details shortly.`;
+                  
+                  console.log('✅ Calendar event created and confirmed');
+                } else {
+                  calendarCheckResponse = `Great! Let me schedule you for ${dayInfo.dayName}. I'll send you the calendar invitation shortly.`;
+                  schedulingDetected = true;
+                }
               } else {
                 // Time not available - suggest alternatives
                 console.log('❌ Preferred time not available, finding alternatives...');
                 
                 const availableSlots = await getAvailableTimeSlots(dayInfo.date);
-                console.log(`📋 Found ${availableSlots.length} alternative slots`);
+                console.log(`📋 Found ${availableSlots.length} alternative slots for ${dayInfo.dayName}`);
                 
                 if (availableSlots.length > 0) {
                   alternativeTimeNeeded = true;
@@ -1161,17 +1323,22 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
                     calendarCheckResponse = `I'm sorry, that time is already booked. I do have ${firstSlot.displayTime} available on ${dayInfo.dayName}. Would that work for you?`;
                   }
                 } else {
-                  // No slots available that day - try next day
-                  const nextDay = new Date(dayInfo.date);
-                  nextDay.setDate(nextDay.getDate() + 1);
-                  const nextDaySlots = await getAvailableTimeSlots(nextDay);
+                  // No slots available that day - suggest next available slots
+                  console.log('❌ No slots available on requested day, getting upcoming availability...');
                   
-                  if (nextDaySlots.length > 0) {
-                    const nextDayName = nextDay.toLocaleDateString('en-US', { weekday: 'long' });
-                    calendarCheckResponse = `I don't have any availability on ${dayInfo.dayName}. How about ${nextDayName} at ${nextDaySlots[0].displayTime}?`;
+                  const upcomingSlots = await getFormattedAvailableSlots(dayInfo.date, 14); // Check next 2 weeks
+                  
+                  if (upcomingSlots.length > 0) {
+                    const nextDay = upcomingSlots[0];
+                    if (upcomingSlots.length === 1) {
+                      calendarCheckResponse = `I don't have any availability on ${dayInfo.dayName}. My next available time is ${nextDay.dayName} at ${nextDay.formattedSlots}. Would any of those work?`;
+                    } else {
+                      const secondDay = upcomingSlots[1];
+                      calendarCheckResponse = `I don't have any availability on ${dayInfo.dayName}. I do have times available on ${nextDay.dayName} at ${nextDay.formattedSlots}, or ${secondDay.dayName} at ${secondDay.formattedSlots}. What works better for you?`;
+                    }
                     alternativeTimeNeeded = true;
                   } else {
-                    calendarCheckResponse = "Let me check my calendar for the best available times this week and get back to you.";
+                    calendarCheckResponse = "I don't have any availability that week. Let me check my calendar for the following weeks and get back to you.";
                     alternativeTimeNeeded = true;
                   }
                 }
@@ -1204,11 +1371,15 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
             if (lastAnsweredQ && discoveryProgress.questionsCompleted > 0) {
               const lastQuestionIndex = discoveryQuestions.indexOf(lastAnsweredQ);
               const suggestedAck = getContextualAcknowledgment(lastAnsweredQ.answer, lastQuestionIndex);
-              acknowledgmentInstruction = `\n\nThe user just answered: "${lastAnsweredQ.answer}"
+              acknowledgmentInstruction = `
+
+The user just answered: "${lastAnsweredQ.answer}"
 Acknowledge this with: "${suggestedAck}" then ask the next question.`;
             }
             
-            contextPrompt = `\n\nDISCOVERY STATUS:
+            contextPrompt = `
+
+DISCOVERY STATUS:
 COMPLETED (${discoveryProgress.questionsCompleted}/6):
 ${completed || 'None yet'}
 
@@ -1220,15 +1391,24 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
         } else {
           // ENHANCED: Context prompts for calendar integration
           if (alternativeTimeNeeded) {
-            contextPrompt = `\n\nAll 6 discovery questions completed. The user's preferred time is not available. 
+            contextPrompt = `
+
+All 6 discovery questions completed. The user's preferred time is not available. 
 RESPOND EXACTLY WITH: "${calendarCheckResponse}"
 Do not add any other text or explanation. Just provide the alternative time options.`;
           } else if (schedulingDetected) {
-            contextPrompt = `\n\nAll 6 discovery questions completed. Time slot confirmed as available. 
+            contextPrompt = `
+
+All 6 discovery questions completed. Time slot confirmed as available and BOOKED. 
 RESPOND EXACTLY WITH: "${calendarCheckResponse}"
 Do not add any other text. Confirm the booking.`;
           } else {
-            contextPrompt = '\n\nAll 6 discovery questions completed. Ask for their preferred day and time for scheduling: "Perfect! I have all the information I need. Let\'s schedule a call to discuss how we can help. What day and time would work best for you?"';
+            // Generate availability response
+            const availabilityResponse = await generateAvailabilityResponse();
+            contextPrompt = `
+
+All 6 discovery questions completed. Show available times and ask for scheduling preference.
+RESPOND EXACTLY WITH: "Perfect! I have all the information I need. Let's schedule a call to discuss how we can help. ${availabilityResponse}"`;
           }
         }
 
