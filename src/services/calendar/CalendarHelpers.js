@@ -1,4 +1,4 @@
-// src/services/calendar/CalendarHelpers.js - Updated for Appointment Schedule
+// src/services/calendar/CalendarHelpers.js - COMPLETE FIXED VERSION
 const GoogleAppointmentScheduleService = require('./GoogleAppointmentScheduleService');
 
 // Initialize appointment schedule service
@@ -14,147 +14,7 @@ async function initializeCalendarService() {
     if (scheduleInitialized) {
       console.log('✅ Google Appointment Schedule service ready - REAL schedule mode');
       const scheduleInfo = appointmentScheduleService.getScheduleInfo();
-      console.log('📅 Detected patterns:', { dayMatch, timeMatch, nextWeekMatch });
-  
-  if (nextWeekMatch) {
-    let targetDate = new Date();
-    targetDate.setDate(targetDate.getDate() + 7);
-    const dayOfWeek = targetDate.getDay();
-    const daysUntilMonday = (dayOfWeek === 0) ? 1 : (8 - dayOfWeek);
-    targetDate.setDate(targetDate.getDate() + daysUntilMonday - 7);
-    
-    return {
-      dayName: 'next week',
-      date: targetDate,
-      isSpecific: false,
-      timePreference: timeMatch ? timeMatch[0] : 'morning',
-      fullPreference: userMessage
-    };
-  } else if (dayMatch) {
-    const preferredDay = dayMatch[0].toLowerCase();
-    let targetDate = new Date();
-    
-    if (preferredDay === 'tomorrow') {
-      targetDate.setDate(targetDate.getDate() + 1);
-      return {
-        dayName: 'tomorrow',
-        date: targetDate,
-        isSpecific: true,
-        timePreference: timeMatch ? timeMatch[0] : 'morning',
-        fullPreference: userMessage
-      };
-    } else if (preferredDay === 'today') {
-      return {
-        dayName: 'today',
-        date: targetDate,
-        isSpecific: true,
-        timePreference: timeMatch ? timeMatch[0] : 'afternoon',
-        fullPreference: userMessage
-      };
-    } else {
-      const daysOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-      const requestedDayIndex = daysOfWeek.findIndex(d => d === preferredDay);
-      
-      if (requestedDayIndex !== -1) {
-        const currentDay = targetDate.getDay();
-        let daysToAdd = requestedDayIndex - currentDay;
-        
-        if (daysToAdd <= 0) {
-          daysToAdd += 7;
-        }
-        
-        targetDate.setDate(targetDate.getDate() + daysToAdd);
-        
-        return {
-          dayName: preferredDay,
-          date: targetDate,
-          isSpecific: true,
-          timePreference: timeMatch ? timeMatch[0] : 'morning',
-          fullPreference: userMessage
-        };
-      }
-    }
-  }
-  
-  return null;
-}
-
-// Utility functions
-function formatDateRange(startDate, endDate) {
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-  
-  if (start.toDateString() === end.toDateString()) {
-    return `${start.toLocaleDateString('en-US', { 
-      weekday: 'long', 
-      month: 'long', 
-      day: 'numeric' 
-    })} from ${start.toLocaleTimeString('en-US', { 
-      hour: 'numeric', 
-      minute: '2-digit', 
-      hour12: true 
-    })} to ${end.toLocaleTimeString('en-US', { 
-      hour: 'numeric', 
-      minute: '2-digit', 
-      hour12: true 
-    })}`;
-  } else {
-    return `${start.toLocaleDateString('en-US', { 
-      weekday: 'long', 
-      month: 'long', 
-      day: 'numeric' 
-    })} at ${start.toLocaleTimeString('en-US', { 
-      hour: 'numeric', 
-      minute: '2-digit', 
-      hour12: true 
-    })}`;
-  }
-}
-
-function isBusinessHours(dateTime) {
-  const date = new Date(dateTime);
-  const dayOfWeek = date.getDay(); // 0 = Sunday, 6 = Saturday
-  const hour = date.getHours();
-  
-  // Monday to Friday (1-5), 9 AM to 5 PM
-  return dayOfWeek >= 1 && dayOfWeek <= 5 && hour >= 9 && hour < 17;
-}
-
-function getNextBusinessDay(fromDate = new Date()) {
-  const date = new Date(fromDate);
-  date.setDate(date.getDate() + 1);
-  
-  while (date.getDay() === 0 || date.getDay() === 6) { // Skip weekends
-    date.setDate(date.getDate() + 1);
-  }
-  
-  return date;
-}
-
-// Getters
-function getCalendarService() {
-  return appointmentScheduleService;
-}
-
-function isCalendarInitialized() {
-  return scheduleInitialized;
-}
-
-module.exports = {
-  initializeCalendarService,
-  checkAvailability,
-  getAvailableTimeSlots,
-  getFormattedAvailableSlots,
-  generateAvailabilityResponse,
-  autoBookAppointment,
-  suggestAlternativeTime,
-  handleSchedulingPreference,
-  formatDateRange,
-  isBusinessHours,
-  getNextBusinessDay,
-  getCalendarService,
-  isCalendarInitialized
-};Schedule Info:', scheduleInfo);
+      console.log('📅 Schedule Info:', scheduleInfo);
     } else {
       console.error('❌ Google Appointment Schedule service failed to initialize');
       console.log('⚠️ Continuing in demo mode - no real calendar bookings');
@@ -495,4 +355,144 @@ function handleSchedulingPreference(userMessage) {
                    userMessage.match(/\b(morning|afternoon|evening|noon)\b/i);
   const nextWeekMatch = userMessage.match(/next week/i);
   
-  console.log('📅
+  console.log('📅 Detected patterns:', { dayMatch, timeMatch, nextWeekMatch });
+  
+  if (nextWeekMatch) {
+    let targetDate = new Date();
+    targetDate.setDate(targetDate.getDate() + 7);
+    const dayOfWeek = targetDate.getDay();
+    const daysUntilMonday = (dayOfWeek === 0) ? 1 : (8 - dayOfWeek);
+    targetDate.setDate(targetDate.getDate() + daysUntilMonday - 7);
+    
+    return {
+      dayName: 'next week',
+      date: targetDate,
+      isSpecific: false,
+      timePreference: timeMatch ? timeMatch[0] : 'morning',
+      fullPreference: userMessage
+    };
+  } else if (dayMatch) {
+    const preferredDay = dayMatch[0].toLowerCase();
+    let targetDate = new Date();
+    
+    if (preferredDay === 'tomorrow') {
+      targetDate.setDate(targetDate.getDate() + 1);
+      return {
+        dayName: 'tomorrow',
+        date: targetDate,
+        isSpecific: true,
+        timePreference: timeMatch ? timeMatch[0] : 'morning',
+        fullPreference: userMessage
+      };
+    } else if (preferredDay === 'today') {
+      return {
+        dayName: 'today',
+        date: targetDate,
+        isSpecific: true,
+        timePreference: timeMatch ? timeMatch[0] : 'afternoon',
+        fullPreference: userMessage
+      };
+    } else {
+      const daysOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+      const requestedDayIndex = daysOfWeek.findIndex(d => d === preferredDay);
+      
+      if (requestedDayIndex !== -1) {
+        const currentDay = targetDate.getDay();
+        let daysToAdd = requestedDayIndex - currentDay;
+        
+        if (daysToAdd <= 0) {
+          daysToAdd += 7;
+        }
+        
+        targetDate.setDate(targetDate.getDate() + daysToAdd);
+        
+        return {
+          dayName: preferredDay,
+          date: targetDate,
+          isSpecific: true,
+          timePreference: timeMatch ? timeMatch[0] : 'morning',
+          fullPreference: userMessage
+        };
+      }
+    }
+  }
+  
+  return null;
+}
+
+// Utility functions
+function formatDateRange(startDate, endDate) {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  
+  if (start.toDateString() === end.toDateString()) {
+    return `${start.toLocaleDateString('en-US', { 
+      weekday: 'long', 
+      month: 'long', 
+      day: 'numeric' 
+    })} from ${start.toLocaleTimeString('en-US', { 
+      hour: 'numeric', 
+      minute: '2-digit', 
+      hour12: true 
+    })} to ${end.toLocaleTimeString('en-US', { 
+      hour: 'numeric', 
+      minute: '2-digit', 
+      hour12: true 
+    })}`;
+  } else {
+    return `${start.toLocaleDateString('en-US', { 
+      weekday: 'long', 
+      month: 'long', 
+      day: 'numeric' 
+    })} at ${start.toLocaleTimeString('en-US', { 
+      hour: 'numeric', 
+      minute: '2-digit', 
+      hour12: true 
+    })}`;
+  }
+}
+
+function isBusinessHours(dateTime) {
+  const date = new Date(dateTime);
+  const dayOfWeek = date.getDay(); // 0 = Sunday, 6 = Saturday
+  const hour = date.getHours();
+  
+  // Monday to Friday (1-5), 9 AM to 5 PM
+  return dayOfWeek >= 1 && dayOfWeek <= 5 && hour >= 9 && hour < 17;
+}
+
+function getNextBusinessDay(fromDate = new Date()) {
+  const date = new Date(fromDate);
+  date.setDate(date.getDate() + 1);
+  
+  while (date.getDay() === 0 || date.getDay() === 6) { // Skip weekends
+    date.setDate(date.getDate() + 1);
+  }
+  
+  return date;
+}
+
+// Getters
+function getCalendarService() {
+  return appointmentScheduleService;
+}
+
+function isCalendarInitialized() {
+  return scheduleInitialized;
+}
+
+module.exports = {
+  initializeCalendarService,
+  checkAvailability,
+  getAvailableTimeSlots,
+  getFormattedAvailableSlots,
+  generateAvailabilityResponse,
+  autoBookAppointment,
+  suggestAlternativeTime,
+  handleSchedulingPreference,
+  formatDateRange,
+  isBusinessHours,
+  getNextBusinessDay,
+  getCalendarService,
+  isCalendarInitialized
+};
