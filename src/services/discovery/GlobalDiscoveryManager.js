@@ -13,6 +13,12 @@ class GlobalDiscoveryManager {
 
   // Get or create discovery session for a call
   getSession(callId, customerData = {}) {
+    console.log('🚨 GET SESSION CALLED');
+    console.log('🚨 Call ID:', callId);
+    console.log('🚨 Customer Data:', customerData);
+    console.log('🚨 Current active sessions count:', this.activeSessions.size);
+    console.log('🚨 Active session IDs:', Array.from(this.activeSessions.keys()));
+
     if (!callId) {
       console.warn('⚠️ No callId provided to getSession');
       return this.createNewSession('temp_' + Date.now(), customerData);
@@ -21,10 +27,10 @@ class GlobalDiscoveryManager {
     // Check if session exists
     if (this.activeSessions.has(callId)) {
       const session = this.activeSessions.get(callId);
-      console.log(`🔄 Retrieved existing session for ${callId}:`, {
-        questionsCompleted: session.progress.questionsCompleted,
-        schedulingStarted: session.progress.schedulingStarted
-      });
+      console.log(`🚨 🔄 RETRIEVED EXISTING SESSION for ${callId}:`);
+      console.log('   📊 Questions Completed:', session.progress.questionsCompleted);
+      console.log('   🗓️ Scheduling Started:', session.progress.schedulingStarted);
+      console.log('   📝 Conversation Phase:', session.progress.conversationPhase);
       
       // Refresh timeout
       this.refreshSessionTimeout(callId);
@@ -32,7 +38,7 @@ class GlobalDiscoveryManager {
     }
 
     // Create new session
-    console.log(`🆕 Creating new discovery session for ${callId}`);
+    console.log(`🚨 🆕 CREATING NEW SESSION for ${callId}`);
     return this.createNewSession(callId, customerData);
   }
 
