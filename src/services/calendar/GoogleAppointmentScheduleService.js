@@ -1,20 +1,18 @@
-// src/services/calendar/GoogleAppointmentScheduleService.js - Fixed Timezone
+// src/services/calendar/GoogleAppointmentScheduleService.js - FIXED TIMEZONE VERSION
 const { google } = require('googleapis');
 
 class GoogleAppointmentScheduleService {
   constructor() {
     this.calendar = null;
     this.auth = null;
-    // FIXED: Always use environment variable timezone, don't let calendar override it
     this.timezone = process.env.TIMEZONE || 'America/Phoenix';
     
     // Extract schedule ID from your URL
     this.scheduleId = 'AcZssZ1-X85n75lz94LdlcSf5CMe2WJLxb7sML9AaKD2I7O7OaIkvdxuDUEEKEkQ7loxtQfRxsVnK__u';
-    this.scheduleName = `projects/${process.env.GOOGLE_PROJECT_ID}/locations/us-central1/bookingConfigs/${this.scheduleId}`;
     
     console.log('🔧 GoogleAppointmentScheduleService constructor called');
     console.log('📅 Schedule ID:', this.scheduleId);
-    console.log('🌍 Using timezone:', this.timezone); // Show timezone from constructor
+    console.log('🌍 Using timezone:', this.timezone);
   }
 
   async initialize() {
@@ -34,7 +32,6 @@ class GoogleAppointmentScheduleService {
       await this.setupAuthentication();
       
       if (this.auth) {
-        // For appointment schedules, we use the Calendar API but with different endpoints
         this.calendar = google.calendar({ version: 'v3', auth: this.auth });
         console.log('✅ Google Appointment Schedule service initialized successfully');
         
@@ -92,7 +89,6 @@ class GoogleAppointmentScheduleService {
     try {
       console.log('🧪 Testing Google Appointment Schedule connection...');
       
-      // Test basic calendar access first
       const response = await this.calendar.calendars.get({
         calendarId: 'primary'
       });
@@ -100,16 +96,9 @@ class GoogleAppointmentScheduleService {
       console.log(`✅ Connected to calendar: ${response.data.summary}`);
       console.log(`📅 Schedule ID: ${this.scheduleId}`);
       
-      // FIXED: Don't override timezone from calendar - keep environment variable
       const calendarTimezone = response.data.timeZone;
       console.log(`🌍 Calendar timezone: ${calendarTimezone}`);
       console.log(`🌍 Using configured timezone: ${this.timezone} (from environment)`);
-      
-      // Only use calendar timezone if we don't have one configured
-      if (!process.env.TIMEZONE && calendarTimezone) {
-        this.timezone = calendarTimezone;
-        console.log(`🌍 Updated to calendar timezone: ${this.timezone}`);
-      }
       
       return true;
     } catch (error) {
@@ -129,7 +118,14 @@ class GoogleAppointmentScheduleService {
       console.log(`🌍 Using timezone: ${this.timezone}`);
       
       const targetDate = new Date(date);
+      const dayOfWeek = targetDate.getDay();
       
+      // No slots on weekends
+      if (dayOfWeek === 0 || dayOfWeek === 6) {
+        console.log('📅 Weekend - no slots available');
+        return [];
+      }
+
       // Check if it's in the past
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -138,7 +134,7 @@ class GoogleAppointmentScheduleService {
         return [];
       }
 
-      // For appointment schedules, we need to check the specific calendar
+      // FIXED: Create proper date objects in Arizona timezone
       const startOfDay = new Date(targetDate);
       startOfDay.setHours(0, 0, 0, 0);
       
@@ -148,7 +144,6 @@ class GoogleAppointmentScheduleService {
       console.log(`🕐 [APPOINTMENT SCHEDULE] Checking from ${startOfDay.toISOString()} to ${endOfDay.toISOString()}`);
 
       try {
-        // Get events from the calendar
         const response = await this.calendar.events.list({
           calendarId: 'primary',
           timeMin: startOfDay.toISOString(),
@@ -160,78 +155,25 @@ class GoogleAppointmentScheduleService {
         const events = response.data.items || [];
         console.log(`📋 [APPOINTMENT SCHEDULE] Found ${events.length} existing events`);
 
-        // Generate slots based on your business hours and existing events
-        const availableSlots = this.generateSlotsWithConflictCheck(targetDate, events);
+        // FIXED: Generate slots with proper timezone handling
+        const availableSlots = this.generateProperBusinessHourSlots(targetDate, events);
         
         console.log(`✅ [APPOINTMENT SCHEDULE] Generated ${availableSlots.length} available slots`);
         return availableSlots;
 
       } catch (apiError) {
         console.error('❌ Error calling appointment schedule API:', apiError.message);
-        
-        // Fallback to business hour generation
-        console.log('🔄 Falling back to business hour generation');
-        return this.generateBusinessHourSlots(targetDate);
+        return this.generateProperBusinessHourSlots(targetDate, []);
       }
 
     } catch (error) {
       console.error('❌ Error getting appointment schedule slots:', error.message);
-      return this.generateBusinessHourSlots(date);
+      return this.generateProperBusinessHourSlots(date, []);
     }
   }
 
-  generateSlotsWithConflictCheck(targetDate, existingEvents) {
-    const dayOfWeek = targetDate.getDay();
-    
-    // No slots on weekends
-    if (dayOfWeek === 0 || dayOfWeek === 6) {
-      return [];
-    }
-    
-    const slots = [];
-    
-    // Business hours: 9 AM to 5 PM (Arizona time)
-    const businessStart = 9;
-    const businessEnd = 17;
-    
-    for (let hour = businessStart; hour < businessEnd; hour++) {
-      const slotStart = new Date(targetDate);
-      slotStart.setHours(hour, 0, 0, 0);
-      
-      const slotEnd = new Date(targetDate);
-      slotEnd.setHours(hour + 1, 0, 0, 0);
-      
-      // If it's today, only show future times
-      const now = new Date();
-      if (targetDate.toDateString() === now.toDateString() && slotStart <= now) {
-        continue;
-      }
-      
-      // Check for conflicts with existing events
-      const hasConflict = existingEvents.some(event => {
-        const eventStart = new Date(event.start.dateTime || event.start.date);
-        const eventEnd = new Date(event.end.dateTime || event.end.date);
-        return (slotStart < eventEnd && slotEnd > eventStart);
-      });
-      
-      if (!hasConflict) {
-        slots.push({
-          startTime: slotStart.toISOString(),
-          endTime: slotEnd.toISOString(),
-          displayTime: slotStart.toLocaleTimeString('en-US', {
-            hour: 'numeric',
-            minute: '2-digit',
-            hour12: true,
-            timeZone: this.timezone // Use our configured timezone
-          })
-        });
-      }
-    }
-    
-    return slots;
-  }
-
-  generateBusinessHourSlots(targetDate) {
+  // FIXED: Proper business hour slot generation
+  generateProperBusinessHourSlots(targetDate, existingEvents = []) {
     const dayOfWeek = targetDate.getDay();
     
     // No slots on weekends
@@ -248,36 +190,69 @@ class GoogleAppointmentScheduleService {
     
     const slots = [];
     
-    // Generate slots every hour from 9 AM to 5 PM (Arizona time)
-    const availableHours = [9, 10, 11, 12, 13, 14, 15, 16]; // 9 AM to 4 PM
+    // FIXED: Arizona business hours 9 AM to 5 PM
+    const businessHours = [9, 10, 11, 12, 13, 14, 15, 16]; // 9 AM to 4 PM (last slot starts at 4 PM)
     
-    availableHours.forEach(hour => {
-      const slotTime = new Date(targetDate);
-      slotTime.setHours(hour, 0, 0, 0);
+    businessHours.forEach(hour => {
+      // Create slot time in local timezone first
+      const slotDate = new Date(targetDate);
+      slotDate.setHours(hour, 0, 0, 0);
+      
+      const slotEndDate = new Date(targetDate);
+      slotEndDate.setHours(hour + 1, 0, 0, 0);
       
       // If it's today, only show future times
-      if (targetDate.toDateString() === today.toDateString()) {
-        const now = new Date();
-        if (slotTime <= now) return;
+      const now = new Date();
+      if (targetDate.toDateString() === now.toDateString()) {
+        if (slotDate <= now) {
+          console.log(`⏰ Skipping past time: ${hour}:00`);
+          return;
+        }
       }
       
-      const endTime = new Date(slotTime);
-      endTime.setHours(hour + 1);
-      
-      slots.push({
-        startTime: slotTime.toISOString(),
-        endTime: endTime.toISOString(),
-        displayTime: slotTime.toLocaleTimeString('en-US', {
-          hour: 'numeric',
-          minute: '2-digit',
-          hour12: true,
-          timeZone: this.timezone // Use our configured timezone
-        })
+      // Check for conflicts with existing events
+      const hasConflict = existingEvents.some(event => {
+        const eventStart = new Date(event.start.dateTime || event.start.date);
+        const eventEnd = new Date(event.end.dateTime || event.end.date);
+        return (slotDate < eventEnd && slotEndDate > eventStart);
       });
+      
+      if (!hasConflict) {
+        // FIXED: Proper display time formatting
+        const displayTime = this.formatTimeForTimezone(slotDate);
+        
+        slots.push({
+          startTime: slotDate.toISOString(),
+          endTime: slotEndDate.toISOString(),
+          displayTime: displayTime
+        });
+        
+        console.log(`✅ Available slot: ${displayTime} (${slotDate.toISOString()})`);
+      }
     });
     
     console.log(`🔄 Generated ${slots.length} business hour slots in ${this.timezone}`);
     return slots;
+  }
+
+  // FIXED: Proper time formatting for Arizona timezone
+  formatTimeForTimezone(date) {
+    // Create a new date adjusted for Arizona timezone
+    // Arizona is UTC-7 (MST, no daylight saving)
+    const utcTime = date.getTime() + (date.getTimezoneOffset() * 60000);
+    const arizonaOffset = -7; // Arizona is UTC-7
+    const arizonaTime = new Date(utcTime + (arizonaOffset * 3600000));
+    
+    return arizonaTime.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+  }
+
+  // Legacy method for compatibility
+  generateBusinessHourSlots(targetDate) {
+    return this.generateProperBusinessHourSlots(targetDate, []);
   }
 
   async isSlotAvailable(startTime, endTime) {
@@ -320,17 +295,16 @@ class GoogleAppointmentScheduleService {
       console.log('📅 [APPOINTMENT SCHEDULE] Creating appointment:', appointmentDetails.summary);
       console.log('🌍 Using timezone for event:', this.timezone);
 
-      // Create a calendar event
       const event = {
         summary: appointmentDetails.summary || 'Nexella AI Consultation Call',
         description: `${appointmentDetails.description || 'Discovery call scheduled via Nexella AI'}\n\nCustomer: ${appointmentDetails.attendeeName}\nEmail: ${appointmentDetails.attendeeEmail}`,
         start: {
           dateTime: appointmentDetails.startTime,
-          timeZone: this.timezone // Use our configured timezone
+          timeZone: this.timezone
         },
         end: {
           dateTime: appointmentDetails.endTime,
-          timeZone: this.timezone // Use our configured timezone
+          timeZone: this.timezone
         },
         attendees: [
           {
