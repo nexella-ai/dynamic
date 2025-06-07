@@ -1,4 +1,4 @@
-// src/handlers/WebSocketHandler.js - DEBUG VERSION WITH EXTENSIVE LOGGING
+// src/handlers/WebSocketHandler.js - SIMPLE DEBUG VERSION
 const axios = require('axios');
 const config = require('../config/environment');
 const globalDiscoveryManager = require('../services/discovery/GlobalDiscoveryManager');
@@ -21,13 +21,8 @@ class WebSocketHandler {
     this.req = req;
     this.callId = this.extractCallId(req.url);
     
-    // EXTENSIVE DEBUG LOGGING
-    console.log('🚨 ===========================================');
-    console.log('🚨 NEW WEBSOCKET CONNECTION DEBUG INFO');
-    console.log('🚨 ===========================================');
-    console.log('🔗 Request URL:', req.url);
-    console.log('🔗 Extracted Call ID:', this.callId);
-    console.log('🧠 Current active sessions:', globalDiscoveryManager.getAllSessions());
+    // SIMPLE DEBUG - Just the essentials
+    console.log('🔗 NEW CONNECTION - Call ID:', this.callId);
     
     this.connectionData = {
       callId: this.callId,
@@ -52,8 +47,7 @@ DISCOVERY QUESTIONS (ask in this EXACT order, ONE AT A TIME):
 CRITICAL RULES:
 - BEFORE asking any question, CHECK if it was already asked
 - Do NOT repeat questions you've already asked
-- If user asks about scheduling/times and you have 4+ questions answered, immediately provide availability
-- Keep responses short and conversational`
+- If user asks about scheduling/times and you have 4+ questions answered, immediately provide availability`
       }
     ];
     
@@ -61,71 +55,38 @@ CRITICAL RULES:
     this.webhookSent = false;
     this.lastBotMessage = '';
     this.questionAskedTimestamp = 0;
-    this.schedulingDetected = false;
-    this.calendarCheckResponse = '';
-    this.schedulingInterrupted = false;
     
     this.initialize();
   }
 
   extractCallId(url) {
-    console.log('🔍 Extracting call ID from URL:', url);
     const callIdMatch = url.match(/\/call_([a-f0-9]+)/);
-    const extractedId = callIdMatch ? `call_${callIdMatch[1]}` : null;
-    console.log('🔍 Extracted call ID:', extractedId);
-    return extractedId;
+    return callIdMatch ? `call_${callIdMatch[1]}` : null;
   }
 
   async initialize() {
-    console.log('🚨 INITIALIZING WEBSOCKET HANDLER');
-    
-    // Initialize discovery session FIRST
+    // Initialize discovery session
     this.initializeDiscoverySession();
-    
-    // Try to fetch call metadata
-    if (this.callId) {
-      await this.fetchCallMetadata();
-    }
     
     // Set up event handlers
     this.setupEventHandlers();
     
-    // Send initial greeting based on session state
+    // Send initial greeting
     this.sendInitialGreeting();
   }
 
   initializeDiscoverySession() {
-    console.log('🧠 INITIALIZING DISCOVERY SESSION');
-    console.log('🧠 Call ID for session:', this.callId);
+    const session = globalDiscoveryManager.getSession(this.callId, {});
     
-    // Get or create persistent discovery session
-    const customerData = {
-      email: this.connectionData.customerEmail,
-      name: this.connectionData.customerName,
-      phone: this.connectionData.customerPhone
-    };
+    // SIMPLE DEBUG OUTPUT
+    console.log(`📊 SESSION STATUS - Call ID: ${this.callId}`);
+    console.log(`📊 Questions: ${session.progress.questionsCompleted}/6`);
+    console.log(`📊 Scheduling: ${session.progress.schedulingStarted ? 'STARTED' : 'NOT_STARTED'}`);
+    console.log(`📊 Phase: ${session.progress.conversationPhase}`);
     
-    const session = globalDiscoveryManager.getSession(this.callId, customerData);
-    
-    console.log('🚨 DISCOVERY SESSION RETRIEVED:');
-    console.log('   📊 Questions Completed:', session.progress.questionsCompleted);
-    console.log('   🗓️ Scheduling Started:', session.progress.schedulingStarted);
-    console.log('   📝 Conversation Phase:', session.progress.conversationPhase);
-    console.log('   ❓ All Questions Complete:', session.progress.allQuestionsCompleted);
-    console.log('   ⏳ Waiting for Answer:', session.progress.waitingForAnswer);
-    
-    // Log each question status
-    session.questions.forEach((q, index) => {
-      console.log(`   Q${index + 1}: Asked=${q.asked}, Answered=${q.answered}, Answer="${q.answer}"`);
-    });
-    
-    console.log('🚨 END DISCOVERY SESSION INFO');
-  }
-
-  async fetchCallMetadata() {
-    // Keep existing fetchCallMetadata logic but with more logging
-    console.log('🔍 Fetching call metadata...');
-    // ... existing code ...
+    // Show which questions are answered
+    const answered = session.questions.filter(q => q.answered).map(q => q.field);
+    console.log(`📊 Answered: [${answered.join(', ')}]`);
   }
 
   setupEventHandlers() {
@@ -137,43 +98,24 @@ CRITICAL RULES:
   sendInitialGreeting() {
     const progress = globalDiscoveryManager.getProgress(this.callId);
     
-    console.log('🎙️ DETERMINING INITIAL GREETING');
-    console.log('🎙️ Progress:', progress);
-    
-    if (!progress || (progress.questionsCompleted === 0 && !progress.schedulingStarted)) {
-      console.log('🎙️ Sending initial greeting (new session)');
-      setTimeout(() => {
-        if (!this.userHasSpoken) {
+    setTimeout(() => {
+      if (!this.userHasSpoken) {
+        if (!progress || progress.questionsCompleted === 0) {
+          console.log('🎙️ Sending NEW greeting');
           this.sendResponse("Hi there! This is Sarah from Nexella AI. How are you doing today?", 1);
+        } else {
+          console.log('🎙️ Sending RESUME greeting');
+          this.sendResponse("Welcome back! Let's continue our conversation.", 1);
         }
-      }, 3000);
-    } else if (progress.questionsCompleted > 0 && !progress.schedulingStarted) {
-      console.log('🎙️ Resuming discovery session');
-      setTimeout(() => {
-        if (!this.userHasSpoken) {
-          const nextQuestion = globalDiscoveryManager.getNextUnansweredQuestion(this.callId);
-          if (nextQuestion) {
-            const questionNum = globalDiscoveryManager.getSessionInfo(this.callId).questions.findIndex(q => q.question === nextQuestion.question) + 1;
-            this.sendResponse(`Welcome back! Let me continue where we left off. ${nextQuestion.question}`, 1);
-          }
-        }
-      }, 3000);
-    } else if (progress.schedulingStarted) {
-      console.log('🎙️ Resuming scheduling session');
-      setTimeout(() => {
-        if (!this.userHasSpoken) {
-          this.sendResponse("Welcome back! Let's continue with scheduling your appointment. What day and time would work best for you?", 1);
-        }
-      }, 3000);
-    }
+      }
+    }, 3000);
   }
 
   sendResponse(content, responseId = null) {
     this.lastBotMessage = content;
     this.questionAskedTimestamp = Date.now();
     
-    console.log('🤖 SENDING RESPONSE:', content);
-    console.log('🤖 Response ID:', responseId);
+    console.log('🤖 SENT:', content.substring(0, 50) + '...');
     
     this.ws.send(JSON.stringify({
       content: content,
@@ -188,13 +130,11 @@ CRITICAL RULES:
       this.userHasSpoken = true;
       const parsed = JSON.parse(data);
       
-      console.log('📥 RECEIVED MESSAGE:', JSON.stringify(parsed, null, 2));
-      
       if (parsed.interaction_type === 'response_required') {
         await this.processUserMessage(parsed);
       }
     } catch (error) {
-      console.error('❌ Error handling message:', error.message);
+      console.error('❌ Error:', error.message);
       this.sendResponse("I missed that. Could you repeat it?", 9999);
     }
   }
@@ -203,159 +143,100 @@ CRITICAL RULES:
     const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
     const userMessage = latestUserUtterance?.content || "";
 
-    console.log('🚨 PROCESSING USER MESSAGE');
-    console.log('🗣️ User said:', userMessage);
+    console.log(`🗣️ USER: "${userMessage}"`);
     
-    // Get FRESH progress from persistent storage
+    // Get current progress
     const progress = globalDiscoveryManager.getProgress(this.callId);
-    console.log('📊 FRESH Progress from storage:', progress);
-    
-    // Log session info
-    const sessionInfo = globalDiscoveryManager.getSessionInfo(this.callId);
-    console.log('🧠 Current session info:', sessionInfo);
+    console.log(`📊 CURRENT: ${progress?.questionsCompleted}/6 questions, scheduling=${progress?.schedulingStarted}`);
 
-    // CRITICAL: Check if this is an availability request
-    const availabilityPatterns = [
-      /what times/i,
-      /when are you/i,
-      /when do you/i,
-      /available/i,
-      /schedule/i,
-      /appointment/i,
-      /times.*available/i,
-      /times.*next week/i
-    ];
+    // Check for availability request
+    const isAvailabilityRequest = /what times|when are you|when do you|available|schedule|appointment/i.test(userMessage);
     
-    const isAvailabilityRequest = availabilityPatterns.some(pattern => 
-      pattern.test(userMessage)
-    );
-    
-    console.log('❓ Is availability request?', isAvailabilityRequest);
-    console.log('❓ Questions completed:', progress?.questionsCompleted);
-    console.log('❓ Can start scheduling?', isAvailabilityRequest && progress?.questionsCompleted >= 4);
+    console.log(`❓ Availability request: ${isAvailabilityRequest}`);
+    console.log(`❓ Can schedule: ${isAvailabilityRequest && progress?.questionsCompleted >= 4}`);
 
     if (isAvailabilityRequest && progress?.questionsCompleted >= 4) {
-      console.log('🚨 🚨 🚨 AVAILABILITY REQUEST DETECTED - SHOULD SWITCH TO SCHEDULING');
+      console.log('🗓️ ✅ SWITCHING TO SCHEDULING MODE');
       
-      // Mark scheduling as started
       globalDiscoveryManager.markSchedulingStarted(this.callId);
       
-      // Generate immediate scheduling response
       try {
         const availabilityResponse = await generateAvailabilityResponse();
         const response = `Perfect! I have all the information I need. ${availabilityResponse}`;
         
-        console.log('✅ Generated scheduling response:', response);
+        console.log('🗓️ ✅ SENT SCHEDULING RESPONSE');
         
         this.conversationHistory.push({ role: 'user', content: userMessage });
         this.conversationHistory.push({ role: 'assistant', content: response });
         
         this.sendResponse(response, parsed.response_id);
-        return; // EXIT EARLY - CRITICAL
+        return; // EXIT
       } catch (error) {
-        console.error('❌ Error generating availability:', error);
+        console.log('🗓️ ⚠️ FALLBACK SCHEDULING RESPONSE');
         const fallbackResponse = "Perfect! Let me check my calendar. What day and time would work best for you?";
         
         this.conversationHistory.push({ role: 'user', content: userMessage });
         this.conversationHistory.push({ role: 'assistant', content: fallbackResponse });
         
         this.sendResponse(fallbackResponse, parsed.response_id);
-        return; // EXIT EARLY - CRITICAL
+        return; // EXIT
       }
     }
 
-    // If we reach here, it's NOT an availability request or we don't have enough discovery data
-    console.log('📝 Processing as normal conversation (not scheduling)');
+    console.log('📝 PROCESSING AS DISCOVERY');
 
-    // Add user message to conversation history
+    // Add to conversation history
     this.conversationHistory.push({ role: 'user', content: userMessage });
 
-    // Generate context prompt based on current state
+    // Generate response
     const contextPrompt = this.generateContextPrompt();
-    console.log('🤖 Generated context prompt:', contextPrompt);
-
-    // Get AI response
     const botReply = await this.getAIResponse(contextPrompt);
-    console.log('🤖 AI Response:', botReply);
+    
+    console.log(`🤖 REPLY: "${botReply.substring(0, 50)}..."`);
     
     this.conversationHistory.push({ role: 'assistant', content: botReply });
 
-    // Check if AI response contains a discovery question
-    this.checkForDiscoveryQuestion(botReply);
+    // Check for discovery question in bot reply
+    const questionDetected = globalDiscoveryManager.detectQuestionInBotMessage(this.callId, botReply);
+    console.log(`🔍 Question detected in bot reply: ${questionDetected}`);
 
-    // Try to capture user answer if we're waiting for one
-    this.tryToCaptureAnswer(userMessage);
-
-    // Send response
-    this.sendResponse(botReply, parsed.response_id);
-  }
-
-  checkForDiscoveryQuestion(botReply) {
-    console.log('🔍 Checking if bot reply contains discovery question:', botReply);
-    
-    const detected = globalDiscoveryManager.detectQuestionInBotMessage(this.callId, botReply);
-    console.log('🔍 Question detected:', detected);
-  }
-
-  tryToCaptureAnswer(userMessage) {
-    const progress = globalDiscoveryManager.getProgress(this.callId);
-    
-    console.log('📝 Trying to capture answer:');
-    console.log('   Waiting for answer:', progress?.waitingForAnswer);
-    console.log('   Current question index:', progress?.currentQuestionIndex);
-    console.log('   User message:', userMessage);
-    
+    // Try to capture answer
     if (progress?.waitingForAnswer && progress?.currentQuestionIndex >= 0) {
       const captured = globalDiscoveryManager.captureAnswer(
         this.callId, 
         progress.currentQuestionIndex, 
         userMessage.trim()
       );
-      console.log('📝 Answer captured:', captured);
+      console.log(`📝 Answer captured: ${captured}`);
+      
+      if (captured) {
+        const newProgress = globalDiscoveryManager.getProgress(this.callId);
+        console.log(`📊 NEW PROGRESS: ${newProgress?.questionsCompleted}/6 questions`);
+      }
     }
+
+    this.sendResponse(botReply, parsed.response_id);
   }
 
   generateContextPrompt() {
     const progress = globalDiscoveryManager.getProgress(this.callId);
     
-    console.log('🤖 Generating context prompt for progress:', progress);
-    
     if (!progress) {
-      return `
-
-NEW CONVERSATION: Start with friendly greeting and begin discovery process.
-Ask: "How did you hear about us?"`;
+      return '\nNEW CONVERSATION: Start with discovery.';
     }
 
     if (progress.schedulingStarted) {
-      console.log('🗓️ Scheduling mode - no discovery prompts');
-      return `
-
-SCHEDULING MODE: User is ready to schedule. Provide available times or ask for preferences.`;
+      return '\nSCHEDULING MODE: Provide times or ask preferences.';
     }
 
     if (progress.questionsCompleted < 6) {
       const nextQuestion = globalDiscoveryManager.getNextUnansweredQuestion(this.callId);
       if (nextQuestion) {
-        const sessionInfo = globalDiscoveryManager.getSessionInfo(this.callId);
-        const questionNumber = sessionInfo.questions.findIndex(q => q.question === nextQuestion.question) + 1;
-        
-        return `
-
-DISCOVERY IN PROGRESS (${progress.questionsCompleted}/6 complete):
-Next question to ask: ${questionNumber}. ${nextQuestion.question}
-
-CRITICAL: Ask this question EXACTLY as written. Do NOT ask questions that were already answered.`;
+        return `\nDISCOVERY (${progress.questionsCompleted}/6): Ask "${nextQuestion.question}"`;
       }
     }
 
-    if (progress.allQuestionsCompleted) {
-      return `
-
-ALL DISCOVERY COMPLETE: Ready for scheduling. Offer available times.`;
-    }
-
-    return '';
+    return '\nDISCOVERY COMPLETE: Offer scheduling.';
   }
 
   async getAIResponse(contextPrompt) {
@@ -363,8 +244,6 @@ ALL DISCOVERY COMPLETE: Ready for scheduling. Offer available times.`;
     if (contextPrompt) {
       messages[messages.length - 1].content += contextPrompt;
     }
-
-    console.log('🤖 Sending to OpenAI:', JSON.stringify(messages, null, 2));
 
     try {
       const openaiResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
@@ -379,21 +258,19 @@ ALL DISCOVERY COMPLETE: Ready for scheduling. Offer available times.`;
         timeout: 8000
       });
 
-      const reply = openaiResponse.data.choices[0].message.content || "Could you tell me more about that?";
-      console.log('🤖 OpenAI replied:', reply);
-      return reply;
+      return openaiResponse.data.choices[0].message.content || "Could you tell me more about that?";
     } catch (error) {
-      console.error('❌ OpenAI API error:', error.message);
+      console.error('❌ OpenAI error:', error.message);
       return "I'm having trouble processing that. Could you repeat it?";
     }
   }
 
   async handleClose() {
     console.log('🔌 CONNECTION CLOSED');
-    console.log('💾 Session will be kept in memory for future connections');
-    
     const sessionInfo = globalDiscoveryManager.getSessionInfo(this.callId);
-    console.log('📊 Final session state:', sessionInfo);
+    if (sessionInfo) {
+      console.log(`💾 SESSION PRESERVED: ${sessionInfo.questionsCompleted}/6 questions`);
+    }
   }
 
   handleError(error) {
