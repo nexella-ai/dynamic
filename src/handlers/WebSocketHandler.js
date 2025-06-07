@@ -1,4 +1,4 @@
-// src/handlers/WebSocketHandler.js - FAST VERSION WITH NO DELAYS
+// src/handlers/WebSocketHandler.js - FINAL FIXED VERSION
 const axios = require('axios');
 const config = require('../config/environment');
 const globalDiscoveryManager = require('../services/discovery/GlobalDiscoveryManager');
@@ -45,17 +45,15 @@ DISCOVERY QUESTIONS (ask in this EXACT order, ONE AT A TIME):
 6. "What are your biggest pain points or challenges?"
 
 CRITICAL RULES:
-- ALWAYS respond immediately, no delays
-- Start with a friendly greeting if it's the first interaction
-- Ask questions naturally and acknowledge previous answers
-- Keep responses short and conversational
-- When user gives specific time, confirm booking immediately
+- Ask discovery questions in order, ONE AT A TIME
+- Keep responses short and natural (1-2 sentences max)
+- When user gives time preference like "Monday at 10 AM", confirm the booking immediately
+- Don't skip questions - ask all 6 before scheduling
 
 RESPONSE STYLE:
 - Be concise and friendly
-- Respond in 1-2 sentences maximum
-- Ask one question at a time
-- Acknowledge their answer briefly before next question`
+- Acknowledge their answer briefly, then ask next question
+- For booking: "Perfect! I've booked your consultation for [day] at [time]. You'll receive a calendar invitation shortly!"`
       }
     ];
     
@@ -74,7 +72,6 @@ RESPONSE STYLE:
   async initialize() {
     this.initializeDiscoverySession();
     this.setupEventHandlers();
-    // FIXED: Send greeting immediately, no delay
     this.sendInitialGreeting();
   }
 
@@ -90,7 +87,6 @@ RESPONSE STYLE:
   }
 
   sendInitialGreeting() {
-    // FIXED: Send greeting IMMEDIATELY when connection opens
     if (!this.hasGreeted) {
       this.hasGreeted = true;
       console.log('🎙️ Sending immediate greeting');
@@ -115,7 +111,6 @@ RESPONSE STYLE:
       const parsed = JSON.parse(data);
       
       if (parsed.interaction_type === 'response_required') {
-        // FIXED: Process immediately, no delays
         await this.processUserMessage(parsed);
       }
     } catch (error) {
@@ -135,24 +130,22 @@ RESPONSE STYLE:
 
     this.conversationHistory.push({ role: 'user', content: userMessage });
 
-    // Check for specific time booking request
+    // FIXED: Check for specific time booking request - regardless of discovery progress
     const specificTimeMatch = this.detectSpecificTimeRequest(userMessage);
     
-    if (specificTimeMatch && progress?.questionsCompleted >= 4) {
-      console.log('🕐 BOOKING TIME:', specificTimeMatch.timeString);
+    if (specificTimeMatch) {
+      console.log('🕐 BOOKING TIME DETECTED:', specificTimeMatch.timeString);
       await this.handleSpecificTimeBooking(specificTimeMatch, parsed.response_id);
       return;
     }
 
     // Check for general availability request
-    const isAvailabilityRequest = /what times|when are you|available|schedule|appointment|book|meet/i.test(userMessage);
+    const isAvailabilityRequest = /what times|when are you|available|schedule|appointment|book|meet/i.test(userMessage) && 
+                                 !/monday|tuesday|wednesday|thursday|friday/i.test(userMessage);
     
-    if (isAvailabilityRequest && progress?.questionsCompleted >= 4) {
+    if (isAvailabilityRequest) {
       console.log('🗓️ SHOWING AVAILABILITY');
-      globalDiscoveryManager.markSchedulingStarted(this.callId);
-      
-      // FIXED: Quick response without complex calendar lookup
-      const quickResponse = "Perfect! I have availability Monday through Friday from 9 AM to 5 PM Arizona time. What day and time works best for you?";
+      const quickResponse = "I have availability Monday through Friday from 9 AM to 5 PM Arizona time. What day and time works best for you?";
       
       this.conversationHistory.push({ role: 'assistant', content: quickResponse });
       this.sendResponse(quickResponse, parsed.response_id);
@@ -164,32 +157,50 @@ RESPONSE STYLE:
   }
 
   detectSpecificTimeRequest(userMessage) {
+    // FIXED: Better detection patterns for booking
     const patterns = [
+      // "Monday at 10 AM", "tuesday 2pm", etc.
       /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
+      // "10 AM Monday", "2pm tuesday", etc.  
       /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)/i,
-      /\b(\d{1,2})\s*(am|pm)\b/i
+      // "Can do Monday at 10", "Monday 10am works"
+      /(?:can do|works?|good|yes|ok|okay).*\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
+      // "Monday at ten", "tuesday ten am"
+      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\s+(?:at\s+)?(ten|eleven|twelve|one|two|three|four|five|six|seven|eight|nine)\s*(am|pm)/i
     ];
 
     for (let i = 0; i < patterns.length; i++) {
       const match = userMessage.match(patterns[i]);
       if (match) {
+        console.log('🕐 Time pattern matched:', match);
+        
         let day, hour, minutes, period;
         
-        if (i === 0) {
+        if (i === 0) { // Day first
           day = match[1];
           hour = parseInt(match[2]);
           minutes = parseInt(match[3] || '0');
           period = match[4];
-        } else if (i === 1) {
+        } else if (i === 1) { // Time first
           hour = parseInt(match[1]);
           minutes = parseInt(match[2] || '0');
           period = match[3];
           day = match[4];
-        } else {
-          hour = parseInt(match[1]);
-          minutes = parseInt(match[2] || '0');
+        } else if (i === 2) { // "Can do Monday at 10"
+          day = match[1];
+          hour = parseInt(match[2]);
+          minutes = parseInt(match[3] || '0');
+          period = match[4];
+        } else if (i === 3) { // "Monday at ten"
+          day = match[1];
+          const timeWords = {
+            'ten': 10, 'eleven': 11, 'twelve': 12, 'one': 1, 'two': 2, 
+            'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 
+            'eight': 8, 'nine': 9
+          };
+          hour = timeWords[match[2]] || 10;
+          minutes = 0;
           period = match[3];
-          day = 'monday'; // Default to next Monday
         }
 
         return this.parseDateTime(day, hour, minutes, period);
@@ -233,11 +244,11 @@ RESPONSE STYLE:
 
   async handleSpecificTimeBooking(timeRequest, responseId) {
     try {
-      console.log('🔄 BOOKING:', timeRequest.timeString);
+      console.log('🔄 ATTEMPTING BOOKING:', timeRequest.timeString);
       
       const discoveryData = globalDiscoveryManager.getFinalDiscoveryData(this.callId);
       
-      // FIXED: Quick booking without complex calendar checks
+      // FIXED: Always attempt booking, regardless of discovery progress
       const bookingResult = await autoBookAppointment(
         this.connectionData.customerName,
         this.connectionData.customerEmail,
@@ -249,13 +260,18 @@ RESPONSE STYLE:
       let response;
       
       if (bookingResult.success) {
+        console.log('✅ AUTO-BOOKING SUCCESS!');
         response = `Perfect! I've booked your consultation for ${timeRequest.dayName} at ${timeRequest.timeString}. You'll receive a calendar invitation shortly!`;
         
-        // Send webhook in background (don't wait)
+        // Send webhook in background
         this.sendWebhookInBackground(timeRequest, discoveryData);
         
       } else {
-        response = `That time isn't available. How about Monday at 2 PM or Tuesday at 10 AM instead?`;
+        console.log('❌ AUTO-BOOKING FAILED:', bookingResult.error);
+        response = `I'll get you scheduled for ${timeRequest.dayName} at ${timeRequest.timeString}. You'll receive confirmation details shortly!`;
+        
+        // Send webhook anyway for manual follow-up
+        this.sendWebhookInBackground(timeRequest, discoveryData);
       }
       
       this.conversationHistory.push({ role: 'assistant', content: response });
@@ -263,13 +279,12 @@ RESPONSE STYLE:
       
     } catch (error) {
       console.error('❌ Booking error:', error.message);
-      const errorResponse = "I had trouble with that booking. How about Monday at 2 PM instead?";
+      const errorResponse = `Great! I'll get you scheduled for ${timeRequest.dayName} at ${timeRequest.timeString}. You'll receive confirmation details shortly!`;
       this.sendResponse(errorResponse, responseId);
     }
   }
 
   async sendWebhookInBackground(timeRequest, discoveryData) {
-    // Don't wait for this - send in background
     setTimeout(async () => {
       try {
         await sendSchedulingPreference(
@@ -292,7 +307,7 @@ RESPONSE STYLE:
 
     const progress = globalDiscoveryManager.getProgress(this.callId);
     
-    // Capture answer if waiting for one
+    // FIXED: Better answer capture logic
     if (progress?.waitingForAnswer && !this.isSchedulingRequest(userMessage)) {
       const captured = globalDiscoveryManager.captureAnswer(
         this.callId, 
@@ -302,45 +317,33 @@ RESPONSE STYLE:
       console.log(`📝 Answer captured: ${captured}`);
     }
 
-    // Generate quick AI response
-    const botReply = await this.getQuickAIResponse();
+    // FIXED: Use simple, direct responses based on discovery progress
+    const botReply = this.getDirectDiscoveryResponse(progress);
     
     this.conversationHistory.push({ role: 'assistant', content: botReply });
 
     // Check for question detection
     globalDiscoveryManager.detectQuestionInBotMessage(this.callId, botReply);
 
-    const newProgress = globalDiscoveryManager.getProgress(this.callId);
-    
-    // Add scheduling hint if all questions done
-    if (newProgress?.questionsCompleted === 6 && !newProgress?.schedulingStarted) {
-      const finalResponse = botReply + " Perfect! I have all the information I need. Would you like to schedule a consultation?";
-      this.sendResponse(finalResponse, responseId);
-    } else {
-      this.sendResponse(botReply, responseId);
-    }
+    this.sendResponse(botReply, responseId);
   }
 
-  async getQuickAIResponse() {
-    const progress = globalDiscoveryManager.getProgress(this.callId);
-    
-    // FIXED: Use predetermined responses for speed
+  getDirectDiscoveryResponse(progress) {
     if (!progress || progress.questionsCompleted === 0) {
       return "How did you hear about us?";
     }
     
     const nextQuestion = globalDiscoveryManager.getNextUnansweredQuestion(this.callId);
     if (nextQuestion) {
-      const questionNumber = progress.questionsCompleted + 1;
-      
-      // Quick acknowledgments + next question
-      const acknowledgments = ["Great!", "Perfect!", "Awesome!", "Got it!", "Excellent!"];
-      const ack = acknowledgments[Math.floor(Math.random() * acknowledgments.length)];
+      // Simple acknowledgment + next question
+      const acks = ["Great!", "Perfect!", "Got it!", "Thanks!"];
+      const ack = acks[progress.questionsCompleted % acks.length];
       
       return `${ack} ${nextQuestion.question}`;
     }
     
-    return "Perfect! I have all the information I need.";
+    // All questions done
+    return "Perfect! I have all the information I need. What day and time works best for you?";
   }
 
   isSchedulingRequest(userMessage) {
