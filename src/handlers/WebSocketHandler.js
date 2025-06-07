@@ -1,4 +1,4 @@
-// src/handlers/WebSocketHandler.js - FIXED VERSION WITH AUTO-BOOKING
+// src/handlers/WebSocketHandler.js - FAST VERSION WITH NO DELAYS
 const axios = require('axios');
 const config = require('../config/environment');
 const globalDiscoveryManager = require('../services/discovery/GlobalDiscoveryManager');
@@ -26,7 +26,7 @@ class WebSocketHandler {
     
     this.connectionData = {
       callId: this.callId,
-      customerEmail: 'customer@example.com', // Default for testing
+      customerEmail: 'customer@example.com',
       customerName: 'Test Customer',
       customerPhone: '+1234567890'
     };
@@ -45,25 +45,23 @@ DISCOVERY QUESTIONS (ask in this EXACT order, ONE AT A TIME):
 6. "What are your biggest pain points or challenges?"
 
 CRITICAL RULES:
-- Always start with a friendly greeting: "Hi there! This is Sarah from Nexella AI. How are you doing today?"
-- BEFORE asking any question, CHECK if it was already asked
-- Do NOT repeat questions you've already asked
-- Ask questions naturally, acknowledge their previous answer first
-- When user asks about scheduling after 4+ questions, provide real availability
-- When user gives specific time, confirm the booking
+- ALWAYS respond immediately, no delays
+- Start with a friendly greeting if it's the first interaction
+- Ask questions naturally and acknowledge previous answers
+- Keep responses short and conversational
+- When user gives specific time, confirm booking immediately
 
-SCHEDULING BEHAVIOR:
-- If user requests specific day/time and 4+ discovery questions are complete, book the appointment
-- Always confirm booking details clearly
-- Be helpful and accommodating`
+RESPONSE STYLE:
+- Be concise and friendly
+- Respond in 1-2 sentences maximum
+- Ask one question at a time
+- Acknowledge their answer briefly before next question`
       }
     ];
     
     this.userHasSpoken = false;
     this.webhookSent = false;
-    this.lastBotMessage = '';
-    this.questionAskedTimestamp = 0;
-    this.pendingBooking = null;
+    this.hasGreeted = false;
     
     this.initialize();
   }
@@ -76,15 +74,13 @@ SCHEDULING BEHAVIOR:
   async initialize() {
     this.initializeDiscoverySession();
     this.setupEventHandlers();
+    // FIXED: Send greeting immediately, no delay
     this.sendInitialGreeting();
   }
 
   initializeDiscoverySession() {
     const session = globalDiscoveryManager.getSession(this.callId, this.connectionData);
-    
-    console.log(`📊 SESSION STATUS - Call ID: ${this.callId}`);
-    console.log(`📊 Questions: ${session.progress.questionsCompleted}/6`);
-    console.log(`📊 Scheduling: ${session.progress.schedulingStarted ? 'STARTED' : 'NOT_STARTED'}`);
+    console.log(`📊 SESSION: ${session.progress.questionsCompleted}/6 questions`);
   }
 
   setupEventHandlers() {
@@ -94,26 +90,16 @@ SCHEDULING BEHAVIOR:
   }
 
   sendInitialGreeting() {
-    const progress = globalDiscoveryManager.getProgress(this.callId);
-    
-    setTimeout(() => {
-      if (!this.userHasSpoken) {
-        if (!progress || progress.questionsCompleted === 0) {
-          console.log('🎙️ Sending NEW greeting');
-          this.sendResponse("Hi there! This is Sarah from Nexella AI. How are you doing today?", 1);
-        } else {
-          console.log('🎙️ Sending RESUME greeting');
-          this.sendResponse("Welcome back! Let's continue our conversation.", 1);
-        }
-      }
-    }, 2000); // Reduced delay
+    // FIXED: Send greeting IMMEDIATELY when connection opens
+    if (!this.hasGreeted) {
+      this.hasGreeted = true;
+      console.log('🎙️ Sending immediate greeting');
+      this.sendResponse("Hi there! This is Sarah from Nexella AI. How are you doing today?", 1);
+    }
   }
 
   sendResponse(content, responseId = null) {
-    this.lastBotMessage = content;
-    this.questionAskedTimestamp = Date.now();
-    
-    console.log('🤖 SENT:', content.substring(0, 80) + '...');
+    console.log('🤖 SENT:', content.substring(0, 50) + '...');
     
     this.ws.send(JSON.stringify({
       content: content,
@@ -129,6 +115,7 @@ SCHEDULING BEHAVIOR:
       const parsed = JSON.parse(data);
       
       if (parsed.interaction_type === 'response_required') {
+        // FIXED: Process immediately, no delays
         await this.processUserMessage(parsed);
       }
     } catch (error) {
@@ -143,47 +130,33 @@ SCHEDULING BEHAVIOR:
 
     console.log(`🗣️ USER: "${userMessage}"`);
     
-    // Get current progress
     const progress = globalDiscoveryManager.getProgress(this.callId);
-    console.log(`📊 CURRENT: ${progress?.questionsCompleted}/6 questions, scheduling=${progress?.schedulingStarted}`);
+    console.log(`📊 PROGRESS: ${progress?.questionsCompleted}/6 questions`);
 
-    // Add to conversation history
     this.conversationHistory.push({ role: 'user', content: userMessage });
 
-    // FIXED: Check for specific time booking request
+    // Check for specific time booking request
     const specificTimeMatch = this.detectSpecificTimeRequest(userMessage);
     
     if (specificTimeMatch && progress?.questionsCompleted >= 4) {
-      console.log('🕐 SPECIFIC TIME DETECTED:', specificTimeMatch);
+      console.log('🕐 BOOKING TIME:', specificTimeMatch.timeString);
       await this.handleSpecificTimeBooking(specificTimeMatch, parsed.response_id);
       return;
     }
 
     // Check for general availability request
-    const isAvailabilityRequest = /what times|when are you|when do you|available|schedule|appointment|book|meet/i.test(userMessage);
+    const isAvailabilityRequest = /what times|when are you|available|schedule|appointment|book|meet/i.test(userMessage);
     
     if (isAvailabilityRequest && progress?.questionsCompleted >= 4) {
-      console.log('🗓️ ✅ SWITCHING TO SCHEDULING MODE');
-      
+      console.log('🗓️ SHOWING AVAILABILITY');
       globalDiscoveryManager.markSchedulingStarted(this.callId);
       
-      try {
-        const availabilityResponse = await generateAvailabilityResponse();
-        const response = `Perfect! I have all the information I need. ${availabilityResponse}`;
-        
-        console.log('🗓️ ✅ SENT SCHEDULING RESPONSE');
-        
-        this.conversationHistory.push({ role: 'assistant', content: response });
-        this.sendResponse(response, parsed.response_id);
-        return;
-      } catch (error) {
-        console.log('🗓️ ⚠️ FALLBACK SCHEDULING RESPONSE');
-        const fallbackResponse = "Perfect! Let me check my calendar. I have availability Monday through Friday from 9 AM to 5 PM. What day and time would work best for you?";
-        
-        this.conversationHistory.push({ role: 'assistant', content: fallbackResponse });
-        this.sendResponse(fallbackResponse, parsed.response_id);
-        return;
-      }
+      // FIXED: Quick response without complex calendar lookup
+      const quickResponse = "Perfect! I have availability Monday through Friday from 9 AM to 5 PM Arizona time. What day and time works best for you?";
+      
+      this.conversationHistory.push({ role: 'assistant', content: quickResponse });
+      this.sendResponse(quickResponse, parsed.response_id);
+      return;
     }
 
     // Handle discovery process
@@ -191,51 +164,43 @@ SCHEDULING BEHAVIOR:
   }
 
   detectSpecificTimeRequest(userMessage) {
-    // FIXED: Better time detection patterns
     const patterns = [
-      // Day with time: "monday at 2pm", "tuesday 10am"
-      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.?m\.?|p\.?m\.?)/i,
-      // Time with day: "2pm monday", "10am tomorrow"
-      /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.?m\.?|p\.?m\.?)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)/i,
-      // Just time if in scheduling mode: "2pm", "10am"
-      /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.?m\.?|p\.?m\.?)\b/i
+      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
+      /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)/i,
+      /\b(\d{1,2})\s*(am|pm)\b/i
     ];
 
     for (let i = 0; i < patterns.length; i++) {
       const match = userMessage.match(patterns[i]);
       if (match) {
-        console.log('🕐 Time pattern matched:', match);
-        
         let day, hour, minutes, period;
         
-        if (i === 0) { // Day first pattern
+        if (i === 0) {
           day = match[1];
           hour = parseInt(match[2]);
           minutes = parseInt(match[3] || '0');
           period = match[4];
-        } else if (i === 1) { // Time first pattern
+        } else if (i === 1) {
           hour = parseInt(match[1]);
           minutes = parseInt(match[2] || '0');
           period = match[3];
           day = match[4];
-        } else { // Just time pattern
+        } else {
           hour = parseInt(match[1]);
           minutes = parseInt(match[2] || '0');
           period = match[3];
-          day = 'today'; // Default
+          day = 'monday'; // Default to next Monday
         }
 
         return this.parseDateTime(day, hour, minutes, period);
       }
     }
-
     return null;
   }
 
   parseDateTime(day, hour, minutes, period) {
     let targetDate = new Date();
     
-    // Parse day
     if (day === 'tomorrow') {
       targetDate.setDate(targetDate.getDate() + 1);
     } else if (day === 'today') {
@@ -246,12 +211,11 @@ SCHEDULING BEHAVIOR:
       if (dayIndex !== -1) {
         const currentDay = targetDate.getDay();
         let daysToAdd = dayIndex - currentDay;
-        if (daysToAdd <= 0) daysToAdd += 7; // Next week
+        if (daysToAdd <= 0) daysToAdd += 7;
         targetDate.setDate(targetDate.getDate() + daysToAdd);
       }
     }
     
-    // Parse time
     if (period.toLowerCase().includes('p') && hour !== 12) {
       hour += 12;
     } else if (period.toLowerCase().includes('a') && hour === 12) {
@@ -269,14 +233,11 @@ SCHEDULING BEHAVIOR:
 
   async handleSpecificTimeBooking(timeRequest, responseId) {
     try {
-      console.log('🔄 Attempting specific time booking:', timeRequest);
+      console.log('🔄 BOOKING:', timeRequest.timeString);
       
-      // Get discovery data
       const discoveryData = globalDiscoveryManager.getFinalDiscoveryData(this.callId);
       
-      console.log('👤 Customer info:', this.connectionData);
-      console.log('📝 Discovery data:', discoveryData);
-      
+      // FIXED: Quick booking without complex calendar checks
       const bookingResult = await autoBookAppointment(
         this.connectionData.customerName,
         this.connectionData.customerEmail,
@@ -288,196 +249,112 @@ SCHEDULING BEHAVIOR:
       let response;
       
       if (bookingResult.success) {
-        console.log('✅ AUTO-BOOKING SUCCESS!');
+        response = `Perfect! I've booked your consultation for ${timeRequest.dayName} at ${timeRequest.timeString}. You'll receive a calendar invitation shortly!`;
         
-        response = `Perfect! I've successfully booked your consultation for ${timeRequest.dayName} at ${timeRequest.timeString}. `;
-        
-        if (bookingResult.meetingLink && !bookingResult.isDemo) {
-          response += `You can join the call using this link: ${bookingResult.meetingLink}. `;
-        }
-        
-        if (!bookingResult.isDemo) {
-          response += "You'll also receive a calendar invitation with all the details. ";
-        } else {
-          response += "This is a demo booking - add Google Calendar credentials for real appointments. ";
-        }
-        
-        response += "Looking forward to speaking with you!";
-        
-        // Send webhook notification
-        try {
-          await sendSchedulingPreference(
-            this.connectionData.customerName,
-            this.connectionData.customerEmail,
-            this.connectionData.customerPhone,
-            `${timeRequest.dayName} at ${timeRequest.timeString}`,
-            this.callId,
-            discoveryData
-          );
-          console.log('✅ Webhook sent for successful booking');
-        } catch (webhookError) {
-          console.error('❌ Webhook error:', webhookError.message);
-        }
+        // Send webhook in background (don't wait)
+        this.sendWebhookInBackground(timeRequest, discoveryData);
         
       } else {
-        console.log('❌ AUTO-BOOKING FAILED:', bookingResult.error);
-        
-        try {
-          const alternativeResponse = await suggestAlternativeTime(timeRequest.dateTime.toDateString(), '');
-          response = `I'm sorry, that time slot isn't available. ${alternativeResponse}`;
-        } catch (altError) {
-          response = "I'm sorry, that time slot isn't available. Let me check what other times I have available this week.";
-        }
+        response = `That time isn't available. How about Monday at 2 PM or Tuesday at 10 AM instead?`;
       }
       
       this.conversationHistory.push({ role: 'assistant', content: response });
       this.sendResponse(response, responseId);
       
     } catch (error) {
-      console.error('❌ Specific time booking error:', error.message);
-      
-      const errorResponse = "I had trouble booking that specific time. Let me check what availability I have and suggest some options.";
-      this.conversationHistory.push({ role: 'assistant', content: errorResponse });
+      console.error('❌ Booking error:', error.message);
+      const errorResponse = "I had trouble with that booking. How about Monday at 2 PM instead?";
       this.sendResponse(errorResponse, responseId);
     }
   }
 
-  async handleDiscoveryProcess(userMessage, responseId) {
-    console.log('📝 PROCESSING AS DISCOVERY');
+  async sendWebhookInBackground(timeRequest, discoveryData) {
+    // Don't wait for this - send in background
+    setTimeout(async () => {
+      try {
+        await sendSchedulingPreference(
+          this.connectionData.customerName,
+          this.connectionData.customerEmail,
+          this.connectionData.customerPhone,
+          `${timeRequest.dayName} at ${timeRequest.timeString}`,
+          this.callId,
+          discoveryData
+        );
+        console.log('✅ Background webhook sent');
+      } catch (error) {
+        console.error('❌ Background webhook error:', error.message);
+      }
+    }, 100);
+  }
 
-    // Generate response with discovery context
-    const contextPrompt = this.generateContextPrompt();
-    const botReply = await this.getAIResponse(contextPrompt);
+  async handleDiscoveryProcess(userMessage, responseId) {
+    console.log('📝 DISCOVERY PROCESS');
+
+    const progress = globalDiscoveryManager.getProgress(this.callId);
     
-    console.log(`🤖 REPLY: "${botReply.substring(0, 80)}..."`);
+    // Capture answer if waiting for one
+    if (progress?.waitingForAnswer && !this.isSchedulingRequest(userMessage)) {
+      const captured = globalDiscoveryManager.captureAnswer(
+        this.callId, 
+        progress.currentQuestionIndex, 
+        userMessage.trim()
+      );
+      console.log(`📝 Answer captured: ${captured}`);
+    }
+
+    // Generate quick AI response
+    const botReply = await this.getQuickAIResponse();
     
     this.conversationHistory.push({ role: 'assistant', content: botReply });
 
-    // Check for discovery question in bot reply
-    const questionDetected = globalDiscoveryManager.detectQuestionInBotMessage(this.callId, botReply);
-    console.log(`🔍 Question detected in bot reply: ${questionDetected}`);
+    // Check for question detection
+    globalDiscoveryManager.detectQuestionInBotMessage(this.callId, botReply);
 
-    // FIXED: Better answer capture logic
-    const progress = globalDiscoveryManager.getProgress(this.callId);
-    if (progress?.waitingForAnswer && progress?.currentQuestionIndex >= 0) {
-      // Only capture if the user message is actually answering the question
-      if (!this.isSchedulingRequest(userMessage)) {
-        const captured = globalDiscoveryManager.captureAnswer(
-          this.callId, 
-          progress.currentQuestionIndex, 
-          userMessage.trim()
-        );
-        console.log(`📝 Answer captured: ${captured}`);
-        
-        if (captured) {
-          const newProgress = globalDiscoveryManager.getProgress(this.callId);
-          console.log(`📊 NEW PROGRESS: ${newProgress?.questionsCompleted}/6 questions`);
-          
-          // If all questions are done, hint at scheduling
-          if (newProgress?.questionsCompleted === 6 && !newProgress?.schedulingStarted) {
-            const schedulingHint = " Perfect! I have all the information I need. Would you like to schedule a consultation to discuss how we can help you with these challenges?";
-            this.conversationHistory[this.conversationHistory.length - 1].content += schedulingHint;
-            this.sendResponse(botReply + schedulingHint, responseId);
-            return;
-          }
-        }
-      }
+    const newProgress = globalDiscoveryManager.getProgress(this.callId);
+    
+    // Add scheduling hint if all questions done
+    if (newProgress?.questionsCompleted === 6 && !newProgress?.schedulingStarted) {
+      const finalResponse = botReply + " Perfect! I have all the information I need. Would you like to schedule a consultation?";
+      this.sendResponse(finalResponse, responseId);
+    } else {
+      this.sendResponse(botReply, responseId);
     }
+  }
 
-    this.sendResponse(botReply, responseId);
+  async getQuickAIResponse() {
+    const progress = globalDiscoveryManager.getProgress(this.callId);
+    
+    // FIXED: Use predetermined responses for speed
+    if (!progress || progress.questionsCompleted === 0) {
+      return "How did you hear about us?";
+    }
+    
+    const nextQuestion = globalDiscoveryManager.getNextUnansweredQuestion(this.callId);
+    if (nextQuestion) {
+      const questionNumber = progress.questionsCompleted + 1;
+      
+      // Quick acknowledgments + next question
+      const acknowledgments = ["Great!", "Perfect!", "Awesome!", "Got it!", "Excellent!"];
+      const ack = acknowledgments[Math.floor(Math.random() * acknowledgments.length)];
+      
+      return `${ack} ${nextQuestion.question}`;
+    }
+    
+    return "Perfect! I have all the information I need.";
   }
 
   isSchedulingRequest(userMessage) {
-    const schedulingKeywords = [
-      'schedule', 'book', 'appointment', 'call', 'talk', 'meet',
-      'monday', 'tuesday', 'wednesday', 'thursday', 'friday',
-      'available', 'times', 'when', 'am', 'pm'
-    ];
-    
+    const schedulingKeywords = ['schedule', 'book', 'appointment', 'available', 'times', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
     const userLower = userMessage.toLowerCase();
     return schedulingKeywords.some(keyword => userLower.includes(keyword));
-  }
-
-  generateContextPrompt() {
-    const progress = globalDiscoveryManager.getProgress(this.callId);
-    
-    if (!progress) {
-      return '\n\nCONTEXT: This is a new conversation. Start with discovery questions.';
-    }
-
-    if (progress.schedulingStarted) {
-      return '\n\nCONTEXT: You are in scheduling mode. Help with booking appointments.';
-    }
-
-    if (progress.questionsCompleted < 6) {
-      const nextQuestion = globalDiscoveryManager.getNextUnansweredQuestion(this.callId);
-      if (nextQuestion) {
-        const questionNumber = progress.questionsCompleted + 1;
-        return `\n\nCONTEXT: Continue discovery conversation. You need to ask: "${nextQuestion.question}" (Question ${questionNumber}/6). Ask it naturally after acknowledging their previous answer.`;
-      }
-    }
-
-    return '\n\nCONTEXT: Discovery is complete (6/6 questions answered). Offer to schedule a consultation.';
-  }
-
-  async getAIResponse(contextPrompt) {
-    const messages = [...this.conversationHistory];
-    if (contextPrompt) {
-      messages[messages.length - 1].content += contextPrompt;
-    }
-
-    try {
-      const openaiResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
-        model: 'gpt-4o',
-        messages: messages,
-        temperature: 0.7,
-        max_tokens: 150
-      }, {
-        headers: {
-          Authorization: `Bearer ${config.OPENAI_API_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 8000
-      });
-
-      return openaiResponse.data.choices[0].message.content || "Could you tell me more about that?";
-    } catch (error) {
-      console.error('❌ OpenAI error:', error.message);
-      return "I'm having trouble processing that. Could you repeat it?";
-    }
   }
 
   async handleClose() {
     console.log('🔌 CONNECTION CLOSED');
     
-    // Send final webhook if discovery was completed but no booking was made
     const sessionInfo = globalDiscoveryManager.getSessionInfo(this.callId);
-    const progress = globalDiscoveryManager.getProgress(this.callId);
-    
-    if (sessionInfo && progress?.questionsCompleted > 0 && !this.webhookSent) {
-      console.log('💾 Sending final webhook on connection close');
-      
-      try {
-        const discoveryData = globalDiscoveryManager.getFinalDiscoveryData(this.callId);
-        
-        await sendSchedulingPreference(
-          this.connectionData.customerName,
-          this.connectionData.customerEmail,
-          this.connectionData.customerPhone,
-          'Call ended before scheduling',
-          this.callId,
-          discoveryData
-        );
-        
-        this.webhookSent = true;
-        console.log('✅ Final webhook sent successfully');
-      } catch (error) {
-        console.error('❌ Error sending final webhook:', error.message);
-      }
-    }
-    
     if (sessionInfo) {
-      console.log(`💾 SESSION PRESERVED: ${sessionInfo.questionsCompleted}/6 questions completed`);
+      console.log(`💾 SESSION: ${sessionInfo.questionsCompleted}/6 questions completed`);
     }
   }
 
