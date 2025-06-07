@@ -213,6 +213,25 @@ CRITICAL RULES:
         const newProgress = globalDiscoveryManager.getProgress(this.callId);
         console.log(`📊 NEW PROGRESS: ${newProgress?.questionsCompleted}/6 questions`);
       }
+    } else {
+      // FALLBACK: Try to capture answer for the most recent question that was asked but not answered
+      const session = globalDiscoveryManager.getSessionInfo(this.callId);
+      if (session) {
+        const lastAskedUnanswered = session.questions.findIndex(q => q.asked && !q.answered);
+        if (lastAskedUnanswered >= 0) {
+          console.log(`📝 FALLBACK: Trying to capture answer for Q${lastAskedUnanswered + 1}`);
+          const captured = globalDiscoveryManager.captureAnswer(
+            this.callId, 
+            lastAskedUnanswered, 
+            userMessage.trim()
+          );
+          if (captured) {
+            console.log(`📝 FALLBACK SUCCESS: Captured answer for Q${lastAskedUnanswered + 1}`);
+            const newProgress = globalDiscoveryManager.getProgress(this.callId);
+            console.log(`📊 NEW PROGRESS: ${newProgress?.questionsCompleted}/6 questions`);
+          }
+        }
+      }
     }
 
     this.sendResponse(botReply, parsed.response_id);
