@@ -1,10 +1,11 @@
-// src/services/calendar/GoogleAppointmentScheduleService.js - Real Appointment Schedule Integration
+// src/services/calendar/GoogleAppointmentScheduleService.js - Fixed Timezone
 const { google } = require('googleapis');
 
 class GoogleAppointmentScheduleService {
   constructor() {
     this.calendar = null;
     this.auth = null;
+    // FIXED: Always use environment variable timezone, don't let calendar override it
     this.timezone = process.env.TIMEZONE || 'America/Phoenix';
     
     // Extract schedule ID from your URL
@@ -13,6 +14,7 @@ class GoogleAppointmentScheduleService {
     
     console.log('🔧 GoogleAppointmentScheduleService constructor called');
     console.log('📅 Schedule ID:', this.scheduleId);
+    console.log('🌍 Using timezone:', this.timezone); // Show timezone from constructor
   }
 
   async initialize() {
@@ -22,6 +24,7 @@ class GoogleAppointmentScheduleService {
       console.log('   GOOGLE_PROJECT_ID:', process.env.GOOGLE_PROJECT_ID ? '✅ SET' : '❌ MISSING');
       console.log('   GOOGLE_PRIVATE_KEY:', process.env.GOOGLE_PRIVATE_KEY ? '✅ SET' : '❌ MISSING');
       console.log('   GOOGLE_CLIENT_EMAIL:', process.env.GOOGLE_CLIENT_EMAIL ? '✅ SET' : '❌ MISSING');
+      console.log('   TIMEZONE:', process.env.TIMEZONE ? `✅ SET (${process.env.TIMEZONE})` : '❌ MISSING');
       
       if (!process.env.GOOGLE_PROJECT_ID || !process.env.GOOGLE_PRIVATE_KEY || !process.env.GOOGLE_CLIENT_EMAIL) {
         console.error('❌ Missing required Google Calendar environment variables');
@@ -96,10 +99,16 @@ class GoogleAppointmentScheduleService {
       
       console.log(`✅ Connected to calendar: ${response.data.summary}`);
       console.log(`📅 Schedule ID: ${this.scheduleId}`);
-      console.log(`🌍 Timezone: ${response.data.timeZone || this.timezone}`);
       
-      if (response.data.timeZone) {
-        this.timezone = response.data.timeZone;
+      // FIXED: Don't override timezone from calendar - keep environment variable
+      const calendarTimezone = response.data.timeZone;
+      console.log(`🌍 Calendar timezone: ${calendarTimezone}`);
+      console.log(`🌍 Using configured timezone: ${this.timezone} (from environment)`);
+      
+      // Only use calendar timezone if we don't have one configured
+      if (!process.env.TIMEZONE && calendarTimezone) {
+        this.timezone = calendarTimezone;
+        console.log(`🌍 Updated to calendar timezone: ${this.timezone}`);
       }
       
       return true;
@@ -117,6 +126,7 @@ class GoogleAppointmentScheduleService {
       }
 
       console.log(`📅 [APPOINTMENT SCHEDULE] Getting available slots for: ${date}`);
+      console.log(`🌍 Using timezone: ${this.timezone}`);
       
       const targetDate = new Date(date);
       
@@ -129,7 +139,6 @@ class GoogleAppointmentScheduleService {
       }
 
       // For appointment schedules, we need to check the specific calendar
-      // that's associated with your appointment schedule
       const startOfDay = new Date(targetDate);
       startOfDay.setHours(0, 0, 0, 0);
       
@@ -139,11 +148,9 @@ class GoogleAppointmentScheduleService {
       console.log(`🕐 [APPOINTMENT SCHEDULE] Checking from ${startOfDay.toISOString()} to ${endOfDay.toISOString()}`);
 
       try {
-        // Try to get events from the calendar associated with your appointment schedule
-        // You might need to use a specific calendar ID if your appointment schedule
-        // is on a different calendar
+        // Get events from the calendar
         const response = await this.calendar.events.list({
-          calendarId: 'primary', // or your specific calendar ID
+          calendarId: 'primary',
           timeMin: startOfDay.toISOString(),
           timeMax: endOfDay.toISOString(),
           singleEvents: true,
@@ -183,7 +190,7 @@ class GoogleAppointmentScheduleService {
     
     const slots = [];
     
-    // Business hours: 9 AM to 5 PM
+    // Business hours: 9 AM to 5 PM (Arizona time)
     const businessStart = 9;
     const businessEnd = 17;
     
@@ -215,7 +222,7 @@ class GoogleAppointmentScheduleService {
             hour: 'numeric',
             minute: '2-digit',
             hour12: true,
-            timeZone: this.timezone
+            timeZone: this.timezone // Use our configured timezone
           })
         });
       }
@@ -241,7 +248,7 @@ class GoogleAppointmentScheduleService {
     
     const slots = [];
     
-    // Generate slots every hour from 9 AM to 5 PM
+    // Generate slots every hour from 9 AM to 5 PM (Arizona time)
     const availableHours = [9, 10, 11, 12, 13, 14, 15, 16]; // 9 AM to 4 PM
     
     availableHours.forEach(hour => {
@@ -264,12 +271,12 @@ class GoogleAppointmentScheduleService {
           hour: 'numeric',
           minute: '2-digit',
           hour12: true,
-          timeZone: this.timezone
+          timeZone: this.timezone // Use our configured timezone
         })
       });
     });
     
-    console.log(`🔄 Generated ${slots.length} business hour slots`);
+    console.log(`🔄 Generated ${slots.length} business hour slots in ${this.timezone}`);
     return slots;
   }
 
@@ -311,19 +318,19 @@ class GoogleAppointmentScheduleService {
       }
 
       console.log('📅 [APPOINTMENT SCHEDULE] Creating appointment:', appointmentDetails.summary);
+      console.log('🌍 Using timezone for event:', this.timezone);
 
-      // Create a regular calendar event since we can't directly create 
-      // appointment schedule bookings via API
+      // Create a calendar event
       const event = {
         summary: appointmentDetails.summary || 'Nexella AI Consultation Call',
         description: `${appointmentDetails.description || 'Discovery call scheduled via Nexella AI'}\n\nCustomer: ${appointmentDetails.attendeeName}\nEmail: ${appointmentDetails.attendeeEmail}`,
         start: {
           dateTime: appointmentDetails.startTime,
-          timeZone: this.timezone
+          timeZone: this.timezone // Use our configured timezone
         },
         end: {
           dateTime: appointmentDetails.endTime,
-          timeZone: this.timezone
+          timeZone: this.timezone // Use our configured timezone
         },
         attendees: [
           {
