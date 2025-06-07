@@ -1,4 +1,4 @@
-// src/handlers/WebSocketHandler.js - Fixed Discovery Flow
+// src/handlers/WebSocketHandler.js - COMPLETE FIXED VERSION
 const axios = require('axios');
 const config = require('../config/environment');
 const DiscoveryService = require('../services/discovery/DiscoveryService');
@@ -82,6 +82,9 @@ Keep responses short and conversational. Never ask multiple questions at once.`
     this.webhookSent = false;
     this.lastBotMessage = '';
     this.questionAskedTimestamp = 0;
+    this.schedulingDetected = false;
+    this.calendarCheckResponse = '';
+    this.schedulingInterrupted = false;
     
     console.log('🔗 NEW WEBSOCKET CONNECTION');
     console.log('📞 Extracted Call ID:', this.callId);
@@ -267,36 +270,71 @@ Keep responses short and conversational. Never ask multiple questions at once.`
 
     console.log('🗣️ User said:', userMessage);
     console.log('📊 Discovery progress:', this.discovery.progress.questionsCompleted, '/6');
+    console.log('🗓️ Scheduling started:', this.discovery.progress.schedulingStarted);
     console.log('🤖 Last bot message:', this.lastBotMessage);
 
-    // IMPROVED: Question detection logic
-    const timeSinceLastQuestion = Date.now() - this.questionAskedTimestamp;
-    const isRecentBotMessage = timeSinceLastQuestion < 10000; // 10 seconds
-    
-    if (isRecentBotMessage && this.lastBotMessage) {
-      console.log('🔍 Checking if last bot message was a discovery question...');
-      this.discovery.detectQuestionAsked(this.lastBotMessage);
-    }
+    // CRITICAL FIX: Detect availability requests early and handle them specially
+    const isAvailabilityRequest = userMessage.toLowerCase().match(
+      /\b(what times|when are you|when do you|available|schedule|appointment|times.*available|times.*next week)\b/
+    );
 
-    // IMPROVED: Answer capture logic
-    if (this.discovery.progress.waitingForAnswer && userMessage.trim().length > 2) {
-      console.log('📝 Attempting to capture user answer...');
+    if (isAvailabilityRequest && this.discovery.progress.questionsCompleted >= 4) {
+      console.log('🗓️ DETECTED: User asking about availability with sufficient discovery data');
       
-      // Check if this is actually a scheduling request
-      const schedulingKeywords = ['schedule', 'book', 'appointment', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'tomorrow', 'today', 'am', 'pm'];
-      const isSchedulingRequest = schedulingKeywords.some(keyword => 
-        userMessage.toLowerCase().includes(keyword)
-      );
+      // Mark scheduling as started to prevent discovery loops
+      this.discovery.markSchedulingStarted();
       
-      if (isSchedulingRequest && this.discovery.progress.questionsCompleted >= 4) {
-        console.log('🗓️ User is trying to schedule, but discovery not complete');
-        // Don't capture as answer, let AI handle it
-      } else {
-        this.discovery.captureUserAnswer(userMessage);
+      // Generate availability response
+      try {
+        const availabilityResponse = await generateAvailabilityResponse();
+        const response = `Perfect! I have the information I need. ${availabilityResponse}`;
+        
+        this.conversationHistory.push({ role: 'user', content: userMessage });
+        this.conversationHistory.push({ role: 'assistant', content: response });
+        
+        this.sendResponse(response, parsed.response_id);
+        return; // CRITICAL: Exit early to prevent further processing
+      } catch (error) {
+        console.error('Error generating availability:', error);
+        const fallbackResponse = "Perfect! Let me check my calendar. What day and time would work best for you?";
+        this.conversationHistory.push({ role: 'user', content: userMessage });
+        this.conversationHistory.push({ role: 'assistant', content: fallbackResponse });
+        this.sendResponse(fallbackResponse, parsed.response_id);
+        return;
       }
     }
 
-    // IMPROVED: Scheduling detection
+    // ONLY do discovery detection if scheduling hasn't started
+    if (!this.discovery.progress.schedulingStarted) {
+      // Question detection logic
+      const timeSinceLastQuestion = Date.now() - this.questionAskedTimestamp;
+      const isRecentBotMessage = timeSinceLastQuestion < 10000; // 10 seconds
+      
+      if (isRecentBotMessage && this.lastBotMessage) {
+        console.log('🔍 Checking if last bot message was a discovery question...');
+        this.discovery.detectQuestionAsked(this.lastBotMessage);
+      }
+
+      // Answer capture logic (only for discovery phase)
+      if (this.discovery.progress.waitingForAnswer && userMessage.trim().length > 2) {
+        console.log('📝 Attempting to capture user answer...');
+        
+        // Check if this is actually a scheduling request
+        const schedulingKeywords = ['schedule', 'book', 'appointment', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'tomorrow', 'today', 'am', 'pm'];
+        const isSchedulingRequest = schedulingKeywords.some(keyword => 
+          userMessage.toLowerCase().includes(keyword)
+        );
+        
+        if (isSchedulingRequest && this.discovery.progress.questionsCompleted >= 4) {
+          console.log('🗓️ User is trying to schedule, but discovery not complete');
+          // Don't capture as answer, let AI handle it
+        } else {
+          this.discovery.captureUserAnswer(userMessage);
+        }
+      }
+    }
+
+    // Handle scheduling logic
     await this.handleSchedulingLogic(userMessage);
 
     // Add user message to conversation history
@@ -323,11 +361,15 @@ Keep responses short and conversational. Never ask multiple questions at once.`
     let schedulingDetected = false;
     let calendarCheckResponse = '';
     
-    // Only allow scheduling if all discovery questions are complete
-    if (this.discovery.progress.allQuestionsCompleted && 
+    // Only allow scheduling if all discovery questions are complete OR 4+ questions with explicit scheduling request
+    const canSchedule = this.discovery.progress.allQuestionsCompleted || 
+                       (this.discovery.progress.questionsCompleted >= 4 && 
+                        userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today|\d{1,2}\s*(am|pm)|morning|afternoon|evening)\b/));
+    
+    if (canSchedule && 
         userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today|\d{1,2}\s*(am|pm)|morning|afternoon|evening)\b/)) {
       
-      console.log('🗓️ SCHEDULING DETECTED - All discovery complete, starting booking process');
+      console.log('🗓️ SCHEDULING DETECTED - Starting booking process');
       this.discovery.markSchedulingStarted();
       
       const dayInfo = handleSchedulingPreference(userMessage);
@@ -425,15 +467,29 @@ Keep responses short and conversational. Never ask multiple questions at once.`
   }
 
   generateContextPrompt() {
-    // Handle scheduling interruption
+    // CRITICAL FIX: Handle scheduling interruption
     if (this.schedulingInterrupted) {
       this.schedulingInterrupted = false;
+      const remaining = 6 - this.discovery.progress.questionsCompleted;
       return `
 
-User is trying to schedule but discovery is not complete.
+User is trying to schedule but discovery is not complete (${remaining} questions remaining).
 RESPOND EXACTLY WITH: "Let me finish getting some information first, then we'll find you a perfect time. ${this.getNextQuestionPrompt()}"`;
     }
     
+    // CRITICAL FIX: If scheduling started, don't generate discovery prompts
+    if (this.discovery.progress.schedulingStarted) {
+      console.log('🗓️ Scheduling mode - no discovery prompts');
+      if (this.calendarCheckResponse) {
+        return `
+
+Scheduling mode active. Calendar response ready.
+RESPOND EXACTLY WITH: "${this.calendarCheckResponse}"`;
+      }
+      return ''; // Let normal AI conversation flow take over
+    }
+    
+    // Only generate discovery prompts if discovery is not complete
     if (!this.discovery.progress.allQuestionsCompleted) {
       return this.discovery.generateContextPrompt();
     } else if (this.calendarCheckResponse) {
@@ -444,6 +500,7 @@ RESPOND EXACTLY WITH: "${this.calendarCheckResponse}"`;
     } else if (!this.discovery.progress.schedulingStarted) {
       return this.generateAvailabilityPrompt();
     }
+    
     return '';
   }
 
@@ -507,7 +564,7 @@ RESPOND EXACTLY WITH: "Perfect! I have all the information I need. Let's schedul
   }
 
   async checkAndSendWebhook() {
-    if (this.schedulingDetected && this.discovery.progress.allQuestionsCompleted && !this.webhookSent) {
+    if (this.schedulingDetected && this.discovery.progress.questionsCompleted >= 4 && !this.webhookSent) {
       console.log('🚀 SENDING WEBHOOK');
       
       const finalDiscoveryData = this.discovery.getFinalDiscoveryData();
@@ -538,7 +595,7 @@ RESPOND EXACTLY WITH: "Perfect! I have all the information I need. Let's schedul
   async sendEmergencyWebhook() {
     if (!this.webhookSent && this.connectionData.callId && 
         (this.bookingInfo.email || this.connectionData.customerEmail) &&
-        this.discovery.progress.questionsCompleted >= 4) {
+        this.discovery.progress.questionsCompleted >= 3) {
       try {
         console.log('🚨 EMERGENCY WEBHOOK SEND - Substantial discovery data available');
         
