@@ -1,4 +1,4 @@
-// src/services/calendar/GoogleAppointmentScheduleService.js - FIXED TIMEZONE VERSION
+// src/services/calendar/GoogleAppointmentScheduleService.js - FINAL TIMEZONE FIX
 const { google } = require('googleapis');
 
 class GoogleAppointmentScheduleService {
@@ -111,7 +111,7 @@ class GoogleAppointmentScheduleService {
     try {
       if (!this.calendar) {
         console.log('⚠️ Appointment schedule not available');
-        return this.generateBusinessHourSlots(date);
+        return this.generateSimpleBusinessHourSlots(date);
       }
 
       console.log(`📅 [APPOINTMENT SCHEDULE] Getting available slots for: ${date}`);
@@ -134,7 +134,6 @@ class GoogleAppointmentScheduleService {
         return [];
       }
 
-      // FIXED: Create proper date objects in Arizona timezone
       const startOfDay = new Date(targetDate);
       startOfDay.setHours(0, 0, 0, 0);
       
@@ -155,25 +154,25 @@ class GoogleAppointmentScheduleService {
         const events = response.data.items || [];
         console.log(`📋 [APPOINTMENT SCHEDULE] Found ${events.length} existing events`);
 
-        // FIXED: Generate slots with proper timezone handling
-        const availableSlots = this.generateProperBusinessHourSlots(targetDate, events);
+        // FIXED: Use simple business hour generation with correct times
+        const availableSlots = this.generateSimpleBusinessHourSlots(targetDate, events);
         
         console.log(`✅ [APPOINTMENT SCHEDULE] Generated ${availableSlots.length} available slots`);
         return availableSlots;
 
       } catch (apiError) {
         console.error('❌ Error calling appointment schedule API:', apiError.message);
-        return this.generateProperBusinessHourSlots(targetDate, []);
+        return this.generateSimpleBusinessHourSlots(targetDate, []);
       }
 
     } catch (error) {
       console.error('❌ Error getting appointment schedule slots:', error.message);
-      return this.generateProperBusinessHourSlots(date, []);
+      return this.generateSimpleBusinessHourSlots(date, []);
     }
   }
 
-  // FIXED: Proper business hour slot generation
-  generateProperBusinessHourSlots(targetDate, existingEvents = []) {
+  // FIXED: Simple, direct business hour generation without timezone conversion issues
+  generateSimpleBusinessHourSlots(targetDate, existingEvents = []) {
     const dayOfWeek = targetDate.getDay();
     
     // No slots on weekends
@@ -190,11 +189,11 @@ class GoogleAppointmentScheduleService {
     
     const slots = [];
     
-    // FIXED: Arizona business hours 9 AM to 5 PM
-    const businessHours = [9, 10, 11, 12, 13, 14, 15, 16]; // 9 AM to 4 PM (last slot starts at 4 PM)
+    // FIXED: Simple Arizona business hours - just use the hour directly
+    const businessHours = [9, 10, 11, 12, 13, 14, 15, 16]; // 9 AM to 4 PM
     
     businessHours.forEach(hour => {
-      // Create slot time in local timezone first
+      // Create slot time
       const slotDate = new Date(targetDate);
       slotDate.setHours(hour, 0, 0, 0);
       
@@ -218,8 +217,8 @@ class GoogleAppointmentScheduleService {
       });
       
       if (!hasConflict) {
-        // FIXED: Proper display time formatting
-        const displayTime = this.formatTimeForTimezone(slotDate);
+        // FIXED: Simple display time - just format the hour directly
+        const displayTime = this.formatSimpleTime(hour);
         
         slots.push({
           startTime: slotDate.toISOString(),
@@ -235,24 +234,22 @@ class GoogleAppointmentScheduleService {
     return slots;
   }
 
-  // FIXED: Proper time formatting for Arizona timezone
-  formatTimeForTimezone(date) {
-    // Create a new date adjusted for Arizona timezone
-    // Arizona is UTC-7 (MST, no daylight saving)
-    const utcTime = date.getTime() + (date.getTimezoneOffset() * 60000);
-    const arizonaOffset = -7; // Arizona is UTC-7
-    const arizonaTime = new Date(utcTime + (arizonaOffset * 3600000));
-    
-    return arizonaTime.toLocaleTimeString('en-US', {
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true
-    });
+  // FIXED: Simple time formatting without timezone conversion issues
+  formatSimpleTime(hour) {
+    if (hour === 0) {
+      return "12:00 AM";
+    } else if (hour < 12) {
+      return `${hour}:00 AM`;
+    } else if (hour === 12) {
+      return "12:00 PM";
+    } else {
+      return `${hour - 12}:00 PM`;
+    }
   }
 
   // Legacy method for compatibility
   generateBusinessHourSlots(targetDate) {
-    return this.generateProperBusinessHourSlots(targetDate, []);
+    return this.generateSimpleBusinessHourSlots(targetDate, []);
   }
 
   async isSlotAvailable(startTime, endTime) {
