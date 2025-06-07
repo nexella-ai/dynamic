@@ -22,6 +22,7 @@ const config = {
   GOOGLE_SERVICE_ACCOUNT_KEY: process.env.GOOGLE_SERVICE_ACCOUNT_KEY,
   GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
   GOOGLE_REFRESH_TOKEN: process.env.GOOGLE_REFRESH_TOKEN,
+  GOOGLE_APPOINTMENT_SCHEDULE_URL: process.env.GOOGLE_APPOINTMENT_SCHEDULE_URL,
   
   // Webhook Configuration
   TRIGGER_SERVER_URL: process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com',
