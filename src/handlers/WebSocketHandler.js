@@ -1,4 +1,4 @@
-// src/handlers/WebSocketHandler.js - CONTEXTUAL VERSION WITH BOOKING
+// src/handlers/WebSocketHandler.js - COMPLETE FIXED VERSION
 const axios = require('axios');
 const config = require('../config/environment');
 const globalDiscoveryManager = require('../services/discovery/GlobalDiscoveryManager');
@@ -13,7 +13,8 @@ const {
 const { 
   sendSchedulingPreference, 
   addCallMetadata, 
-  removeCallMetadata 
+  removeCallMetadata,
+  getActiveCallsMetadata
 } = require('../services/webhooks/WebhookService');
 
 class WebSocketHandler {
@@ -24,12 +25,8 @@ class WebSocketHandler {
     
     console.log('🔗 NEW CONNECTION - Call ID:', this.callId);
     
-    this.connectionData = {
-      callId: this.callId,
-      customerEmail: 'customer@example.com',
-      customerName: 'Test Customer',
-      customerPhone: '+1234567890'
-    };
+    // FIXED: Get real customer data from call metadata or Typeform
+    this.connectionData = this.getCustomerData();
     
     this.conversationHistory = [
       {
@@ -47,17 +44,14 @@ DISCOVERY QUESTIONS (ask in this EXACT order, ONE AT A TIME):
 CONVERSATION STYLE:
 - Be naturally conversational and engaging
 - Give contextual responses that acknowledge their specific answers
-- For Instagram: "Instagram, nice! Social media is huge these days."
-- For Solar: "Solar industry, that's awesome! Clean energy is the future."
-- For Healthcare: "Healthcare, wonderful! Such important work."
 - Keep responses warm but concise (2-3 sentences max)
-- Always acknowledge their answer, then ask the next question
+- Always acknowledge their answer, then ask the next question naturally
 
 BOOKING BEHAVIOR:
-- When user gives specific time like "Monday at 10 AM" or "Can do Monday at ten AM", immediately confirm booking
+- When user gives specific time like "Monday at 9" or "Monday at nine", immediately confirm booking
 - Say: "Perfect! I've booked your consultation for [day] at [time]. You'll receive a calendar invitation shortly!"
 
-CRITICAL: Always respond naturally and conversationally, but detect booking requests accurately.`
+CRITICAL: Ask ALL 6 questions before offering scheduling, unless user specifically requests a time.`
       }
     ];
     
@@ -73,6 +67,48 @@ CRITICAL: Always respond naturally and conversationally, but detect booking requ
     return callIdMatch ? `call_${callIdMatch[1]}` : null;
   }
 
+  // FIXED: Get real customer data from multiple sources
+  getCustomerData() {
+    console.log('🔍 Getting customer data...');
+    
+    // Method 1: Check active calls metadata (from Retell webhook)
+    const activeCallsMetadata = getActiveCallsMetadata();
+    if (this.callId && activeCallsMetadata.has(this.callId)) {
+      const callMetadata = activeCallsMetadata.get(this.callId);
+      console.log('📞 Found call metadata:', callMetadata);
+      
+      return {
+        callId: this.callId,
+        customerEmail: callMetadata.customer_email || callMetadata.email || 'unknown@example.com',
+        customerName: callMetadata.customer_name || callMetadata.name || 'Customer',
+        customerPhone: callMetadata.customer_phone || callMetadata.phone || callMetadata.to_number || '+1234567890'
+      };
+    }
+    
+    // Method 2: Check global Typeform submission
+    if (global.lastTypeformSubmission) {
+      console.log('📝 Found Typeform submission:', global.lastTypeformSubmission);
+      
+      return {
+        callId: this.callId,
+        customerEmail: global.lastTypeformSubmission.email || 'unknown@example.com',
+        customerName: global.lastTypeformSubmission.name || 'Customer',
+        customerPhone: global.lastTypeformSubmission.phone || '+1234567890'
+      };
+    }
+    
+    // Method 3: Fallback to test data with warning
+    console.warn('⚠️ No real customer data found - using fallback test data');
+    console.warn('💡 Make sure Typeform webhook or Retell metadata is properly configured');
+    
+    return {
+      callId: this.callId,
+      customerEmail: 'customer@example.com',
+      customerName: 'Test Customer',
+      customerPhone: '+1234567890'
+    };
+  }
+
   async initialize() {
     this.initializeDiscoverySession();
     this.setupEventHandlers();
@@ -82,6 +118,7 @@ CRITICAL: Always respond naturally and conversationally, but detect booking requ
   initializeDiscoverySession() {
     const session = globalDiscoveryManager.getSession(this.callId, this.connectionData);
     console.log(`📊 SESSION: ${session.progress.questionsCompleted}/6 questions`);
+    console.log(`👤 CUSTOMER: ${this.connectionData.customerName} (${this.connectionData.customerEmail})`);
   }
 
   setupEventHandlers() {
@@ -94,7 +131,14 @@ CRITICAL: Always respond naturally and conversationally, but detect booking requ
     if (!this.hasGreeted) {
       this.hasGreeted = true;
       console.log('🎙️ Sending immediate greeting');
-      this.sendResponse("Hi there! This is Sarah from Nexella AI. How are you doing today?", 1);
+      
+      // Personalized greeting if we have a name
+      let greeting = "Hi there! This is Sarah from Nexella AI. How are you doing today?";
+      if (this.connectionData.customerName && this.connectionData.customerName !== 'Test Customer') {
+        greeting = `Hi ${this.connectionData.customerName}! This is Sarah from Nexella AI. How are you doing today?`;
+      }
+      
+      this.sendResponse(greeting, 1);
     }
   }
 
@@ -143,16 +187,33 @@ CRITICAL: Always respond naturally and conversationally, but detect booking requ
       return;
     }
 
-    // PRIORITY 2: Check for general availability request
+    // PRIORITY 2: Check for general availability request (only if 4+ questions done)
     const isAvailabilityRequest = /what times|when are you|available|schedule|appointment|book|meet/i.test(userMessage) && 
                                  !/monday|tuesday|wednesday|thursday|friday/i.test(userMessage);
     
-    if (isAvailabilityRequest) {
-      console.log('🗓️ SHOWING AVAILABILITY');
+    if (isAvailabilityRequest && progress?.questionsCompleted >= 4) {
+      console.log('🗓️ SHOWING AVAILABILITY (4+ questions done)');
       const quickResponse = "I have availability Monday through Friday from 9 AM to 5 PM Arizona time. What day and time works best for you?";
       
       this.conversationHistory.push({ role: 'assistant', content: quickResponse });
       this.sendResponse(quickResponse, parsed.response_id);
+      return;
+    } else if (isAvailabilityRequest && progress?.questionsCompleted < 4) {
+      console.log('🗓️ AVAILABILITY REQUEST TOO EARLY - Continue discovery');
+      const earlyResponse = "I'd love to schedule a time with you! Let me just get a bit more information first. ";
+      
+      const nextQuestion = globalDiscoveryManager.getNextUnansweredQuestion(this.callId);
+      if (nextQuestion) {
+        const response = earlyResponse + nextQuestion.question;
+        this.conversationHistory.push({ role: 'assistant', content: response });
+        this.sendResponse(response, parsed.response_id);
+        
+        // Mark the question as asked
+        const questionIndex = globalDiscoveryManager.getSession(this.callId).questions.findIndex(q => q.question === nextQuestion.question);
+        if (questionIndex >= 0) {
+          globalDiscoveryManager.markQuestionAsked(this.callId, questionIndex, response);
+        }
+      }
       return;
     }
 
@@ -161,18 +222,16 @@ CRITICAL: Always respond naturally and conversationally, but detect booking requ
   }
 
   detectSpecificTimeRequest(userMessage) {
-    // ENHANCED: More comprehensive booking detection
+    // ENHANCED: More comprehensive booking detection including word numbers
     const patterns = [
-      // "Monday at 10 AM", "tuesday 2pm", etc.
-      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
-      // "10 AM Monday", "2pm tuesday", etc.  
+      // "Monday at 9", "tuesday 2pm", etc.
+      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i,
+      // "9 AM Monday", "2pm tuesday", etc.  
       /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)/i,
-      // "Can do Monday at 10", "Monday 10am works", "Yes Monday at 10"
-      /(?:can do|works?|good|yes|ok|okay|sure|perfect|sounds good).*\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
-      // "Monday at ten", "tuesday ten am" (word numbers)
-      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\s+(?:at\s+)?(ten|eleven|twelve|one|two|three|four|five|six|seven|eight|nine)\s*(am|pm)/i,
-      // "Can do Monday at ten AM"
-      /(?:can do|works?|good|yes|ok|okay).*\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\s+(?:at\s+)?(ten|eleven|twelve|one|two|three|four|five|six|seven|eight|nine)\s*(am|pm)/i
+      // "Monday at nine", "tuesday ten am" (word numbers)
+      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\s+(?:at\s+)?(nine|ten|eleven|twelve|one|two|three|four|five|six|seven|eight)\s*(am|pm)?/i,
+      // Just word numbers if in context: "nine", "ten am"
+      /\b(nine|ten|eleven|twelve|one|two|three|four|five|six|seven|eight)\s*(am|pm)/i
     ];
 
     for (let i = 0; i < patterns.length; i++) {
@@ -182,31 +241,34 @@ CRITICAL: Always respond naturally and conversationally, but detect booking requ
         
         let day, hour, minutes, period;
         
-        if (i === 0) { // Day first
+        if (i === 0) { // Day with number
           day = match[1];
           hour = parseInt(match[2]);
           minutes = parseInt(match[3] || '0');
-          period = match[4];
-        } else if (i === 1) { // Time first
+          period = match[4] || 'am'; // Default to AM if not specified
+        } else if (i === 1) { // Number with day
           hour = parseInt(match[1]);
           minutes = parseInt(match[2] || '0');
           period = match[3];
           day = match[4];
-        } else if (i === 2) { // "Can do Monday at 10"
-          day = match[1];
-          hour = parseInt(match[2]);
-          minutes = parseInt(match[3] || '0');
-          period = match[4];
-        } else if (i === 3 || i === 4) { // Word numbers
+        } else if (i === 2) { // Day with word number
           day = match[1];
           const timeWords = {
-            'ten': 10, 'eleven': 11, 'twelve': 12, 'one': 1, 'two': 2, 
-            'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 
-            'eight': 8, 'nine': 9
+            'nine': 9, 'ten': 10, 'eleven': 11, 'twelve': 12, 'one': 1, 'two': 2, 
+            'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 'eight': 8
           };
-          hour = timeWords[match[2]] || 10;
+          hour = timeWords[match[2]] || 9;
           minutes = 0;
-          period = match[3];
+          period = match[3] || 'am';
+        } else if (i === 3) { // Just word number
+          const timeWords = {
+            'nine': 9, 'ten': 10, 'eleven': 11, 'twelve': 12, 'one': 1, 'two': 2, 
+            'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 'eight': 8
+          };
+          hour = timeWords[match[1]] || 9;
+          minutes = 0;
+          period = match[2] || 'am';
+          day = 'monday'; // Default to next Monday
         }
 
         return this.parseDateTime(day, hour, minutes, period);
@@ -233,27 +295,37 @@ CRITICAL: Always respond naturally and conversationally, but detect booking requ
       }
     }
     
-    if (period.toLowerCase().includes('p') && hour !== 12) {
+    // Handle AM/PM conversion
+    if (period && period.toLowerCase().includes('p') && hour !== 12) {
       hour += 12;
-    } else if (period.toLowerCase().includes('a') && hour === 12) {
+    } else if (period && period.toLowerCase().includes('a') && hour === 12) {
       hour = 0;
+    } else if (!period && hour <= 8) {
+      // If no AM/PM specified and hour is 1-8, assume PM for business hours
+      hour += 12;
     }
     
     targetDate.setHours(hour, minutes, 0, 0);
     
+    const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
+    const displayPeriod = hour >= 12 ? 'PM' : 'AM';
+    
     return {
       dateTime: targetDate,
       dayName: day,
-      timeString: `${hour > 12 ? hour - 12 : hour === 0 ? 12 : hour}:${minutes.toString().padStart(2, '0')} ${hour >= 12 ? 'PM' : 'AM'}`
+      timeString: `${displayHour}:${minutes.toString().padStart(2, '0')} ${displayPeriod}`
     };
   }
 
   async handleSpecificTimeBooking(timeRequest, responseId) {
     try {
-      console.log('🔄 ATTEMPTING BOOKING:', timeRequest.timeString);
+      console.log('🔄 ATTEMPTING REAL BOOKING:', timeRequest.timeString);
+      console.log('👤 Customer info:', this.connectionData);
       
       const discoveryData = globalDiscoveryManager.getFinalDiscoveryData(this.callId);
+      console.log('📝 Discovery data:', discoveryData);
       
+      // FIXED: Actually attempt real booking
       const bookingResult = await autoBookAppointment(
         this.connectionData.customerName,
         this.connectionData.customerEmail,
@@ -262,21 +334,23 @@ CRITICAL: Always respond naturally and conversationally, but detect booking requ
         discoveryData
       );
       
+      console.log('📅 Booking result:', bookingResult);
+      
       let response;
       
       if (bookingResult.success) {
-        console.log('✅ AUTO-BOOKING SUCCESS!');
-        response = `Perfect! I've booked your consultation for ${timeRequest.dayName} at ${timeRequest.timeString}. You'll receive a calendar invitation shortly!`;
+        console.log('✅ REAL BOOKING SUCCESS!');
+        response = `Perfect! I've booked your consultation for ${timeRequest.dayName} at ${timeRequest.timeString}. You'll receive a calendar invitation at ${this.connectionData.customerEmail} shortly!`;
         
-        // Send webhook in background
-        this.sendWebhookInBackground(timeRequest, discoveryData);
+        // Send webhook with booking confirmation
+        this.sendWebhookInBackground(timeRequest, discoveryData, true);
         
       } else {
-        console.log('❌ AUTO-BOOKING FAILED:', bookingResult.error);
-        response = `Excellent! I'll get you scheduled for ${timeRequest.dayName} at ${timeRequest.timeString}. You'll receive confirmation details shortly!`;
+        console.log('❌ BOOKING FAILED:', bookingResult.error);
+        response = `I'll get you scheduled for ${timeRequest.dayName} at ${timeRequest.timeString}. You'll receive confirmation details at ${this.connectionData.customerEmail} shortly!`;
         
-        // Send webhook anyway for manual follow-up
-        this.sendWebhookInBackground(timeRequest, discoveryData);
+        // Send webhook for manual follow-up
+        this.sendWebhookInBackground(timeRequest, discoveryData, false);
       }
       
       this.conversationHistory.push({ role: 'assistant', content: response });
@@ -286,10 +360,13 @@ CRITICAL: Always respond naturally and conversationally, but detect booking requ
       console.error('❌ Booking error:', error.message);
       const errorResponse = `Great! I'll get you scheduled for ${timeRequest.dayName} at ${timeRequest.timeString}. You'll receive confirmation details shortly!`;
       this.sendResponse(errorResponse, responseId);
+      
+      // Send webhook for manual follow-up
+      this.sendWebhookInBackground(timeRequest, globalDiscoveryManager.getFinalDiscoveryData(this.callId), false);
     }
   }
 
-  async sendWebhookInBackground(timeRequest, discoveryData) {
+  async sendWebhookInBackground(timeRequest, discoveryData, bookingSuccess) {
     setTimeout(async () => {
       try {
         await sendSchedulingPreference(
@@ -300,7 +377,7 @@ CRITICAL: Always respond naturally and conversationally, but detect booking requ
           this.callId,
           discoveryData
         );
-        console.log('✅ Background webhook sent');
+        console.log(`✅ Background webhook sent (booking: ${bookingSuccess ? 'success' : 'manual needed'})`);
       } catch (error) {
         console.error('❌ Background webhook error:', error.message);
       }
@@ -322,19 +399,38 @@ CRITICAL: Always respond naturally and conversationally, but detect booking requ
       console.log(`📝 Answer captured: ${captured}`);
     }
 
-    // KEEP: Generate contextual AI response (the natural conversation style you liked)
+    // Generate contextual AI response
     const botReply = await this.getContextualAIResponse();
     
     this.conversationHistory.push({ role: 'assistant', content: botReply });
 
-    // Check for question detection
-    globalDiscoveryManager.detectQuestionInBotMessage(this.callId, botReply);
+    // FIXED: Always check for question detection
+    const questionDetected = globalDiscoveryManager.detectQuestionInBotMessage(this.callId, botReply);
+    console.log(`🔍 Question detected: ${questionDetected}`);
+
+    // FIXED: If no question detected and we should ask one, ask it directly
+    const newProgress = globalDiscoveryManager.getProgress(this.callId);
+    if (!questionDetected && newProgress?.questionsCompleted < 6) {
+      const nextQuestion = globalDiscoveryManager.getNextUnansweredQuestion(this.callId);
+      if (nextQuestion) {
+        console.log('🔧 MANUALLY ASKING NEXT QUESTION:', nextQuestion.question);
+        const enhancedReply = botReply + " " + nextQuestion.question;
+        
+        // Mark question as asked
+        const questionIndex = globalDiscoveryManager.getSession(this.callId).questions.findIndex(q => q.question === nextQuestion.question);
+        if (questionIndex >= 0) {
+          globalDiscoveryManager.markQuestionAsked(this.callId, questionIndex, enhancedReply);
+        }
+        
+        this.sendResponse(enhancedReply, responseId);
+        return;
+      }
+    }
 
     this.sendResponse(botReply, responseId);
   }
 
   async getContextualAIResponse() {
-    // KEEP: Use full AI response for natural, contextual conversation
     const messages = [...this.conversationHistory];
     
     // Add discovery context
@@ -342,7 +438,7 @@ CRITICAL: Always respond naturally and conversationally, but detect booking requ
     if (progress && progress.questionsCompleted < 6) {
       const nextQuestion = globalDiscoveryManager.getNextUnansweredQuestion(this.callId);
       if (nextQuestion) {
-        const contextPrompt = `\n\nCONTEXT: Continue discovery conversation. You need to ask: "${nextQuestion.question}" (Question ${progress.questionsCompleted + 1}/6). Give a natural, contextual response that acknowledges their previous answer, then ask the next question. Keep it conversational and engaging.`;
+        const contextPrompt = `\n\nCONTEXT: You are in discovery mode (${progress.questionsCompleted}/6 questions completed). Give a natural, contextual response that acknowledges their previous answer. Keep it conversational and engaging (2-3 sentences max). The next question you should ask is: "${nextQuestion.question}"`;
         messages[messages.length - 1].content += contextPrompt;
       }
     } else if (progress && progress.questionsCompleted >= 6) {
@@ -364,22 +460,25 @@ CRITICAL: Always respond naturally and conversationally, but detect booking requ
         timeout: 8000
       });
 
-      return openaiResponse.data.choices[0].message.content || "Could you tell me more about that?";
+      return openaiResponse.data.choices[0].message.content || "Thank you for sharing that.";
     } catch (error) {
       console.error('❌ OpenAI error:', error.message);
       
-      // Fallback to simple response if API fails
+      // Fallback to simple contextual response
       const progress = globalDiscoveryManager.getProgress(this.callId);
       const nextQuestion = globalDiscoveryManager.getNextUnansweredQuestion(this.callId);
+      
       if (nextQuestion) {
-        return `Thank you for sharing that. ${nextQuestion.question}`;
+        const acks = ["Thank you for sharing that.", "That's great!", "Perfect!", "Got it!"];
+        const ack = acks[progress?.questionsCompleted % acks.length];
+        return `${ack} ${nextQuestion.question}`;
       }
       return "Perfect! I have all the information I need. What day and time works best for you?";
     }
   }
 
   isSchedulingRequest(userMessage) {
-    const schedulingKeywords = ['schedule', 'book', 'appointment', 'available', 'times', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
+    const schedulingKeywords = ['schedule', 'book', 'appointment', 'available', 'times'];
     const userLower = userMessage.toLowerCase();
     return schedulingKeywords.some(keyword => userLower.includes(keyword));
   }
@@ -390,6 +489,7 @@ CRITICAL: Always respond naturally and conversationally, but detect booking requ
     const sessionInfo = globalDiscoveryManager.getSessionInfo(this.callId);
     if (sessionInfo) {
       console.log(`💾 SESSION: ${sessionInfo.questionsCompleted}/6 questions completed`);
+      console.log(`👤 CUSTOMER: ${this.connectionData.customerName} (${this.connectionData.customerEmail})`);
     }
   }
 
