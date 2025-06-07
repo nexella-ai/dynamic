@@ -266,38 +266,57 @@ class GlobalDiscoveryManager {
       return false;
     }
 
-    // Specific detection patterns
+    // MUCH MORE FLEXIBLE detection patterns - look for key phrases
     let detected = false;
     switch (nextQuestionIndex) {
       case 0: // How did you hear about us?
-        detected = (botContent.includes('hear about') && botContent.includes('us')) && 
-                  !botContent.includes('schedule') && !botContent.includes('available');
+        detected = botContent.includes('hear about') || 
+                  botContent.includes('how did you find') ||
+                  botContent.includes('where did you hear');
         break;
+        
       case 1: // What industry or business are you in?
-        detected = ((botContent.includes('industry') || 
-                   (botContent.includes('business') && botContent.includes('in'))) && 
-                   !botContent.includes('hear about') && !botContent.includes('available'));
+        detected = botContent.includes('industry') || 
+                  (botContent.includes('business') && botContent.includes('you')) ||
+                  botContent.includes('what field') ||
+                  botContent.includes('line of work');
         break;
+        
       case 2: // What's your main product or service?
-        detected = ((botContent.includes('product') || botContent.includes('service')) && 
-                   (botContent.includes('main') || botContent.includes('your'))) && 
-                   !botContent.includes('industry') && !botContent.includes('available');
+        detected = botContent.includes('product') || 
+                  botContent.includes('service') ||
+                  botContent.includes('what do you sell') ||
+                  botContent.includes('what do you offer') ||
+                  (botContent.includes('main') && (botContent.includes('offer') || botContent.includes('sell')));
         break;
+        
       case 3: // Are you currently running any ads?
-        detected = (botContent.includes('running') && botContent.includes('ads')) && 
-                  !botContent.includes('available');
+        detected = (botContent.includes('running') && botContent.includes('ads')) || 
+                  (botContent.includes('currently') && botContent.includes('ads')) ||
+                  botContent.includes('advertising') ||
+                  botContent.includes('any ads') ||
+                  botContent.includes('marketing campaigns');
         break;
+        
       case 4: // Are you using any CRM system?
-        detected = (botContent.includes('crm') || 
-                  (botContent.includes('using') && botContent.includes('system'))) &&
-                  !botContent.includes('available');
+        detected = botContent.includes('crm') || 
+                  (botContent.includes('using') && botContent.includes('system')) ||
+                  botContent.includes('customer management') ||
+                  botContent.includes('tracking system') ||
+                  (botContent.includes('any') && botContent.includes('system'));
         break;
+        
       case 5: // What are your biggest pain points or challenges?
-        detected = (botContent.includes('pain point') || botContent.includes('challenge')) && 
-                  (botContent.includes('biggest') || botContent.includes('main')) &&
-                  !botContent.includes('available');
+        detected = botContent.includes('pain point') || 
+                  botContent.includes('challenge') || 
+                  botContent.includes('biggest') ||
+                  botContent.includes('struggle') ||
+                  botContent.includes('difficult') ||
+                  (botContent.includes('what') && (botContent.includes('challenge') || botContent.includes('problem')));
         break;
     }
+
+    console.log(`🔍 Question ${nextQuestionIndex + 1} detection - Content: "${botContent.substring(0, 50)}..." - Detected: ${detected}`);
 
     if (detected) {
       this.markQuestionAsked(callId, nextQuestionIndex, botMessage);
