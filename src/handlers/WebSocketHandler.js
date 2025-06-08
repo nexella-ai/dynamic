@@ -1,4 +1,4 @@
-// src/handlers/WebSocketHandler.js - FIXED V3 (Answer Capture + Real Data)
+// src/handlers/WebSocketHandler.js - FIXED V4 (Real Metadata Extraction)
 const axios = require('axios');
 const config = require('../config/environment');
 const globalDiscoveryManager = require('../services/discovery/GlobalDiscoveryManager');
@@ -20,7 +20,7 @@ class WebSocketHandler {
     
     console.log('🔗 NEW CONNECTION - Call ID:', this.callId);
     
-    // Get REAL customer data from global typeform or call metadata
+    // Get REAL customer data from all available sources
     this.connectionData = this.getRealCustomerData();
     
     this.conversationHistory = [
@@ -61,67 +61,173 @@ CRITICAL RULES:
   }
 
   getRealCustomerData() {
-    console.log('🔍 GETTING REAL CUSTOMER DATA...');
+    console.log('🔍 GETTING REAL CUSTOMER DATA FROM ALL SOURCES...');
     
-    // Method 1: Check for global Typeform submission
+    // Method 1: Check for global Typeform submission (highest priority)
     if (global.lastTypeformSubmission) {
       console.log('✅ Using data from global Typeform submission:', global.lastTypeformSubmission);
       return {
         callId: this.callId,
         customerEmail: global.lastTypeformSubmission.email,
         customerName: global.lastTypeformSubmission.name || 'Customer',
-        customerPhone: global.lastTypeformSubmission.phone || ''
+        customerPhone: global.lastTypeformSubmission.phone || '',
+        source: 'typeform'
       };
     }
     
-    // Method 2: Check active calls metadata
+    // Method 2: Check active calls metadata from webhook service
     const activeCallsMetadata = getActiveCallsMetadata();
     if (activeCallsMetadata && activeCallsMetadata.has(this.callId)) {
       const callMetadata = activeCallsMetadata.get(this.callId);
-      console.log('✅ Using data from call metadata:', callMetadata);
+      console.log('✅ Using data from webhook active calls metadata:', callMetadata);
       return {
         callId: this.callId,
         customerEmail: callMetadata.customer_email || callMetadata.email,
         customerName: callMetadata.customer_name || callMetadata.name || 'Customer',
-        customerPhone: callMetadata.customer_phone || callMetadata.phone || callMetadata.to_number || ''
+        customerPhone: callMetadata.customer_phone || callMetadata.phone || callMetadata.to_number || '',
+        source: 'webhook_metadata'
       };
     }
     
-    // Method 3: Extract from URL params
+    // Method 3: Extract from URL parameters
     const urlParams = new URLSearchParams(this.req.url.split('?')[1] || '');
     const emailFromUrl = urlParams.get('customer_email') || urlParams.get('email');
     const nameFromUrl = urlParams.get('customer_name') || urlParams.get('name');
     const phoneFromUrl = urlParams.get('customer_phone') || urlParams.get('phone');
     
     if (emailFromUrl) {
-      console.log('✅ Using data from URL params');
+      console.log('✅ Using data from URL parameters');
       return {
         callId: this.callId,
         customerEmail: emailFromUrl,
         customerName: nameFromUrl || 'Customer',
-        customerPhone: phoneFromUrl || ''
+        customerPhone: phoneFromUrl || '',
+        source: 'url_params'
       };
     }
     
-    // Fallback: Use test data but log warning
-    console.warn('⚠️ NO REAL CUSTOMER DATA FOUND - Using test data');
-    console.warn('📝 Available sources checked:');
+    // Method 4: Try to fetch from trigger server endpoints (your working method)
+    this.attemptTriggerServerFetch();
+    
+    // Method 5: Check if call ID contains embedded info
+    if (this.callId) {
+      const embeddedInfo = this.extractEmbeddedCallInfo(this.callId);
+      if (embeddedInfo) {
+        console.log('✅ Using embedded call info from call ID');
+        return {
+          callId: this.callId,
+          customerEmail: embeddedInfo.email || 'unknown@example.com',
+          customerName: embeddedInfo.name || 'Customer',
+          customerPhone: embeddedInfo.phone || '',
+          source: 'embedded_call_id'
+        };
+      }
+    }
+    
+    // Fallback: Use minimal data but log comprehensive warning
+    console.warn('⚠️ NO REAL CUSTOMER DATA FOUND - Using fallback data');
+    console.warn('📝 Comprehensive source check results:');
     console.warn('   - global.lastTypeformSubmission:', !!global.lastTypeformSubmission);
     console.warn('   - activeCallsMetadata size:', activeCallsMetadata?.size || 0);
+    console.warn('   - activeCallsMetadata keys:', activeCallsMetadata ? Array.from(activeCallsMetadata.keys()) : []);
     console.warn('   - URL params:', this.req.url);
+    console.warn('   - Call ID:', this.callId);
+    console.warn('   - Request headers:', this.req.headers);
     
     return {
       callId: this.callId,
-      customerEmail: 'test@example.com',
-      customerName: 'Test Customer',
-      customerPhone: '+1234567890'
+      customerEmail: 'prospect@example.com',
+      customerName: 'Prospect',
+      customerPhone: '',
+      source: 'fallback'
     };
   }
 
+  // Method to try fetching from trigger server endpoints (async)
+  async attemptTriggerServerFetch() {
+    if (!this.callId) return null;
+    
+    try {
+      console.log('🔄 Attempting to fetch customer data from trigger server...');
+      
+      // Try different trigger server endpoints
+      const endpoints = [
+        `${config.TRIGGER_SERVER_URL}/api/calls/${this.callId}/metadata`,
+        `${config.TRIGGER_SERVER_URL}/api/customer-data/${this.callId}`,
+        `${config.TRIGGER_SERVER_URL}/calls/${this.callId}/info`
+      ];
+      
+      for (const endpoint of endpoints) {
+        try {
+          const response = await axios.get(endpoint, { 
+            timeout: 3000,
+            headers: {
+              'Authorization': `Bearer ${config.API_KEY || 'your-api-key'}`,
+              'Content-Type': 'application/json'
+            }
+          });
+          
+          if (response.data) {
+            console.log('✅ Retrieved customer data from trigger server:', response.data);
+            
+            // Update connection data if we got real data
+            this.connectionData = {
+              callId: this.callId,
+              customerEmail: response.data.customer_email || response.data.email || this.connectionData.customerEmail,
+              customerName: response.data.customer_name || response.data.name || this.connectionData.customerName,
+              customerPhone: response.data.customer_phone || response.data.phone || this.connectionData.customerPhone,
+              source: 'trigger_server'
+            };
+            
+            return this.connectionData;
+          }
+        } catch (err) {
+          console.log(`⚠️ Trigger server endpoint ${endpoint} failed:`, err.message);
+          continue;
+        }
+      }
+    } catch (error) {
+      console.log('⚠️ Trigger server fetch failed:', error.message);
+    }
+    
+    return null;
+  }
+
+  // Extract embedded info from call ID if it contains encoded data
+  extractEmbeddedCallInfo(callId) {
+    try {
+      // Check if call ID has embedded data (like base64 encoded info)
+      if (callId.includes('_')) {
+        const parts = callId.split('_');
+        if (parts.length > 2) {
+          // Try to decode potential base64 info
+          try {
+            const encoded = parts[parts.length - 1];
+            const decoded = Buffer.from(encoded, 'base64').toString('utf8');
+            const info = JSON.parse(decoded);
+            if (info.email || info.name || info.phone) {
+              return info;
+            }
+          } catch (e) {
+            // Not base64 encoded JSON, that's ok
+          }
+        }
+      }
+    } catch (error) {
+      console.log('Info extraction from call ID failed:', error.message);
+    }
+    return null;
+  }
+
   async initialize() {
+    // Try to get real customer data from trigger server (async)
+    await this.attemptTriggerServerFetch();
+    
     this.initializeDiscoverySession();
     this.setupEventHandlers();
     console.log('🔇 WAITING for user to speak first before greeting...');
+    console.log('👤 Customer data source:', this.connectionData.source);
+    console.log('📧 Customer email:', this.connectionData.customerEmail);
   }
 
   initializeDiscoverySession() {
@@ -221,8 +327,12 @@ CRITICAL RULES:
     console.log('👋 HANDLING INITIAL GREETING - USER SPOKE FIRST');
     this.hasGreeted = true;
     
-    // Greet and immediately ask first question
-    const greeting = "Hi there! This is Sarah from Nexella AI. How are you doing today?";
+    // Personalized greeting using real customer name if available
+    const customerName = this.connectionData.customerName !== 'Customer' && this.connectionData.customerName !== 'Prospect' 
+      ? ` ${this.connectionData.customerName}` 
+      : '';
+    
+    const greeting = `Hi${customerName}! This is Sarah from Nexella AI. How are you doing today?`;
     
     await this.sendResponse(greeting, responseId);
     
