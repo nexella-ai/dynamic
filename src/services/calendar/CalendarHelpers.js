@@ -1,29 +1,29 @@
 // src/services/calendar/CalendarHelpers.js - COMPLETE FIXED VERSION
-const GoogleAppointmentScheduleService = require('./GoogleAppointmentScheduleService');
+const GoogleCalendarService = require('./GoogleCalendarService');
 
-// Initialize appointment schedule service
-let appointmentScheduleService = null;
-let scheduleInitialized = false;
+// Initialize calendar service
+let calendarService = null;
+let calendarInitialized = false;
 
 async function initializeCalendarService() {
   try {
-    console.log('🔧 Initializing Google Appointment Schedule service...');
-    appointmentScheduleService = new GoogleAppointmentScheduleService();
-    scheduleInitialized = await appointmentScheduleService.initialize();
+    console.log('🔧 Initializing Google Calendar service...');
+    calendarService = new GoogleCalendarService();
+    calendarInitialized = await calendarService.initialize();
     
-    if (scheduleInitialized) {
-      console.log('✅ Google Appointment Schedule service ready - REAL schedule mode');
-      const scheduleInfo = appointmentScheduleService.getScheduleInfo();
-      console.log('📅 Schedule Info:', scheduleInfo);
+    if (calendarInitialized) {
+      console.log('✅ Google Calendar service ready - REAL calendar mode');
+      const calendarInfo = calendarService.getCalendarInfo();
+      console.log('📅 Calendar Info:', calendarInfo);
     } else {
-      console.error('❌ Google Appointment Schedule service failed to initialize');
-      console.log('⚠️ Continuing in demo mode - no real calendar bookings');
+      console.error('❌ Google Calendar service failed to initialize');
+      console.log('⚠️ Continuing in demo mode - using demo slots');
     }
     
-    return scheduleInitialized;
+    return calendarInitialized;
   } catch (error) {
-    console.error('❌ Appointment schedule initialization failed:', error.message);
-    scheduleInitialized = false;
+    console.error('❌ Calendar initialization failed:', error.message);
+    calendarInitialized = false;
     return false;
   }
 }
@@ -31,20 +31,20 @@ async function initializeCalendarService() {
 // Safe availability checking
 async function checkAvailability(startTime, endTime) {
   try {
-    console.log('🔍 Checking appointment schedule availability...');
+    console.log('🔍 Checking calendar availability...');
     console.log('⏰ Start time:', startTime);
     console.log('⏰ End time:', endTime);
     
-    if (!scheduleInitialized || !appointmentScheduleService?.isInitialized()) {
-      console.log('⚠️ Appointment schedule not available - assuming slot is available');
+    if (!calendarInitialized || !calendarService?.isInitialized()) {
+      console.log('⚠️ Calendar not available - assuming slot is available');
       return true;
     }
     
-    const available = await appointmentScheduleService.isSlotAvailable(startTime, endTime);
-    console.log('📊 Real appointment schedule result:', available);
+    const available = await calendarService.isSlotAvailable(startTime, endTime);
+    console.log('📊 Real calendar result:', available);
     return available;
   } catch (error) {
-    console.error('❌ Error checking appointment schedule availability:', error.message);
+    console.error('❌ Error checking calendar availability:', error.message);
     return true;
   }
 }
@@ -52,38 +52,40 @@ async function checkAvailability(startTime, endTime) {
 // Safe slot retrieval
 async function getAvailableTimeSlots(date) {
   try {
-    console.log('📅 Getting available appointment slots for:', date);
+    console.log('📅 Getting available calendar slots for:', date);
     
-    if (!appointmentScheduleService) {
-      console.error('❌ No appointment schedule service initialized');
-      return generateDemoSlots(date);
+    if (!calendarService) {
+      console.error('❌ No calendar service initialized');
+      return generateBusinessHourSlots(date);
     }
     
-    if (scheduleInitialized) {
-      console.log('📅 Using REAL appointment schedule');
-      const availableSlots = await appointmentScheduleService.getAvailableSlots(date);
-      console.log(`📋 Retrieved ${availableSlots.length} real appointment slots`);
+    if (calendarInitialized) {
+      console.log('📅 Using REAL Google Calendar');
+      const availableSlots = await calendarService.getAvailableSlots(date);
+      console.log(`📋 Retrieved ${availableSlots.length} real calendar slots`);
       return availableSlots;
     } else {
-      console.log('📅 Using DEMO appointment slots');
-      return generateDemoSlots(date);
+      console.log('📅 Using DEMO calendar slots');
+      return generateBusinessHourSlots(date);
     }
     
   } catch (error) {
-    console.error('❌ Error getting appointment slots:', error.message);
+    console.error('❌ Error getting calendar slots:', error.message);
     console.log('🔄 Falling back to demo slots');
-    return generateDemoSlots(date);
+    return generateBusinessHourSlots(date);
   }
 }
 
-function generateDemoSlots(date) {
-  console.log('🎭 Generating demo appointment slots for:', date);
+// FIXED: Generate proper business hour slots (not 3AM!)
+function generateBusinessHourSlots(date) {
+  console.log('🏢 Generating BUSINESS HOUR slots for:', date);
   
   const targetDate = new Date(date);
   const dayOfWeek = targetDate.getDay();
   
   // No slots on weekends
   if (dayOfWeek === 0 || dayOfWeek === 6) {
+    console.log('📅 Weekend - no business hour slots');
     return [];
   }
   
@@ -91,41 +93,63 @@ function generateDemoSlots(date) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   if (targetDate < today) {
+    console.log('📅 Past date - no slots available');
     return [];
   }
   
   const slots = [];
   
-  // Generate demo appointment slots
-  const availableHours = [10, 11, 14, 15]; // 10 AM, 11 AM, 2 PM, 3 PM
+  // FIXED: Proper business hours in Arizona time (9AM-5PM)
+  const businessHours = [9, 10, 11, 14, 15, 16]; // 9AM, 10AM, 11AM, 2PM, 3PM, 4PM
   
-  availableHours.forEach(h => {
+  businessHours.forEach(h => {
     const slotTime = new Date(targetDate);
     slotTime.setHours(h, 0, 0, 0);
     
     // If it's today, only show future times
     if (targetDate.toDateString() === today.toDateString()) {
       const now = new Date();
-      if (slotTime <= now) return;
+      // Add 1 hour buffer for today's slots
+      const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
+      if (slotTime <= oneHourFromNow) {
+        console.log(`⏰ Skipping slot at ${h}:00 - too soon`);
+        return;
+      }
     }
     
     const endTime = new Date(slotTime);
     endTime.setHours(h + 1);
     
+    // FIXED: Proper time formatting for Arizona
+    const displayTime = formatArizonaTime(slotTime);
+    
     slots.push({
       startTime: slotTime.toISOString(),
       endTime: endTime.toISOString(),
-      displayTime: slotTime.toLocaleTimeString('en-US', {
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-        timeZone: 'America/Phoenix'
-      })
+      displayTime: displayTime
     });
+    
+    console.log(`✅ Business hour slot: ${displayTime} (${slotTime.toISOString()})`);
   });
   
-  console.log(`🎭 Generated ${slots.length} demo appointment slots`);
+  console.log(`🏢 Generated ${slots.length} business hour slots`);
   return slots;
+}
+
+// FIXED: Proper Arizona time formatting
+function formatArizonaTime(date) {
+  try {
+    // Arizona doesn't observe daylight saving time
+    return date.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: 'America/Phoenix'
+    });
+  } catch (error) {
+    console.error('Error formatting Arizona time:', error);
+    return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  }
 }
 
 // Safe formatted slots
@@ -135,7 +159,7 @@ async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
     today.setHours(0, 0, 0, 0);
     const searchStart = startDate ? new Date(startDate) : today;
     
-    console.log(`📅 Getting appointment slots starting from: ${searchStart.toDateString()}`);
+    console.log(`📅 Getting calendar slots starting from: ${searchStart.toDateString()}`);
     
     const allAvailableSlots = [];
     
@@ -155,7 +179,7 @@ async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
       }
       
       try {
-        console.log(`🔍 Checking appointment availability for date: ${checkDate.toDateString()}`);
+        console.log(`🔍 Checking calendar availability for date: ${checkDate.toDateString()}`);
         const slots = await getAvailableTimeSlots(checkDate);
         
         if (slots.length > 0) {
@@ -175,20 +199,20 @@ async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
             formattedSlots: limitedSlots.map(slot => slot.displayTime).join(', ')
           });
           
-          console.log(`✅ Added ${limitedSlots.length} appointment slots for ${dayName}: ${limitedSlots.map(s => s.displayTime).join(', ')}`);
+          console.log(`✅ Added ${limitedSlots.length} calendar slots for ${dayName}: ${limitedSlots.map(s => s.displayTime).join(', ')}`);
         } else {
-          console.log(`📅 No appointment availability found for ${checkDate.toDateString()}`);
+          console.log(`📅 No calendar availability found for ${checkDate.toDateString()}`);
         }
       } catch (dayError) {
-        console.error(`❌ Error getting appointment slots for ${checkDate.toDateString()}:`, dayError.message);
+        console.error(`❌ Error getting calendar slots for ${checkDate.toDateString()}:`, dayError.message);
       }
     }
     
-    console.log(`✅ Found appointment slots across ${allAvailableSlots.length} days`);
+    console.log(`✅ Found calendar slots across ${allAvailableSlots.length} days`);
     return allAvailableSlots;
     
   } catch (error) {
-    console.error('❌ Error getting formatted appointment slots:', error.message);
+    console.error('❌ Error getting formatted calendar slots:', error.message);
     return [];
   }
 }
@@ -196,10 +220,10 @@ async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
 // Generate availability response
 async function generateAvailabilityResponse() {
   try {
-    console.log('🤖 Generating availability response from appointment schedule...');
+    console.log('🤖 Generating availability response from calendar...');
     
     const availableSlots = await getFormattedAvailableSlots();
-    console.log(`📊 Got ${availableSlots.length} days with appointment availability`);
+    console.log(`📊 Got ${availableSlots.length} days with calendar availability`);
     
     if (availableSlots.length === 0) {
       return "I don't have any availability in the next week. Let me check for times the following week.";
@@ -231,11 +255,11 @@ async function generateAvailabilityResponse() {
     });
     response += ". Which day and time would work best for you?";
     
-    console.log(`✅ Generated appointment availability response: ${response}`);
+    console.log(`✅ Generated calendar availability response: ${response}`);
     return response;
     
   } catch (error) {
-    console.error('❌ Error generating appointment availability response:', error.message);
+    console.error('❌ Error generating calendar availability response:', error.message);
     return "Let me check my calendar for available times.";
   }
 }
@@ -247,13 +271,13 @@ async function autoBookAppointment(customerName, customerEmail, customerPhone, p
     console.log('👤 Customer:', customerName, customerEmail);
     console.log('📅 Preferred time:', preferredDateTime);
     
-    if (!scheduleInitialized || !appointmentScheduleService?.isInitialized()) {
-      console.log('⚠️ Real appointment schedule not available - simulating booking');
+    if (!calendarInitialized || !calendarService?.isInitialized()) {
+      console.log('⚠️ Real calendar not available - simulating booking');
       return {
         success: true,
-        eventId: `demo_appointment_${Date.now()}`,
-        meetingLink: 'https://meet.google.com/demo-appointment-link',
-        eventLink: 'https://calendar.google.com/demo-appointment',
+        eventId: `demo_event_${Date.now()}`,
+        meetingLink: 'https://meet.google.com/demo-meeting-link',
+        eventLink: 'https://calendar.google.com/demo-event',
         message: 'Demo appointment created (add Google Calendar credentials for real bookings)',
         isDemo: true
       };
@@ -284,7 +308,7 @@ async function autoBookAppointment(customerName, customerEmail, customerPhone, p
       attendeeName: customerName
     };
     
-    const bookingResult = await appointmentScheduleService.createAppointment(appointmentDetails);
+    const bookingResult = await calendarService.createEvent(appointmentDetails);
     
     if (bookingResult.success) {
       console.log('✅ Auto-booking appointment successful!');
@@ -474,11 +498,11 @@ function getNextBusinessDay(fromDate = new Date()) {
 
 // Getters
 function getCalendarService() {
-  return appointmentScheduleService;
+  return calendarService;
 }
 
 function isCalendarInitialized() {
-  return scheduleInitialized;
+  return calendarInitialized;
 }
 
 module.exports = {
