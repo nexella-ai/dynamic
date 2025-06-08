@@ -1,4 +1,4 @@
-// src/services/calendar/GoogleCalendarService.js - FIXED V2 (Correct Business Hours)
+// src/services/calendar/GoogleCalendarService.js - FIXED (8AM-4PM, NO DEMO MODE)
 const { google } = require('googleapis');
 const config = require('../../config/environment');
 
@@ -9,34 +9,29 @@ class GoogleCalendarService {
     this.calendarId = config.GOOGLE_CALENDAR_ID || 'primary';
     this.timezone = config.TIMEZONE || 'America/Phoenix';
     
-    // FIXED: Business hours configuration for Arizona (9AM-5PM)
+    // YOUR ACTUAL BUSINESS HOURS: 8AM-4PM Arizona Time
     this.businessHours = {
-      start: 9, // 9 AM Arizona time
-      end: 17,  // 5 PM Arizona time
-      days: [1, 2, 3, 4, 5], // Monday to Friday
+      start: 8,   // 8 AM Arizona time
+      end: 16,    // 4 PM Arizona time
+      days: [1, 2, 3, 4, 5], // Monday to Friday only
       slotDuration: 60, // 1 hour slots
-      availableHours: [9, 10, 11, 14, 15, 16] // 9AM, 10AM, 11AM, 2PM, 3PM, 4PM
+      // Available appointment hours (avoiding lunch 12-1)
+      availableHours: [8, 9, 10, 11, 13, 14, 15] // 8AM-11AM, 1PM-3PM
     };
     
-    console.log('🔧 GoogleCalendarService constructor called');
+    console.log('🔧 GoogleCalendarService initialized');
     console.log('📅 Calendar ID:', this.calendarId);
     console.log('🌍 Timezone:', this.timezone);
-    console.log('🕐 Business Hours:', this.businessHours.availableHours);
+    console.log('🕐 Business Hours:', this.businessHours.availableHours.map(h => `${h}:00`).join(', '));
   }
 
   async initialize() {
     try {
       console.log('🔧 Initializing Google Calendar service...');
-      console.log('🔍 Environment Variable Check:');
-      console.log('   GOOGLE_PROJECT_ID:', config.GOOGLE_PROJECT_ID ? '✅ SET' : '❌ MISSING');
-      console.log('   GOOGLE_PRIVATE_KEY:', config.GOOGLE_PRIVATE_KEY ? '✅ SET' : '❌ MISSING');
-      console.log('   GOOGLE_CLIENT_EMAIL:', config.GOOGLE_CLIENT_EMAIL ? '✅ SET' : '❌ MISSING');
       
-      // Check if we have the minimum required variables
+      // Validate required environment variables
       if (!config.GOOGLE_PROJECT_ID || !config.GOOGLE_PRIVATE_KEY || !config.GOOGLE_CLIENT_EMAIL) {
-        console.error('❌ Missing required Google Calendar environment variables');
-        console.log('⚠️ Calendar service will be DISABLED - falling back to demo mode');
-        return false; // Don't throw error, just disable calendar
+        throw new Error('Missing required Google Calendar environment variables. Check GOOGLE_PROJECT_ID, GOOGLE_PRIVATE_KEY, and GOOGLE_CLIENT_EMAIL');
       }
       
       await this.setupAuthentication();
@@ -47,15 +42,16 @@ class GoogleCalendarService {
         
         // Test the connection
         const testResult = await this.testConnection();
-        return testResult;
+        if (!testResult) {
+          throw new Error('Calendar connection test failed');
+        }
+        return true;
       } else {
-        console.warn('⚠️ Google Calendar authentication failed - calendar disabled');
-        return false;
+        throw new Error('Google Calendar authentication failed');
       }
     } catch (error) {
       console.error('❌ Failed to initialize Google Calendar service:', error.message);
-      console.warn('⚠️ Calendar features will be disabled - demo mode only');
-      return false; // Don't crash the server
+      throw error; // Don't continue without calendar
     }
   }
 
@@ -63,17 +59,14 @@ class GoogleCalendarService {
     try {
       console.log('🔐 Setting up Google Calendar authentication...');
       
-      // Check private key format
-      if (config.GOOGLE_PRIVATE_KEY) {
-        const privateKey = config.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
-        console.log('🔑 Private key format check:', privateKey.includes('-----BEGIN PRIVATE KEY-----') ? '✅ Valid' : '❌ Invalid');
-      }
+      const privateKey = config.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
+      console.log('🔑 Private key format check:', privateKey.includes('-----BEGIN PRIVATE KEY-----') ? '✅ Valid' : '❌ Invalid');
       
       const serviceAccountKey = {
         type: "service_account",
         project_id: config.GOOGLE_PROJECT_ID,
         private_key_id: config.GOOGLE_PRIVATE_KEY_ID || "dummy_key_id",
-        private_key: config.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        private_key: privateKey,
         client_email: config.GOOGLE_CLIENT_EMAIL,
         client_id: config.GOOGLE_CLIENT_ID || "dummy_client_id",
         auth_uri: "https://accounts.google.com/o/oauth2/auth",
@@ -94,7 +87,6 @@ class GoogleCalendarService {
       });
       
       console.log('✅ Authentication configured successfully');
-      return;
       
     } catch (error) {
       console.error('❌ Authentication setup failed:', error.message);
@@ -126,18 +118,13 @@ class GoogleCalendarService {
       if (error.message.includes('Not Found')) {
         console.error('🔍 Calendar not found. Check GOOGLE_CALENDAR_ID and calendar sharing settings.');
       }
-      return false;
+      throw error;
     }
   }
 
   async getAvailableSlots(date) {
     try {
-      if (!this.calendar) {
-        console.log('⚠️ Calendar not available, generating demo slots');
-        return this.generateDemoSlots(date);
-      }
-
-      console.log(`📅 [REAL CALENDAR] Getting available slots for: ${date}`);
+      console.log(`📅 Getting available slots for: ${date}`);
       
       const targetDate = new Date(date);
       const dayOfWeek = targetDate.getDay();
@@ -156,7 +143,7 @@ class GoogleCalendarService {
         return [];
       }
 
-      // FIXED: Set up time range properly in Arizona timezone
+      // Set up time range properly in Arizona timezone
       const startOfDay = new Date(targetDate);
       startOfDay.setHours(this.businessHours.start, 0, 0, 0);
       
@@ -175,7 +162,7 @@ class GoogleCalendarService {
         }
       }
 
-      console.log(`🕐 [REAL CALENDAR] Checking from ${startOfDay.toLocaleString('en-US', {timeZone: this.timezone})} to ${endOfDay.toLocaleString('en-US', {timeZone: this.timezone})}`);
+      console.log(`🕐 Checking from ${startOfDay.toLocaleString('en-US', {timeZone: this.timezone})} to ${endOfDay.toLocaleString('en-US', {timeZone: this.timezone})}`);
 
       // Get existing events for the day
       const response = await this.calendar.events.list({
@@ -187,9 +174,9 @@ class GoogleCalendarService {
       });
 
       const events = response.data.items || [];
-      console.log(`📋 [REAL CALENDAR] Found ${events.length} existing events`);
+      console.log(`📋 Found ${events.length} existing events`);
 
-      // FIXED: Generate slots using specific business hours instead of hour-by-hour
+      // Generate slots using your specific business hours
       const availableSlots = [];
       
       for (const hour of this.businessHours.availableHours) {
@@ -229,64 +216,16 @@ class GoogleCalendarService {
         }
       }
 
-      console.log(`✅ [REAL CALENDAR] Generated ${availableSlots.length} available slots`);
+      console.log(`✅ Generated ${availableSlots.length} available slots`);
       return availableSlots;
 
     } catch (error) {
-      console.error('❌ Error getting real calendar slots:', error.message);
-      console.log('⚠️ Falling back to demo slots');
-      return this.generateDemoSlots(date);
+      console.error('❌ Error getting calendar slots:', error.message);
+      throw error; // Don't return fallback data
     }
   }
 
-  // Generate demo slots when calendar is not available
-  generateDemoSlots(date) {
-    console.log('🎭 Generating demo slots for:', date);
-    
-    const targetDate = new Date(date);
-    const dayOfWeek = targetDate.getDay();
-    
-    // No slots on weekends
-    if (dayOfWeek === 0 || dayOfWeek === 6) {
-      return [];
-    }
-    
-    // Check if it's in the past
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    if (targetDate < today) {
-      return [];
-    }
-    
-    const slots = [];
-    
-    // FIXED: Use the same business hours as real calendar
-    this.businessHours.availableHours.forEach(h => {
-      const slotTime = new Date(targetDate);
-      slotTime.setHours(h, 0, 0, 0);
-      
-      // If it's today, only show future times
-      if (targetDate.toDateString() === today.toDateString()) {
-        const now = new Date();
-        const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
-        if (slotTime <= oneHourFromNow) return;
-      }
-      
-      const endTime = new Date(slotTime);
-      endTime.setHours(h + 1);
-      
-      slots.push({
-        startTime: slotTime.toISOString(),
-        endTime: endTime.toISOString(),
-        displayTime: this.formatDisplayTime(slotTime)
-      });
-    });
-    
-    console.log(`🎭 Generated ${slots.length} demo slots with business hours`);
-    return slots;
-  }
-
-  // FIXED: Format time for display (Arizona timezone)
+  // Format time for display (Arizona timezone)
   formatDisplayTime(date) {
     return date.toLocaleTimeString('en-US', {
       hour: 'numeric',
@@ -298,11 +237,6 @@ class GoogleCalendarService {
 
   async isSlotAvailable(startTime, endTime) {
     try {
-      if (!this.calendar) {
-        console.log('⚠️ Calendar not available, returning demo availability');
-        return true; // Assume available in demo mode
-      }
-
       const response = await this.calendar.events.list({
         calendarId: this.calendarId,
         timeMin: startTime,
@@ -313,31 +247,19 @@ class GoogleCalendarService {
       const events = response.data.items || [];
       const isAvailable = events.length === 0;
       
-      console.log(`📊 [REAL CALENDAR] Slot availability: ${isAvailable ? 'Available ✅' : 'Booked ❌'}`);
+      console.log(`📊 Slot availability: ${isAvailable ? 'Available ✅' : 'Booked ❌'}`);
       return isAvailable;
 
     } catch (error) {
       console.error('❌ Error checking slot availability:', error.message);
-      return true; // Assume available if can't check
+      throw error;
     }
   }
 
   // Create a calendar event (booking)
   async createEvent(eventDetails) {
     try {
-      if (!this.calendar) {
-        console.log('⚠️ Calendar not available, simulating event creation');
-        return {
-          success: true,
-          eventId: `demo_event_${Date.now()}`,
-          meetingLink: 'https://meet.google.com/demo-meeting-link',
-          eventLink: `https://calendar.google.com/event?demo=${Date.now()}`,
-          message: 'Demo booking created (calendar not configured)',
-          isDemo: true
-        };
-      }
-
-      console.log('📅 [REAL CALENDAR] Creating event:', eventDetails.summary);
+      console.log('📅 Creating calendar event:', eventDetails.summary);
 
       // First, check if the slot is still available
       const isAvailable = await this.isSlotAvailable(eventDetails.startTime, eventDetails.endTime);
@@ -399,7 +321,7 @@ class GoogleCalendarService {
       });
 
       const createdEvent = response.data;
-      console.log('✅ [REAL CALENDAR] Event created successfully:', createdEvent.id);
+      console.log('✅ Event created successfully:', createdEvent.id);
 
       // Extract meeting link
       const meetingLink = createdEvent.conferenceData?.entryPoints?.[0]?.uri || 
@@ -417,8 +339,7 @@ class GoogleCalendarService {
         customerEmail: eventDetails.attendeeEmail,
         customerName: eventDetails.attendeeName,
         startTime: eventDetails.startTime,
-        endTime: eventDetails.endTime,
-        isDemo: false
+        endTime: eventDetails.endTime
       };
 
     } catch (error) {
@@ -438,11 +359,7 @@ class GoogleCalendarService {
           message: 'Calendar not found or not accessible'
         };
       } else {
-        return {
-          success: false,
-          error: error.message,
-          message: 'Failed to create appointment'
-        };
+        throw error;
       }
     }
   }
@@ -478,7 +395,7 @@ class GoogleCalendarService {
       }
     }
     
-    // Parse time
+    // Parse time - default to business hours
     let preferredHour = 10; // Default 10 AM
     
     // Look for specific time patterns
@@ -496,14 +413,19 @@ class GoogleCalendarService {
         hour = 0;
       }
       
-      preferredHour = hour;
-      console.log('✅ Final parsed hour:', preferredHour);
+      // Ensure hour is within business hours
+      if (this.businessHours.availableHours.includes(hour)) {
+        preferredHour = hour;
+        console.log('✅ Time is within business hours:', preferredHour);
+      } else {
+        console.log('⚠️ Requested time outside business hours, using default:', preferredHour);
+      }
     } else if (preferredDay.toLowerCase().includes('morning')) {
-      preferredHour = 10;
+      preferredHour = 9;
     } else if (preferredDay.toLowerCase().includes('afternoon')) {
       preferredHour = 14;
     } else if (preferredDay.toLowerCase().includes('evening')) {
-      preferredHour = 16;
+      preferredHour = 15; // 3 PM, latest business hour
     }
     
     targetDate.setHours(preferredHour, 0, 0, 0);
