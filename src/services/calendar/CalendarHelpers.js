@@ -1,4 +1,4 @@
-// src/services/calendar/CalendarHelpers.js - COMPLETE FIXED VERSION
+// src/services/calendar/CalendarHelpers.js - FIXED (NO DEMO MODE, REAL CALENDAR ONLY)
 const GoogleCalendarService = require('./GoogleCalendarService');
 
 // Initialize calendar service
@@ -16,19 +16,17 @@ async function initializeCalendarService() {
       const calendarInfo = calendarService.getCalendarInfo();
       console.log('📅 Calendar Info:', calendarInfo);
     } else {
-      console.error('❌ Google Calendar service failed to initialize');
-      console.log('⚠️ Continuing in demo mode - using demo slots');
+      throw new Error('Calendar service failed to initialize');
     }
     
     return calendarInitialized;
   } catch (error) {
     console.error('❌ Calendar initialization failed:', error.message);
-    calendarInitialized = false;
-    return false;
+    throw error; // Don't continue without calendar
   }
 }
 
-// Safe availability checking
+// Check availability - REAL CALENDAR ONLY
 async function checkAvailability(startTime, endTime) {
   try {
     console.log('🔍 Checking calendar availability...');
@@ -36,8 +34,7 @@ async function checkAvailability(startTime, endTime) {
     console.log('⏰ End time:', endTime);
     
     if (!calendarInitialized || !calendarService?.isInitialized()) {
-      console.log('⚠️ Calendar not available - assuming slot is available');
-      return true;
+      throw new Error('Calendar service not available');
     }
     
     const available = await calendarService.isSlotAvailable(startTime, endTime);
@@ -45,114 +42,35 @@ async function checkAvailability(startTime, endTime) {
     return available;
   } catch (error) {
     console.error('❌ Error checking calendar availability:', error.message);
-    return true;
+    throw error;
   }
 }
 
-// Safe slot retrieval
+// Get available time slots - REAL CALENDAR ONLY
 async function getAvailableTimeSlots(date) {
   try {
     console.log('📅 Getting available calendar slots for:', date);
     
     if (!calendarService) {
-      console.error('❌ No calendar service initialized');
-      return generateBusinessHourSlots(date);
+      throw new Error('No calendar service initialized');
     }
     
-    if (calendarInitialized) {
-      console.log('📅 Using REAL Google Calendar');
-      const availableSlots = await calendarService.getAvailableSlots(date);
-      console.log(`📋 Retrieved ${availableSlots.length} real calendar slots`);
-      return availableSlots;
-    } else {
-      console.log('📅 Using DEMO calendar slots');
-      return generateBusinessHourSlots(date);
+    if (!calendarInitialized) {
+      throw new Error('Calendar service not properly initialized');
     }
+    
+    console.log('📅 Using REAL Google Calendar');
+    const availableSlots = await calendarService.getAvailableSlots(date);
+    console.log(`📋 Retrieved ${availableSlots.length} real calendar slots`);
+    return availableSlots;
     
   } catch (error) {
     console.error('❌ Error getting calendar slots:', error.message);
-    console.log('🔄 Falling back to demo slots');
-    return generateBusinessHourSlots(date);
+    throw error; // Don't return fallback data
   }
 }
 
-// FIXED: Generate proper business hour slots (not 3AM!)
-function generateBusinessHourSlots(date) {
-  console.log('🏢 Generating BUSINESS HOUR slots for:', date);
-  
-  const targetDate = new Date(date);
-  const dayOfWeek = targetDate.getDay();
-  
-  // No slots on weekends
-  if (dayOfWeek === 0 || dayOfWeek === 6) {
-    console.log('📅 Weekend - no business hour slots');
-    return [];
-  }
-  
-  // Check if it's in the past
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  if (targetDate < today) {
-    console.log('📅 Past date - no slots available');
-    return [];
-  }
-  
-  const slots = [];
-  
-  // FIXED: Proper business hours in Arizona time (9AM-5PM)
-  const businessHours = [9, 10, 11, 14, 15, 16]; // 9AM, 10AM, 11AM, 2PM, 3PM, 4PM
-  
-  businessHours.forEach(h => {
-    const slotTime = new Date(targetDate);
-    slotTime.setHours(h, 0, 0, 0);
-    
-    // If it's today, only show future times
-    if (targetDate.toDateString() === today.toDateString()) {
-      const now = new Date();
-      // Add 1 hour buffer for today's slots
-      const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
-      if (slotTime <= oneHourFromNow) {
-        console.log(`⏰ Skipping slot at ${h}:00 - too soon`);
-        return;
-      }
-    }
-    
-    const endTime = new Date(slotTime);
-    endTime.setHours(h + 1);
-    
-    // FIXED: Proper time formatting for Arizona
-    const displayTime = formatArizonaTime(slotTime);
-    
-    slots.push({
-      startTime: slotTime.toISOString(),
-      endTime: endTime.toISOString(),
-      displayTime: displayTime
-    });
-    
-    console.log(`✅ Business hour slot: ${displayTime} (${slotTime.toISOString()})`);
-  });
-  
-  console.log(`🏢 Generated ${slots.length} business hour slots`);
-  return slots;
-}
-
-// FIXED: Proper Arizona time formatting
-function formatArizonaTime(date) {
-  try {
-    // Arizona doesn't observe daylight saving time
-    return date.toLocaleTimeString('en-US', {
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-      timeZone: 'America/Phoenix'
-    });
-  } catch (error) {
-    console.error('Error formatting Arizona time:', error);
-    return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
-  }
-}
-
-// Safe formatted slots
+// Get formatted available slots
 async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
   try {
     const today = new Date();
@@ -205,6 +123,7 @@ async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
         }
       } catch (dayError) {
         console.error(`❌ Error getting calendar slots for ${checkDate.toDateString()}:`, dayError.message);
+        throw dayError; // Don't continue with errors
       }
     }
     
@@ -213,7 +132,7 @@ async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
     
   } catch (error) {
     console.error('❌ Error getting formatted calendar slots:', error.message);
-    return [];
+    throw error;
   }
 }
 
@@ -260,7 +179,7 @@ async function generateAvailabilityResponse() {
     
   } catch (error) {
     console.error('❌ Error generating calendar availability response:', error.message);
-    return "Let me check my calendar for available times.";
+    throw error;
   }
 }
 
@@ -272,15 +191,7 @@ async function autoBookAppointment(customerName, customerEmail, customerPhone, p
     console.log('📅 Preferred time:', preferredDateTime);
     
     if (!calendarInitialized || !calendarService?.isInitialized()) {
-      console.log('⚠️ Real calendar not available - simulating booking');
-      return {
-        success: true,
-        eventId: `demo_event_${Date.now()}`,
-        meetingLink: 'https://meet.google.com/demo-meeting-link',
-        eventLink: 'https://calendar.google.com/demo-event',
-        message: 'Demo appointment created (add Google Calendar credentials for real bookings)',
-        isDemo: true
-      };
+      throw new Error('Calendar service not available for booking');
     }
     
     const startTime = new Date(preferredDateTime);
@@ -339,11 +250,7 @@ async function autoBookAppointment(customerName, customerEmail, customerPhone, p
     
   } catch (error) {
     console.error('❌ Auto-booking appointment error:', error.message);
-    return {
-      success: false,
-      error: error.message,
-      message: 'I had trouble booking that time. Let me help you find another slot.'
-    };
+    throw error;
   }
 }
 
@@ -367,7 +274,7 @@ async function suggestAlternativeTime(preferredDate, userMessage) {
     return "Let me check what times I have available.";
   } catch (error) {
     console.error('Error suggesting alternative appointment time:', error.message);
-    return "Let me check my calendar for available times.";
+    throw error;
   }
 }
 
@@ -481,8 +388,8 @@ function isBusinessHours(dateTime) {
   const dayOfWeek = date.getDay(); // 0 = Sunday, 6 = Saturday
   const hour = date.getHours();
   
-  // Monday to Friday (1-5), 9 AM to 5 PM
-  return dayOfWeek >= 1 && dayOfWeek <= 5 && hour >= 9 && hour < 17;
+  // Monday to Friday (1-5), 8 AM to 4 PM
+  return dayOfWeek >= 1 && dayOfWeek <= 5 && hour >= 8 && hour < 16;
 }
 
 function getNextBusinessDay(fromDate = new Date()) {
