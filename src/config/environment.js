@@ -1,4 +1,4 @@
-// src/config/environment.js - Environment Configuration
+// src/config/environment.js - Environment Configuration (FIXED - NO FALLBACKS)
 require('dotenv').config();
 
 const config = {
@@ -19,35 +19,32 @@ const config = {
   GOOGLE_CALENDAR_ID: process.env.GOOGLE_CALENDAR_ID || 'primary',
   GOOGLE_PRIVATE_KEY_ID: process.env.GOOGLE_PRIVATE_KEY_ID,
   GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
-  GOOGLE_SERVICE_ACCOUNT_KEY: process.env.GOOGLE_SERVICE_ACCOUNT_KEY,
   GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
   GOOGLE_REFRESH_TOKEN: process.env.GOOGLE_REFRESH_TOKEN,
-  GOOGLE_APPOINTMENT_SCHEDULE_URL: process.env.GOOGLE_APPOINTMENT_SCHEDULE_URL,
   
   // Webhook Configuration
   TRIGGER_SERVER_URL: process.env.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com',
   N8N_WEBHOOK_URL: process.env.N8N_WEBHOOK_URL || 'https://n8n-clp2.onrender.com/webhook/retell-scheduling',
   
-  // Application Configuration
-  TIMEZONE: process.env.TIMEZONE || 'America/Phoenix',
+  // Application Configuration - YOUR ACTUAL SCHEDULE
+  TIMEZONE: 'America/Phoenix',
+  BUSINESS_START_HOUR: 8,  // 8 AM
+  BUSINESS_END_HOUR: 16,   // 4 PM
   
   // Validation
   validate() {
-    const required = ['OPENAI_API_KEY', 'RETELL_API_KEY'];
+    const required = ['OPENAI_API_KEY', 'RETELL_API_KEY', 'GOOGLE_PROJECT_ID', 'GOOGLE_PRIVATE_KEY', 'GOOGLE_CLIENT_EMAIL'];
     const missing = required.filter(key => !this[key]);
     
     if (missing.length > 0) {
-      console.warn('⚠️ Missing environment variables:', missing);
+      console.error('❌ Missing required environment variables:', missing);
+      throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
     }
     
-    // Google Calendar validation
-    const hasGoogleAuth = this.GOOGLE_PROJECT_ID && this.GOOGLE_PRIVATE_KEY && this.GOOGLE_CLIENT_EMAIL;
-    console.log('🔧 Google Calendar Auth:', hasGoogleAuth ? '✅ Configured' : '❌ Missing');
-    
+    console.log('✅ All required environment variables present');
     return {
-      isValid: missing.length === 0,
-      hasGoogleCalendar: hasGoogleAuth,
-      missing
+      isValid: true,
+      missing: []
     };
   }
 };
