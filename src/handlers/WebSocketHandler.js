@@ -1,4 +1,4 @@
-// src/handlers/WebSocketHandler.js - FIXED VERSION
+// src/handlers/WebSocketHandler.js - FIXED VERSION V2 (Slower, More Natural)
 const axios = require('axios');
 const config = require('../config/environment');
 const globalDiscoveryManager = require('../services/discovery/GlobalDiscoveryManager');
@@ -29,8 +29,8 @@ class WebSocketHandler {
         content: `You are Sarah from Nexella AI, a friendly professional assistant.
 
 CONVERSATION FLOW:
-1. GREETING: Start with "Hi there! This is Sarah from Nexella AI. How are you doing today?" and WAIT for response
-2. DISCOVERY: Ask these 6 questions ONE AT A TIME, waiting for each answer:
+1. GREETING: Only greet when user first speaks, then ask first discovery question
+2. DISCOVERY: Ask these 6 questions ONE AT A TIME with pauses:
    - "How did you hear about us?"
    - "What industry or business are you in?" 
    - "What's your main product or service?"
@@ -40,19 +40,17 @@ CONVERSATION FLOW:
 3. SCHEDULING: After ALL 6 questions, transition to scheduling
 
 CRITICAL RULES:
-- NEVER repeat questions that have been answered
-- ALWAYS wait for user response before asking next question  
-- After 6 questions are complete, transition to: "Perfect! I have all the information I need. Let's find you a time that works. What day works best for you?"
-- When user gives specific time like "Monday at 9", immediately confirm booking
-
-Be conversational and natural but follow the flow strictly.`
+- WAIT for user to speak first before greeting
+- Ask questions slowly, one at a time
+- Wait for complete answers before proceeding
+- Be conversational but follow the exact question order`
       }
     ];
     
     this.userHasSpoken = false;
     this.hasGreeted = false;
-    this.waitingForGreetingResponse = false;
-    this.lastBotMessage = '';
+    this.lastResponseTime = 0;
+    this.minimumResponseDelay = 2000; // 2 seconds minimum between responses
     
     this.initialize();
   }
@@ -77,7 +75,8 @@ Be conversational and natural but follow the flow strictly.`
   async initialize() {
     this.initializeDiscoverySession();
     this.setupEventHandlers();
-    this.sendInitialGreeting();
+    // DON'T send greeting immediately - wait for user to speak first
+    console.log('🔇 WAITING for user to speak first before greeting...');
   }
 
   initializeDiscoverySession() {
@@ -91,20 +90,19 @@ Be conversational and natural but follow the flow strictly.`
     this.ws.on('error', this.handleError.bind(this));
   }
 
-  sendInitialGreeting() {
-    if (!this.hasGreeted) {
-      this.hasGreeted = true;
-      this.waitingForGreetingResponse = true;
-      const greeting = "Hi there! This is Sarah from Nexella AI. How are you doing today?";
-      this.lastBotMessage = greeting;
-      console.log('🎙️ SENDING GREETING:', greeting);
-      this.sendResponse(greeting, 1);
+  async sendResponse(content, responseId = null) {
+    // Enforce minimum delay between responses to prevent rapid-fire
+    const now = Date.now();
+    const timeSinceLastResponse = now - this.lastResponseTime;
+    
+    if (timeSinceLastResponse < this.minimumResponseDelay) {
+      const waitTime = this.minimumResponseDelay - timeSinceLastResponse;
+      console.log(`⏱️ WAITING ${waitTime}ms before responding to prevent rapid-fire...`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
     }
-  }
-
-  sendResponse(content, responseId = null) {
+    
     console.log('🤖 SENT:', content);
-    this.lastBotMessage = content;
+    this.lastResponseTime = Date.now();
     
     this.ws.send(JSON.stringify({
       content: content,
@@ -123,7 +121,7 @@ Be conversational and natural but follow the flow strictly.`
       }
     } catch (error) {
       console.error('❌ Error handling message:', error.message);
-      this.sendResponse("I missed that. Could you repeat it?", 9999);
+      await this.sendResponse("I missed that. Could you repeat it?", 9999);
     }
   }
 
@@ -132,23 +130,27 @@ Be conversational and natural but follow the flow strictly.`
     const userMessage = latestUserUtterance?.content || "";
 
     console.log(`🗣️ USER: "${userMessage}"`);
-    this.userHasSpoken = true;
+    
+    // Mark that user has spoken
+    if (!this.userHasSpoken) {
+      this.userHasSpoken = true;
+      console.log('👤 USER SPOKE FIRST - Now we can start conversation');
+    }
     
     this.conversationHistory.push({ role: 'user', content: userMessage });
 
-    // STEP 1: Handle greeting response
-    if (this.waitingForGreetingResponse) {
-      this.waitingForGreetingResponse = false;
-      await this.handleGreetingResponse(userMessage, parsed.response_id);
+    // STEP 1: Handle first greeting when user speaks
+    if (!this.hasGreeted && this.userHasSpoken) {
+      await this.handleInitialGreeting(userMessage, parsed.response_id);
       return;
     }
 
     const progress = globalDiscoveryManager.getProgress(this.callId);
     console.log(`📊 CURRENT PROGRESS: ${progress?.questionsCompleted || 0}/6 questions, Phase: ${progress?.conversationPhase || 'greeting'}`);
 
-    // STEP 2: Check for specific time booking request
+    // STEP 2: Check for specific time booking request (only if enough questions done)
     const specificTimeMatch = this.detectSpecificTimeRequest(userMessage);
-    if (specificTimeMatch && progress?.questionsCompleted >= 4) {
+    if (specificTimeMatch && progress?.questionsCompleted >= 5) {
       console.log('🕐 BOOKING REQUEST DETECTED:', specificTimeMatch.timeString);
       await this.handleBooking(specificTimeMatch, parsed.response_id);
       return;
@@ -166,42 +168,38 @@ Be conversational and natural but follow the flow strictly.`
       return;
     }
 
-    // FALLBACK: Generate appropriate response
+    // FALLBACK
     await this.generateContextualResponse(userMessage, parsed.response_id);
   }
 
-  async handleGreetingResponse(userMessage, responseId) {
-    console.log('👋 HANDLING GREETING RESPONSE');
+  async handleInitialGreeting(userMessage, responseId) {
+    console.log('👋 HANDLING INITIAL GREETING - USER SPOKE FIRST');
+    this.hasGreeted = true;
     
-    // Acknowledge their response and start first discovery question
-    const firstQuestion = "How did you hear about us?";
-    const response = `${this.getGreetingAcknowledgment(userMessage)} ${firstQuestion}`;
+    // Greet and immediately ask first question
+    const greeting = "Hi there! This is Sarah from Nexella AI. How are you doing today?";
     
-    // Mark first question as asked
-    globalDiscoveryManager.markQuestionAsked(this.callId, 0, response);
+    await this.sendResponse(greeting, responseId);
     
-    this.conversationHistory.push({ role: 'assistant', content: response });
-    this.sendResponse(response, responseId);
-  }
-
-  getGreetingAcknowledgment(userMessage) {
-    const message = userMessage.toLowerCase();
-    
-    if (message.includes('good') || message.includes('great') || message.includes('well')) {
-      return "That's wonderful to hear!";
-    } else if (message.includes('busy') || message.includes('hectic')) {
-      return "I totally understand.";
-    } else if (message.includes('fine') || message.includes('ok')) {
-      return "Great!";
-    } else {
-      return "Nice!";
-    }
+    // Wait a moment, then automatically ask first discovery question after they respond
+    globalDiscoveryManager.markGreetingCompleted(this.callId);
   }
 
   async handleDiscoveryPhase(userMessage, responseId) {
     console.log('📝 HANDLING DISCOVERY PHASE');
     
     const progress = globalDiscoveryManager.getProgress(this.callId);
+    
+    // If we just completed greeting, ask first question
+    if (progress?.greetingCompleted && progress?.questionsCompleted === 0) {
+      const firstQuestion = "How did you hear about us?";
+      globalDiscoveryManager.markQuestionAsked(this.callId, 0, firstQuestion);
+      
+      const response = `${this.getGreetingAcknowledgment(userMessage)} ${firstQuestion}`;
+      this.conversationHistory.push({ role: 'assistant', content: response });
+      await this.sendResponse(response, responseId);
+      return;
+    }
     
     // Capture answer if we're waiting for one
     if (progress?.waitingForAnswer && this.isValidDiscoveryAnswer(userMessage)) {
@@ -211,6 +209,9 @@ Be conversational and natural but follow the flow strictly.`
         userMessage.trim()
       );
       console.log(`📝 Answer captured: ${captured} for Q${progress.currentQuestionIndex + 1}: "${userMessage}"`);
+      
+      // Wait before asking next question
+      await new Promise(resolve => setTimeout(resolve, 1500));
     }
 
     // Check updated progress
@@ -223,7 +224,7 @@ Be conversational and natural but follow the flow strictly.`
       
       const response = "Perfect! I have all the information I need. Let's find you a time that works. What day works best for you?";
       this.conversationHistory.push({ role: 'assistant', content: response });
-      this.sendResponse(response, responseId);
+      await this.sendResponse(response, responseId);
       return;
     }
 
@@ -231,14 +232,20 @@ Be conversational and natural but follow the flow strictly.`
     const nextQuestion = globalDiscoveryManager.getNextUnansweredQuestion(this.callId);
     if (nextQuestion) {
       const questionIndex = globalDiscoveryManager.getSession(this.callId).questions.findIndex(q => q.question === nextQuestion.question);
-      const acknowledgment = this.getContextualAcknowledgment(userMessage, questionIndex - 1);
-      const response = `${acknowledgment} ${nextQuestion.question}`;
       
-      // Mark question as asked
-      globalDiscoveryManager.markQuestionAsked(this.callId, questionIndex, response);
-      
-      this.conversationHistory.push({ role: 'assistant', content: response });
-      this.sendResponse(response, responseId);
+      // Only proceed if we're not already waiting for this question's answer
+      if (!progress?.waitingForAnswer || progress.currentQuestionIndex !== questionIndex) {
+        const acknowledgment = this.getContextualAcknowledgment(userMessage, questionIndex - 1);
+        const response = `${acknowledgment} ${nextQuestion.question}`;
+        
+        // Mark question as asked
+        const marked = globalDiscoveryManager.markQuestionAsked(this.callId, questionIndex, response);
+        
+        if (marked) {
+          this.conversationHistory.push({ role: 'assistant', content: response });
+          await this.sendResponse(response, responseId);
+        }
+      }
     }
   }
 
@@ -255,14 +262,76 @@ Be conversational and natural but follow the flow strictly.`
       return;
     }
 
-    // Generate availability response
+    // Generate availability response with real appointment schedule times
     try {
-      const availabilityResponse = await generateAvailabilityResponse();
+      const availabilityResponse = await this.generateRealAvailabilityResponse();
       this.conversationHistory.push({ role: 'assistant', content: availabilityResponse });
-      this.sendResponse(availabilityResponse, responseId);
+      await this.sendResponse(availabilityResponse, responseId);
     } catch (error) {
       console.error('❌ Error generating availability:', error.message);
-      this.sendResponse("Let me check my calendar for available times. What day works best for you?", responseId);
+      await this.sendResponse("Let me check my calendar for available times. What day works best for you?", responseId);
+    }
+  }
+
+  async generateRealAvailabilityResponse() {
+    console.log('🤖 Generating REAL availability response...');
+    
+    try {
+      // Get real availability for the next few days
+      const today = new Date();
+      const tomorrow = new Date(today);
+      tomorrow.setDate(today.getDate() + 1);
+      
+      // Check next 5 business days
+      const availableDays = [];
+      for (let i = 1; i <= 7; i++) {
+        const checkDate = new Date(today);
+        checkDate.setDate(today.getDate() + i);
+        
+        // Skip weekends
+        if (checkDate.getDay() === 0 || checkDate.getDay() === 6) continue;
+        
+        const slots = await getAvailableTimeSlots(checkDate);
+        if (slots.length > 0) {
+          availableDays.push({
+            dayName: checkDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }),
+            slots: slots.slice(0, 3) // Take first 3 slots
+          });
+        }
+        
+        if (availableDays.length >= 3) break; // Show 3 days max
+      }
+      
+      if (availableDays.length === 0) {
+        return "I don't have any availability this week. Let me check next week for you.";
+      }
+      
+      if (availableDays.length === 1) {
+        const day = availableDays[0];
+        const times = day.slots.map(s => s.displayTime).join(', ');
+        return `I have availability on ${day.dayName} at ${times}. Which time works best for you?`;
+      }
+      
+      // Multiple days available
+      let response = "I have a few options available. ";
+      availableDays.forEach((day, index) => {
+        const times = day.slots.map(s => s.displayTime).join(', ');
+        if (index === 0) {
+          response += `${day.dayName} at ${times}`;
+        } else if (index === availableDays.length - 1) {
+          response += `, or ${day.dayName} at ${times}`;
+        } else {
+          response += `, ${day.dayName} at ${times}`;
+        }
+      });
+      response += ". What works better for you?";
+      
+      console.log(`✅ Generated real availability response: ${response}`);
+      return response;
+      
+    } catch (error) {
+      console.error('❌ Error generating real availability:', error.message);
+      return "Let me check my calendar for available times. What day and time would work best for you?";
     }
   }
 
@@ -382,7 +451,7 @@ Be conversational and natural but follow the flow strictly.`
       }
       
       this.conversationHistory.push({ role: 'assistant', content: response });
-      this.sendResponse(response, responseId);
+      await this.sendResponse(response, responseId);
       
       // Send webhook in background
       setTimeout(() => this.sendWebhookData(timeRequest, discoveryData), 500);
@@ -390,7 +459,7 @@ Be conversational and natural but follow the flow strictly.`
     } catch (error) {
       console.error('❌ Booking error:', error.message);
       const fallbackResponse = `Perfect! I'll get you scheduled for ${timeRequest.dayName} at ${timeRequest.timeString}. You'll receive confirmation details shortly!`;
-      this.sendResponse(fallbackResponse, responseId);
+      await this.sendResponse(fallbackResponse, responseId);
     }
   }
 
@@ -413,13 +482,13 @@ Be conversational and natural but follow the flow strictly.`
 
       const reply = response.data.choices[0].message.content;
       this.conversationHistory.push({ role: 'assistant', content: reply });
-      this.sendResponse(reply, responseId);
+      await this.sendResponse(reply, responseId);
       
     } catch (error) {
       console.log('⚡ Using fallback response due to AI error');
       const fallback = "I understand. How can I help you further?";
       this.conversationHistory.push({ role: 'assistant', content: fallback });
-      this.sendResponse(fallback, responseId);
+      await this.sendResponse(fallback, responseId);
     }
   }
 
@@ -440,6 +509,20 @@ Be conversational and natural but follow the flow strictly.`
     ];
     
     return !invalidPatterns.some(pattern => pattern.test(message));
+  }
+
+  getGreetingAcknowledgment(userAnswer) {
+    const answer = userAnswer.toLowerCase();
+    
+    if (answer.includes('good') || answer.includes('great') || answer.includes('well')) {
+      return "That's wonderful to hear!";
+    } else if (answer.includes('busy') || answer.includes('hectic')) {
+      return "I totally understand.";
+    } else if (answer.includes('fine') || answer.includes('ok')) {
+      return "Great!";
+    } else {
+      return "Nice!";
+    }
   }
 
   getContextualAcknowledgment(userAnswer, questionIndex) {
@@ -479,7 +562,6 @@ Be conversational and natural but follow the flow strictly.`
   async handleClose() {
     console.log('🔌 CONNECTION CLOSED');
     
-    // Capture any remaining buffered answers
     try {
       const sessionInfo = globalDiscoveryManager.getSessionInfo(this.callId);
       if (sessionInfo) {
