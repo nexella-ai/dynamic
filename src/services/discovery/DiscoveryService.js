@@ -1,4 +1,4 @@
-// src/services/discovery/DiscoveryService.js - CLEAN FIXED VERSION
+// src/services/discovery/DiscoveryService.js - FIXED (NO MOCK DATA, REAL BUSINESS HOURS)
 class DiscoveryService {
   constructor() {
     this.questions = [
@@ -425,13 +425,13 @@ KEEP IT SHORT AND FOCUSED.`;
     return null;
   }
 
-  // NEW: Method to mark scheduling started (prevents discovery loops)
+  // Mark scheduling started (prevents discovery loops)
   markSchedulingStarted() {
     this.progress.schedulingStarted = true;
     console.log('🗓️ SCHEDULING PHASE STARTED - Discovery questions disabled');
   }
 
-  // NEW: Check if we can start scheduling
+  // Check if we can start scheduling
   canStartScheduling() {
     return this.progress.allQuestionsCompleted && !this.progress.schedulingStarted;
   }
