@@ -1,24 +1,25 @@
-// src/services/calendar/GoogleCalendarService.js - Fixed Version (No Invitation Requirement)
+// src/services/calendar/GoogleCalendarService.js - FIXED FOR DIRECT CALENDAR EVENTS
 const { google } = require('googleapis');
-const fs = require('fs').promises;
-const path = require('path');
 const config = require('../../config/environment');
 
 class GoogleCalendarService {
   constructor() {
     this.calendar = null;
     this.auth = null;
-    this.calendarId = config.GOOGLE_CALENDAR_ID;
-    this.timezone = config.TIMEZONE;
+    this.calendarId = config.GOOGLE_CALENDAR_ID || 'primary';
+    this.timezone = config.TIMEZONE || 'America/Phoenix';
     
-    // Business hours configuration
+    // Business hours configuration for Arizona
     this.businessHours = {
       start: 9, // 9 AM
       end: 17,  // 5 PM
-      days: [1, 2, 3, 4, 5] // Monday to Friday (0 = Sunday, 6 = Saturday)
+      days: [1, 2, 3, 4, 5], // Monday to Friday
+      slotDuration: 60 // 1 hour slots
     };
     
     console.log('🔧 GoogleCalendarService constructor called');
+    console.log('📅 Calendar ID:', this.calendarId);
+    console.log('🌍 Timezone:', this.timezone);
   }
 
   async initialize() {
@@ -28,12 +29,11 @@ class GoogleCalendarService {
       console.log('   GOOGLE_PROJECT_ID:', config.GOOGLE_PROJECT_ID ? '✅ SET' : '❌ MISSING');
       console.log('   GOOGLE_PRIVATE_KEY:', config.GOOGLE_PRIVATE_KEY ? '✅ SET' : '❌ MISSING');
       console.log('   GOOGLE_CLIENT_EMAIL:', config.GOOGLE_CLIENT_EMAIL ? '✅ SET' : '❌ MISSING');
-      console.log('   GOOGLE_CALENDAR_ID:', config.GOOGLE_CALENDAR_ID ? '✅ SET' : '❌ MISSING');
       
       // Check if we have the minimum required variables
       if (!config.GOOGLE_PROJECT_ID || !config.GOOGLE_PRIVATE_KEY || !config.GOOGLE_CLIENT_EMAIL) {
         console.error('❌ Missing required Google Calendar environment variables');
-        console.log('⚠️ Calendar service will be DISABLED - falling back to manual scheduling');
+        console.log('⚠️ Calendar service will be DISABLED - falling back to demo mode');
         return false; // Don't throw error, just disable calendar
       }
       
@@ -52,7 +52,7 @@ class GoogleCalendarService {
       }
     } catch (error) {
       console.error('❌ Failed to initialize Google Calendar service:', error.message);
-      console.warn('⚠️ Calendar features will be disabled - manual scheduling only');
+      console.warn('⚠️ Calendar features will be disabled - demo mode only');
       return false; // Don't crash the server
     }
   }
@@ -67,36 +67,32 @@ class GoogleCalendarService {
         console.log('🔑 Private key format check:', privateKey.includes('-----BEGIN PRIVATE KEY-----') ? '✅ Valid' : '❌ Invalid');
       }
       
-      // Method 1: Individual Environment Variables
-      if (config.GOOGLE_PROJECT_ID && config.GOOGLE_PRIVATE_KEY && config.GOOGLE_CLIENT_EMAIL) {
-        console.log('🔐 Using individual environment variables...');
-        
-        const serviceAccountKey = {
-          type: "service_account",
-          project_id: config.GOOGLE_PROJECT_ID,
-          private_key_id: config.GOOGLE_PRIVATE_KEY_ID || "dummy_key_id",
-          private_key: config.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-          client_email: config.GOOGLE_CLIENT_EMAIL,
-          client_id: config.GOOGLE_CLIENT_ID || "dummy_client_id",
-          auth_uri: "https://accounts.google.com/o/oauth2/auth",
-          token_uri: "https://oauth2.googleapis.com/token",
-          auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-          client_x509_cert_url: `https://www.googleapis.com/oauth2/v1/certs/${encodeURIComponent(config.GOOGLE_CLIENT_EMAIL)}`
-        };
-        
-        console.log('📧 Service account email:', serviceAccountKey.client_email);
-        console.log('🏗️ Project ID:', serviceAccountKey.project_id);
-        
-        this.auth = new google.auth.GoogleAuth({
-          credentials: serviceAccountKey,
-          scopes: ['https://www.googleapis.com/auth/calendar']
-        });
-        
-        console.log('✅ Authentication configured successfully');
-        return;
-      }
-
-      throw new Error('Required environment variables not found');
+      const serviceAccountKey = {
+        type: "service_account",
+        project_id: config.GOOGLE_PROJECT_ID,
+        private_key_id: config.GOOGLE_PRIVATE_KEY_ID || "dummy_key_id",
+        private_key: config.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        client_email: config.GOOGLE_CLIENT_EMAIL,
+        client_id: config.GOOGLE_CLIENT_ID || "dummy_client_id",
+        auth_uri: "https://accounts.google.com/o/oauth2/auth",
+        token_uri: "https://oauth2.googleapis.com/token",
+        auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+        client_x509_cert_url: `https://www.googleapis.com/oauth2/v1/certs/${encodeURIComponent(config.GOOGLE_CLIENT_EMAIL)}`
+      };
+      
+      console.log('📧 Service account email:', serviceAccountKey.client_email);
+      console.log('🏗️ Project ID:', serviceAccountKey.project_id);
+      
+      this.auth = new google.auth.GoogleAuth({
+        credentials: serviceAccountKey,
+        scopes: [
+          'https://www.googleapis.com/auth/calendar',
+          'https://www.googleapis.com/auth/calendar.events'
+        ]
+      });
+      
+      console.log('✅ Authentication configured successfully');
+      return;
       
     } catch (error) {
       console.error('❌ Authentication setup failed:', error.message);
@@ -114,10 +110,12 @@ class GoogleCalendarService {
       
       console.log(`✅ Connected to calendar: ${response.data.summary}`);
       console.log(`📅 Calendar ID: ${this.calendarId}`);
-      console.log(`🌍 Timezone: ${response.data.timeZone || this.timezone}`);
+      console.log(`🌍 Calendar Timezone: ${response.data.timeZone || this.timezone}`);
       
+      // Use calendar's timezone if available
       if (response.data.timeZone) {
         this.timezone = response.data.timeZone;
+        console.log(`🔄 Updated timezone to: ${this.timezone}`);
       }
       
       return true;
@@ -133,8 +131,8 @@ class GoogleCalendarService {
   async getAvailableSlots(date) {
     try {
       if (!this.calendar) {
-        console.log('⚠️ Calendar not available, generating mock slots for demo');
-        return this.generateMockSlots(date);
+        console.log('⚠️ Calendar not available, generating demo slots');
+        return this.generateDemoSlots(date);
       }
 
       console.log(`📅 [REAL CALENDAR] Getting available slots for: ${date}`);
@@ -156,7 +154,7 @@ class GoogleCalendarService {
         return [];
       }
 
-      // FIXED: Get start and end of day in local timezone
+      // Set up time range for the day
       const startOfDay = new Date(targetDate);
       startOfDay.setHours(this.businessHours.start, 0, 0, 0);
       
@@ -169,6 +167,7 @@ class GoogleCalendarService {
         const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
         if (oneHourFromNow > startOfDay) {
           startOfDay.setTime(oneHourFromNow.getTime());
+          // Round up to next hour
           startOfDay.setMinutes(0, 0, 0);
           startOfDay.setHours(startOfDay.getHours() + 1);
         }
@@ -176,7 +175,7 @@ class GoogleCalendarService {
 
       console.log(`🕐 [REAL CALENDAR] Checking from ${startOfDay.toLocaleString('en-US', {timeZone: this.timezone})} to ${endOfDay.toLocaleString('en-US', {timeZone: this.timezone})}`);
 
-      // Get existing events
+      // Get existing events for the day
       const response = await this.calendar.events.list({
         calendarId: this.calendarId,
         timeMin: startOfDay.toISOString(),
@@ -188,13 +187,14 @@ class GoogleCalendarService {
       const events = response.data.items || [];
       console.log(`📋 [REAL CALENDAR] Found ${events.length} existing events`);
 
-      // Generate available slots
+      // Generate available slots by checking for conflicts
       const availableSlots = [];
       let currentTime = new Date(startOfDay);
       
       while (currentTime < endOfDay) {
-        const slotEnd = new Date(currentTime.getTime() + 60 * 60 * 1000);
+        const slotEnd = new Date(currentTime.getTime() + this.businessHours.slotDuration * 60 * 1000);
         
+        // Check if this slot conflicts with any existing event
         const hasConflict = events.some(event => {
           const eventStart = new Date(event.start.dateTime || event.start.date);
           const eventEnd = new Date(event.end.dateTime || event.end.date);
@@ -205,16 +205,14 @@ class GoogleCalendarService {
           availableSlots.push({
             startTime: currentTime.toISOString(),
             endTime: slotEnd.toISOString(),
-            displayTime: currentTime.toLocaleTimeString('en-US', {
-              hour: 'numeric',
-              minute: '2-digit',
-              hour12: true,
-              timeZone: this.timezone
-            })
+            displayTime: this.formatDisplayTime(currentTime)
           });
+        } else {
+          console.log(`❌ Slot conflict at ${this.formatDisplayTime(currentTime)}`);
         }
 
-        currentTime.setHours(currentTime.getHours() + 1);
+        // Move to next hour
+        currentTime = new Date(currentTime.getTime() + this.businessHours.slotDuration * 60 * 1000);
       }
 
       console.log(`✅ [REAL CALENDAR] Generated ${availableSlots.length} available slots`);
@@ -222,13 +220,14 @@ class GoogleCalendarService {
 
     } catch (error) {
       console.error('❌ Error getting real calendar slots:', error.message);
-      console.log('⚠️ Falling back to mock slots for demo');
-      return this.generateMockSlots(date);
+      console.log('⚠️ Falling back to demo slots');
+      return this.generateDemoSlots(date);
     }
   }
 
-  generateMockSlots(date) {
-    console.log('🎭 Generating mock slots for demo purposes');
+  // Generate demo slots when calendar is not available
+  generateDemoSlots(date) {
+    console.log('🎭 Generating demo slots for:', date);
     
     const targetDate = new Date(date);
     const dayOfWeek = targetDate.getDay();
@@ -247,17 +246,18 @@ class GoogleCalendarService {
     
     const slots = [];
     
-    // Generate 3-4 available slots for demo
-    const availableHours = [10, 11, 14, 15]; // 10 AM, 11 AM, 2 PM, 3 PM
+    // Generate demo slots for business hours
+    const demoHours = [9, 10, 11, 14, 15, 16]; // 9AM, 10AM, 11AM, 2PM, 3PM, 4PM
     
-    availableHours.forEach(h => {
+    demoHours.forEach(h => {
       const slotTime = new Date(targetDate);
       slotTime.setHours(h, 0, 0, 0);
       
       // If it's today, only show future times
       if (targetDate.toDateString() === today.toDateString()) {
         const now = new Date();
-        if (slotTime <= now) return;
+        const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
+        if (slotTime <= oneHourFromNow) return;
       }
       
       const endTime = new Date(slotTime);
@@ -266,25 +266,29 @@ class GoogleCalendarService {
       slots.push({
         startTime: slotTime.toISOString(),
         endTime: endTime.toISOString(),
-        displayTime: slotTime.toLocaleTimeString('en-US', {
-          hour: 'numeric',
-          minute: '2-digit',
-          hour12: true,
-          timeZone: this.timezone
-        })
+        displayTime: this.formatDisplayTime(slotTime)
       });
     });
     
-    console.log(`🎭 Generated ${slots.length} mock demo slots`);
+    console.log(`🎭 Generated ${slots.length} demo slots`);
     return slots;
+  }
+
+  // Format time for display (Arizona timezone)
+  formatDisplayTime(date) {
+    return date.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: this.timezone
+    });
   }
 
   async isSlotAvailable(startTime, endTime) {
     try {
       if (!this.calendar) {
-        console.log('⚠️ Calendar not available, returning mock availability');
-        const hour = new Date(startTime).getHours();
-        return ![13, 16].includes(hour);
+        console.log('⚠️ Calendar not available, returning demo availability');
+        return true; // Assume available in demo mode
       }
 
       const response = await this.calendar.events.list({
@@ -302,11 +306,11 @@ class GoogleCalendarService {
 
     } catch (error) {
       console.error('❌ Error checking slot availability:', error.message);
-      return true;
+      return true; // Assume available if can't check
     }
   }
 
-  // FIXED: Create event without requiring invitations
+  // Create a calendar event (booking)
   async createEvent(eventDetails) {
     try {
       if (!this.calendar) {
@@ -316,11 +320,23 @@ class GoogleCalendarService {
           eventId: `demo_event_${Date.now()}`,
           meetingLink: 'https://meet.google.com/demo-meeting-link',
           eventLink: `https://calendar.google.com/event?demo=${Date.now()}`,
-          message: 'Demo booking created (calendar not configured)'
+          message: 'Demo booking created (calendar not configured)',
+          isDemo: true
         };
       }
 
       console.log('📅 [REAL CALENDAR] Creating event:', eventDetails.summary);
+
+      // First, check if the slot is still available
+      const isAvailable = await this.isSlotAvailable(eventDetails.startTime, eventDetails.endTime);
+      if (!isAvailable) {
+        console.log('❌ Slot no longer available');
+        return {
+          success: false,
+          error: 'Slot no longer available',
+          message: 'That time slot has been booked by someone else'
+        };
+      }
 
       const event = {
         summary: eventDetails.summary || 'Nexella AI Consultation Call',
@@ -333,7 +349,13 @@ class GoogleCalendarService {
           dateTime: eventDetails.endTime,
           timeZone: this.timezone
         },
-        // REMOVED: attendees array to avoid permission issues
+        attendees: [
+          {
+            email: eventDetails.attendeeEmail,
+            displayName: eventDetails.attendeeName || eventDetails.attendeeEmail,
+            responseStatus: 'needsAction'
+          }
+        ],
         conferenceData: {
           createRequest: {
             requestId: `meet_${Date.now()}`,
@@ -345,44 +367,75 @@ class GoogleCalendarService {
         reminders: {
           useDefault: false,
           overrides: [
-            { method: 'email', minutes: 24 * 60 },
-            { method: 'popup', minutes: 30 }
+            { method: 'email', minutes: 24 * 60 }, // 24 hours before
+            { method: 'email', minutes: 60 },      // 1 hour before
+            { method: 'popup', minutes: 30 }       // 30 minutes before
           ]
-        }
+        },
+        guestsCanModify: false,
+        guestsCanInviteOthers: false,
+        guestsCanSeeOtherGuests: false
       };
+
+      console.log('📅 Creating calendar event...');
 
       const response = await this.calendar.events.insert({
         calendarId: this.calendarId,
         resource: event,
-        conferenceDataVersion: 1
-        // REMOVED: sendUpdates to avoid permission issues
+        conferenceDataVersion: 1,
+        sendUpdates: 'all' // Send invitations to attendees
       });
 
       const createdEvent = response.data;
-      console.log('✅ [REAL CALENDAR] Event created:', createdEvent.id);
-      console.log('📧 Manual invitation needed for:', eventDetails.attendeeEmail);
+      console.log('✅ [REAL CALENDAR] Event created successfully:', createdEvent.id);
+
+      // Extract meeting link
+      const meetingLink = createdEvent.conferenceData?.entryPoints?.[0]?.uri || 
+                         createdEvent.hangoutLink || 
+                         '';
+
+      console.log('🔗 Meeting link generated:', meetingLink);
 
       return {
         success: true,
         eventId: createdEvent.id,
-        meetingLink: createdEvent.conferenceData?.entryPoints?.[0]?.uri || createdEvent.hangoutLink,
+        meetingLink: meetingLink,
         eventLink: createdEvent.htmlLink,
-        message: 'Event created (manual invitation required)',
+        message: 'Appointment created successfully',
         customerEmail: eventDetails.attendeeEmail,
-        customerName: eventDetails.attendeeName
+        customerName: eventDetails.attendeeName,
+        startTime: eventDetails.startTime,
+        endTime: eventDetails.endTime,
+        isDemo: false
       };
 
     } catch (error) {
       console.error('❌ Error creating calendar event:', error.message);
-      return {
-        success: false,
-        error: error.message,
-        message: 'Failed to create calendar event'
-      };
+      
+      // Provide more specific error messages
+      if (error.message.includes('forbidden')) {
+        return {
+          success: false,
+          error: 'Permission denied',
+          message: 'Calendar permissions insufficient for booking'
+        };
+      } else if (error.message.includes('not found')) {
+        return {
+          success: false,
+          error: 'Calendar not found',
+          message: 'Calendar not found or not accessible'
+        };
+      } else {
+        return {
+          success: false,
+          error: error.message,
+          message: 'Failed to create appointment'
+        };
+      }
     }
   }
 
-  // FIXED: Time parsing to handle "monday at 10:00 AM" correctly
+  // Parse user's time preference into a datetime
   parseTimePreference(userMessage, preferredDay) {
     console.log('🔍 Parsing time preference:', { userMessage, preferredDay });
     
@@ -406,14 +459,14 @@ class GoogleCalendarService {
         
         let daysToAdd = requestedDayIndex - currentDayIndex;
         if (daysToAdd <= 0) {
-          daysToAdd += 7;
+          daysToAdd += 7; // Next week
         }
         
         targetDate.setDate(targetDate.getDate() + daysToAdd);
       }
     }
     
-    // FIXED: Parse time more accurately
+    // Parse time
     let preferredHour = 10; // Default 10 AM
     
     // Look for specific time patterns
