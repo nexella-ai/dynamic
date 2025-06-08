@@ -1,4 +1,4 @@
-// src/services/discovery/GlobalDiscoveryManager.js - FIXED V2 (Better Answer Capture)
+// src/services/discovery/GlobalDiscoveryManager.js - FIXED (NO MOCK DATA)
 class GlobalDiscoveryManager {
   constructor() {
     // Global storage for all active discovery sessions
@@ -8,7 +8,7 @@ class GlobalDiscoveryManager {
     // Session expires after 30 minutes of inactivity
     this.SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
     
-    console.log('🧠 GlobalDiscoveryManager initialized with improved answer capture');
+    console.log('🧠 GlobalDiscoveryManager initialized');
   }
 
   // Get or create discovery session for a call
@@ -114,7 +114,7 @@ class GlobalDiscoveryManager {
     this.sessionTimeouts.set(callId, timeout);
   }
 
-  // IMPROVED: Question asking with better state management
+  // Question asking with better state management
   markQuestionAsked(callId, questionIndex, botMessage) {
     const session = this.activeSessions.get(callId);
     if (!session) {
@@ -135,7 +135,7 @@ class GlobalDiscoveryManager {
     if (questionIndex >= 0 && questionIndex < session.questions.length) {
       const question = session.questions[questionIndex];
       
-      // IMPROVED: Allow re-asking if not answered yet
+      // Allow re-asking if not answered yet
       if (question.asked && question.answered) {
         console.log(`🚫 ANTI-LOOP: Question ${questionIndex + 1} already answered`);
         return false;
@@ -158,7 +158,7 @@ class GlobalDiscoveryManager {
     return false;
   }
 
-  // IMPROVED: Better answer capture with validation
+  // Better answer capture with validation
   captureAnswer(callId, questionIndex, answer) {
     const session = this.activeSessions.get(callId);
     if (!session) {
@@ -212,7 +212,7 @@ class GlobalDiscoveryManager {
     return true;
   }
 
-  // IMPROVED: Better answer validation
+  // Better answer validation
   isValidAnswer(answer) {
     if (!answer || typeof answer !== 'string') return false;
     
