@@ -1,4 +1,4 @@
-// src/routes/apiRoutes.js - API Route Handlers
+// src/routes/apiRoutes.js - API Route Handlers WITH CUSTOMER DATA FIX
 const express = require('express');
 const axios = require('axios');
 const config = require('../config/environment');
@@ -30,6 +30,124 @@ router.get('/health', (req, res) => {
   });
 });
 
+// NEW: Set customer data endpoint - for N8N to send Typeform data
+router.post('/set-customer-data', express.json(), async (req, res) => {
+  try {
+    const { name, email, phone } = req.body;
+    
+    console.log('📋 Received customer data from N8N:', { name, email, phone });
+    
+    if (!email) {
+      return res.status(400).json({ success: false, error: 'Email is required' });
+    }
+    
+    // Store globally for the next call
+    storeContactInfoGlobally(name, email, phone, 'N8N Typeform');
+    
+    console.log('✅ Customer data stored successfully for next call');
+    res.status(200).json({ 
+      success: true, 
+      message: 'Customer data stored successfully',
+      data: { name, email, phone }
+    });
+    
+  } catch (error) {
+    console.error('❌ Error storing customer data:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// NEW: Typeform webhook handler - alternative way to receive Typeform data
+router.post('/typeform-webhook', express.json(), async (req, res) => {
+  try {
+    console.log('📋 Received Typeform webhook:', JSON.stringify(req.body, null, 2));
+    
+    const { form_response } = req.body;
+    
+    if (!form_response) {
+      return res.status(400).json({ success: false, error: 'No form_response found' });
+    }
+    
+    // Extract data from Typeform response
+    let email = '';
+    let name = '';
+    let phone = '';
+    
+    // Parse Typeform answers
+    if (form_response.answers) {
+      form_response.answers.forEach(answer => {
+        console.log('📝 Processing Typeform answer:', answer);
+        
+        // Email field
+        if (answer.type === 'email' || answer.field?.title?.toLowerCase().includes('email')) {
+          email = answer.email || answer.text || '';
+        }
+        
+        // Name field  
+        if (answer.field?.title?.toLowerCase().includes('name') || 
+            answer.field?.ref?.toLowerCase().includes('name')) {
+          name = answer.text || '';
+        }
+        
+        // Phone field
+        if (answer.type === 'phone_number' || 
+            answer.field?.title?.toLowerCase().includes('phone')) {
+          phone = answer.phone_number || answer.text || '';
+        }
+      });
+    }
+    
+    console.log('📋 Extracted Typeform data:', { email, name, phone });
+    
+    if (email) {
+      // Store globally for the next call
+      storeContactInfoGlobally(name, email, phone, 'Typeform Webhook');
+      
+      console.log('✅ Typeform data stored successfully');
+      res.status(200).json({ 
+        success: true, 
+        message: 'Typeform data received and stored',
+        data: { email, name, phone }
+      });
+    } else {
+      console.warn('⚠️ No email found in Typeform submission');
+      res.status(400).json({ 
+        success: false, 
+        error: 'No email found in Typeform submission' 
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ Error processing Typeform webhook:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// NEW: Debug endpoint to check stored customer data
+router.get('/debug-customer-data', (req, res) => {
+  res.json({
+    hasGlobalTypeformData: !!global.lastTypeformSubmission,
+    globalData: global.lastTypeformSubmission || null,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// NEW: Debug endpoint to manually clear customer data
+router.post('/clear-customer-data', (req, res) => {
+  global.lastTypeformSubmission = null;
+  console.log('🧹 Cleared global customer data');
+  res.json({ 
+    success: true, 
+    message: 'Customer data cleared' 
+  });
+});
+
 // HTTP Request - Trigger Retell Call
 router.post('/trigger-retell-call', express.json(), async (req, res) => {
   try {
@@ -43,12 +161,26 @@ router.post('/trigger-retell-call', express.json(), async (req, res) => {
     const userIdentifier = userId || `user_${phone || Date.now()}`;
     console.log('Call request data:', { name, email, phone, userIdentifier });
     
+    // Store contact info globally AND add to call metadata
     storeContactInfoGlobally(name, email, phone, 'API Call');
+    
+    // Also add to call metadata for this specific call
+    const { addCallMetadata } = require('../services/webhooks/WebhookService');
+    const callId = `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    addCallMetadata(callId, {
+      customer_email: email,
+      customer_name: name,
+      customer_phone: phone,
+      user_identifier: userIdentifier,
+      source: 'API Call'
+    });
     
     const metadata = {
       customer_name: name || '',
       customer_email: email,
-      customer_phone: phone || ''
+      customer_phone: phone || '',
+      call_id: callId
     };
     
     console.log('Setting up call with metadata:', metadata);
@@ -77,7 +209,11 @@ router.post('/trigger-retell-call', express.json(), async (req, res) => {
     res.status(200).json({ 
       success: true, 
       call_id: response.data.call_id,
-      message: `Call initiated for ${name || email}`
+      message: `Call initiated for ${name || email}`,
+      stored_data: {
+        global: !!global.lastTypeformSubmission,
+        metadata: true
+      }
     });
     
   } catch (error) {
