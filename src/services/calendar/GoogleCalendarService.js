@@ -1,4 +1,4 @@
-// src/services/calendar/GoogleCalendarService.js - FIXED (8AM-4PM, NO DEMO MODE)
+// src/services/calendar/GoogleCalendarService.js - FIXED TIMEZONE CONVERSION
 const { google } = require('googleapis');
 const config = require('../../config/environment');
 
@@ -7,7 +7,7 @@ class GoogleCalendarService {
     this.calendar = null;
     this.auth = null;
     this.calendarId = config.GOOGLE_CALENDAR_ID || 'primary';
-    this.timezone = config.TIMEZONE || 'America/Phoenix';
+    this.timezone = 'America/Phoenix'; // FIXED: Force Arizona timezone
     
     // YOUR ACTUAL BUSINESS HOURS: 8AM-4PM Arizona Time
     this.businessHours = {
@@ -106,11 +106,8 @@ class GoogleCalendarService {
       console.log(`📅 Calendar ID: ${this.calendarId}`);
       console.log(`🌍 Calendar Timezone: ${response.data.timeZone || this.timezone}`);
       
-      // Use calendar's timezone if available
-      if (response.data.timeZone) {
-        this.timezone = response.data.timeZone;
-        console.log(`🔄 Updated timezone to: ${this.timezone}`);
-      }
+      // KEEP Arizona timezone regardless of calendar timezone
+      console.log(`🔄 Using Arizona timezone: ${this.timezone}`);
       
       return true;
     } catch (error) {
@@ -143,43 +140,11 @@ class GoogleCalendarService {
         return [];
       }
 
-      // Set up time range properly in Arizona timezone
-      const startOfDay = new Date(targetDate);
-      startOfDay.setHours(this.businessHours.start, 0, 0, 0);
-      
-      const endOfDay = new Date(targetDate);
-      endOfDay.setHours(this.businessHours.end, 0, 0, 0);
-
-      // If it's today, start from current time + 1 hour
-      if (targetDate.toDateString() === today.toDateString()) {
-        const now = new Date();
-        const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
-        if (oneHourFromNow > startOfDay) {
-          startOfDay.setTime(oneHourFromNow.getTime());
-          // Round up to next hour
-          startOfDay.setMinutes(0, 0, 0);
-          startOfDay.setHours(startOfDay.getHours() + 1);
-        }
-      }
-
-      console.log(`🕐 Checking from ${startOfDay.toLocaleString('en-US', {timeZone: this.timezone})} to ${endOfDay.toLocaleString('en-US', {timeZone: this.timezone})}`);
-
-      // Get existing events for the day
-      const response = await this.calendar.events.list({
-        calendarId: this.calendarId,
-        timeMin: startOfDay.toISOString(),
-        timeMax: endOfDay.toISOString(),
-        singleEvents: true,
-        orderBy: 'startTime'
-      });
-
-      const events = response.data.items || [];
-      console.log(`📋 Found ${events.length} existing events`);
-
-      // Generate slots using your specific business hours
+      // FIXED: Create proper Arizona timezone dates
       const availableSlots = [];
       
       for (const hour of this.businessHours.availableHours) {
+        // FIXED: Create date in Arizona timezone properly
         const slotStart = new Date(targetDate);
         slotStart.setHours(hour, 0, 0, 0);
         
@@ -195,6 +160,17 @@ class GoogleCalendarService {
             continue;
           }
         }
+        
+        // Get existing events for this time slot
+        const response = await this.calendar.events.list({
+          calendarId: this.calendarId,
+          timeMin: slotStart.toISOString(),
+          timeMax: slotEnd.toISOString(),
+          singleEvents: true,
+          orderBy: 'startTime'
+        });
+
+        const events = response.data.items || [];
         
         // Check if this slot conflicts with any existing event
         const hasConflict = events.some(event => {
@@ -225,13 +201,13 @@ class GoogleCalendarService {
     }
   }
 
-  // Format time for display (Arizona timezone)
+  // FIXED: Format time for display (Arizona timezone)
   formatDisplayTime(date) {
     return date.toLocaleTimeString('en-US', {
       hour: 'numeric',
       minute: '2-digit',
       hour12: true,
-      timeZone: this.timezone
+      timeZone: 'America/Phoenix'
     });
   }
 
