@@ -1,4 +1,4 @@
-// src/handlers/WebSocketHandler.js - FIXED VERSION V2 (Slower, More Natural)
+// src/handlers/WebSocketHandler.js - FIXED V3 (Answer Capture + Real Data)
 const axios = require('axios');
 const config = require('../config/environment');
 const globalDiscoveryManager = require('../services/discovery/GlobalDiscoveryManager');
@@ -20,8 +20,8 @@ class WebSocketHandler {
     
     console.log('🔗 NEW CONNECTION - Call ID:', this.callId);
     
-    // Get customer data
-    this.connectionData = this.getCustomerData();
+    // Get REAL customer data from global typeform or call metadata
+    this.connectionData = this.getRealCustomerData();
     
     this.conversationHistory = [
       {
@@ -29,8 +29,8 @@ class WebSocketHandler {
         content: `You are Sarah from Nexella AI, a friendly professional assistant.
 
 CONVERSATION FLOW:
-1. GREETING: Only greet when user first speaks, then ask first discovery question
-2. DISCOVERY: Ask these 6 questions ONE AT A TIME with pauses:
+1. GREETING: Wait for user to speak first, then greet and ask first question
+2. DISCOVERY: Ask these 6 questions ONE AT A TIME:
    - "How did you hear about us?"
    - "What industry or business are you in?" 
    - "What's your main product or service?"
@@ -42,7 +42,7 @@ CONVERSATION FLOW:
 CRITICAL RULES:
 - WAIT for user to speak first before greeting
 - Ask questions slowly, one at a time
-- Wait for complete answers before proceeding
+- CAPTURE answers properly before moving to next question
 - Be conversational but follow the exact question order`
       }
     ];
@@ -60,22 +60,67 @@ CRITICAL RULES:
     return callIdMatch ? `call_${callIdMatch[1]}` : null;
   }
 
-  getCustomerData() {
-    // Extract from URL params or use test data
+  getRealCustomerData() {
+    console.log('🔍 GETTING REAL CUSTOMER DATA...');
+    
+    // Method 1: Check for global Typeform submission
+    if (global.lastTypeformSubmission) {
+      console.log('✅ Using data from global Typeform submission:', global.lastTypeformSubmission);
+      return {
+        callId: this.callId,
+        customerEmail: global.lastTypeformSubmission.email,
+        customerName: global.lastTypeformSubmission.name || 'Customer',
+        customerPhone: global.lastTypeformSubmission.phone || ''
+      };
+    }
+    
+    // Method 2: Check active calls metadata
+    const activeCallsMetadata = getActiveCallsMetadata();
+    if (activeCallsMetadata && activeCallsMetadata.has(this.callId)) {
+      const callMetadata = activeCallsMetadata.get(this.callId);
+      console.log('✅ Using data from call metadata:', callMetadata);
+      return {
+        callId: this.callId,
+        customerEmail: callMetadata.customer_email || callMetadata.email,
+        customerName: callMetadata.customer_name || callMetadata.name || 'Customer',
+        customerPhone: callMetadata.customer_phone || callMetadata.phone || callMetadata.to_number || ''
+      };
+    }
+    
+    // Method 3: Extract from URL params
     const urlParams = new URLSearchParams(this.req.url.split('?')[1] || '');
+    const emailFromUrl = urlParams.get('customer_email') || urlParams.get('email');
+    const nameFromUrl = urlParams.get('customer_name') || urlParams.get('name');
+    const phoneFromUrl = urlParams.get('customer_phone') || urlParams.get('phone');
+    
+    if (emailFromUrl) {
+      console.log('✅ Using data from URL params');
+      return {
+        callId: this.callId,
+        customerEmail: emailFromUrl,
+        customerName: nameFromUrl || 'Customer',
+        customerPhone: phoneFromUrl || ''
+      };
+    }
+    
+    // Fallback: Use test data but log warning
+    console.warn('⚠️ NO REAL CUSTOMER DATA FOUND - Using test data');
+    console.warn('📝 Available sources checked:');
+    console.warn('   - global.lastTypeformSubmission:', !!global.lastTypeformSubmission);
+    console.warn('   - activeCallsMetadata size:', activeCallsMetadata?.size || 0);
+    console.warn('   - URL params:', this.req.url);
     
     return {
       callId: this.callId,
-      customerEmail: urlParams.get('customer_email') || 'test@example.com',
-      customerName: urlParams.get('customer_name') || 'Test Customer',
-      customerPhone: urlParams.get('customer_phone') || '+1234567890'
+      customerEmail: 'test@example.com',
+      customerName: 'Test Customer',
+      customerPhone: '+1234567890'
     };
   }
 
   async initialize() {
     this.initializeDiscoverySession();
     this.setupEventHandlers();
-    // DON'T send greeting immediately - wait for user to speak first
     console.log('🔇 WAITING for user to speak first before greeting...');
   }
 
@@ -148,17 +193,17 @@ CRITICAL RULES:
     const progress = globalDiscoveryManager.getProgress(this.callId);
     console.log(`📊 CURRENT PROGRESS: ${progress?.questionsCompleted || 0}/6 questions, Phase: ${progress?.conversationPhase || 'greeting'}`);
 
-    // STEP 2: Check for specific time booking request (only if enough questions done)
+    // STEP 2: Handle discovery phase - FIXED ANSWER CAPTURE
+    if (progress?.questionsCompleted < 6 && !progress?.schedulingStarted) {
+      await this.handleDiscoveryPhaseFixed(userMessage, parsed.response_id);
+      return;
+    }
+
+    // STEP 3: Check for specific time booking request (only if enough questions done)
     const specificTimeMatch = this.detectSpecificTimeRequest(userMessage);
     if (specificTimeMatch && progress?.questionsCompleted >= 5) {
       console.log('🕐 BOOKING REQUEST DETECTED:', specificTimeMatch.timeString);
       await this.handleBooking(specificTimeMatch, parsed.response_id);
-      return;
-    }
-
-    // STEP 3: Handle discovery phase
-    if (progress?.questionsCompleted < 6 && !progress?.schedulingStarted) {
-      await this.handleDiscoveryPhase(userMessage, parsed.response_id);
       return;
     }
 
@@ -181,70 +226,109 @@ CRITICAL RULES:
     
     await this.sendResponse(greeting, responseId);
     
-    // Wait a moment, then automatically ask first discovery question after they respond
+    // Mark greeting as completed
     globalDiscoveryManager.markGreetingCompleted(this.callId);
   }
 
-  async handleDiscoveryPhase(userMessage, responseId) {
-    console.log('📝 HANDLING DISCOVERY PHASE');
+  // FIXED: Discovery phase with proper answer capture
+  async handleDiscoveryPhaseFixed(userMessage, responseId) {
+    console.log('📝 HANDLING DISCOVERY PHASE - FIXED VERSION');
     
     const progress = globalDiscoveryManager.getProgress(this.callId);
     
-    // If we just completed greeting, ask first question
-    if (progress?.greetingCompleted && progress?.questionsCompleted === 0) {
+    // If we just completed greeting and no questions asked yet, ask first question
+    if (progress?.greetingCompleted && progress?.questionsCompleted === 0 && !progress?.waitingForAnswer) {
+      console.log('🎯 ASKING FIRST QUESTION AFTER GREETING');
       const firstQuestion = "How did you hear about us?";
+      
+      const acknowledgment = this.getGreetingAcknowledgment(userMessage);
+      const response = `${acknowledgment} ${firstQuestion}`;
+      
+      // Mark question as asked
       globalDiscoveryManager.markQuestionAsked(this.callId, 0, firstQuestion);
       
-      const response = `${this.getGreetingAcknowledgment(userMessage)} ${firstQuestion}`;
       this.conversationHistory.push({ role: 'assistant', content: response });
       await this.sendResponse(response, responseId);
       return;
     }
     
-    // Capture answer if we're waiting for one
-    if (progress?.waitingForAnswer && this.isValidDiscoveryAnswer(userMessage)) {
-      const captured = globalDiscoveryManager.captureAnswer(
-        this.callId, 
-        progress.currentQuestionIndex, 
-        userMessage.trim()
-      );
-      console.log(`📝 Answer captured: ${captured} for Q${progress.currentQuestionIndex + 1}: "${userMessage}"`);
+    // CRITICAL FIX: If we're waiting for an answer, capture it
+    if (progress?.waitingForAnswer) {
+      console.log(`📝 ATTEMPTING TO CAPTURE ANSWER for Q${progress.currentQuestionIndex + 1}: "${userMessage}"`);
       
-      // Wait before asking next question
-      await new Promise(resolve => setTimeout(resolve, 1500));
-    }
-
-    // Check updated progress
-    const updatedProgress = globalDiscoveryManager.getProgress(this.callId);
-    
-    if (updatedProgress?.questionsCompleted >= 6) {
-      // All questions complete, transition to scheduling
-      console.log('🎉 ALL DISCOVERY QUESTIONS COMPLETE - TRANSITIONING TO SCHEDULING');
-      globalDiscoveryManager.markSchedulingStarted(this.callId);
+      if (this.isValidDiscoveryAnswer(userMessage)) {
+        const captured = globalDiscoveryManager.captureAnswer(
+          this.callId, 
+          progress.currentQuestionIndex, 
+          userMessage.trim()
+        );
+        
+        console.log(`📝 Answer capture result: ${captured}`);
+        
+        if (captured) {
+          // Wait a moment before asking next question
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          
+          // Check updated progress after capture
+          const updatedProgress = globalDiscoveryManager.getProgress(this.callId);
+          console.log(`📊 UPDATED PROGRESS: ${updatedProgress?.questionsCompleted}/6 questions`);
+          
+          if (updatedProgress?.questionsCompleted >= 6) {
+            // All questions complete, transition to scheduling
+            console.log('🎉 ALL DISCOVERY QUESTIONS COMPLETE - TRANSITIONING TO SCHEDULING');
+            globalDiscoveryManager.markSchedulingStarted(this.callId);
+            
+            const response = "Perfect! I have all the information I need. Let's find you a time that works. What day works best for you?";
+            this.conversationHistory.push({ role: 'assistant', content: response });
+            await this.sendResponse(response, responseId);
+            return;
+          }
+          
+          // Ask next question
+          const nextQuestion = globalDiscoveryManager.getNextUnansweredQuestion(this.callId);
+          if (nextQuestion) {
+            const questionIndex = globalDiscoveryManager.getSession(this.callId).questions.findIndex(q => q.question === nextQuestion.question);
+            const acknowledgment = this.getContextualAcknowledgment(userMessage, questionIndex - 1);
+            const response = `${acknowledgment} ${nextQuestion.question}`;
+            
+            // Mark question as asked
+            const marked = globalDiscoveryManager.markQuestionAsked(this.callId, questionIndex, response);
+            
+            if (marked) {
+              this.conversationHistory.push({ role: 'assistant', content: response });
+              await this.sendResponse(response, responseId);
+            }
+          }
+          return;
+        } else {
+          console.log('❌ Failed to capture answer, asking question again');
+        }
+      } else {
+        console.log('❌ Invalid answer format, asking question again');
+      }
       
-      const response = "Perfect! I have all the information I need. Let's find you a time that works. What day works best for you?";
-      this.conversationHistory.push({ role: 'assistant', content: response });
-      await this.sendResponse(response, responseId);
+      // If answer wasn't captured, re-ask the current question
+      const currentQuestion = globalDiscoveryManager.getSession(this.callId).questions[progress.currentQuestionIndex];
+      if (currentQuestion) {
+        const response = `I didn't catch that. ${currentQuestion.question}`;
+        await this.sendResponse(response, responseId);
+      }
       return;
     }
-
-    // Ask next question if available
+    
+    // If not waiting for answer, something went wrong - ask next question
+    console.log('⚠️ Not waiting for answer, asking next question');
     const nextQuestion = globalDiscoveryManager.getNextUnansweredQuestion(this.callId);
     if (nextQuestion) {
       const questionIndex = globalDiscoveryManager.getSession(this.callId).questions.findIndex(q => q.question === nextQuestion.question);
+      const response = nextQuestion.question;
       
-      // Only proceed if we're not already waiting for this question's answer
-      if (!progress?.waitingForAnswer || progress.currentQuestionIndex !== questionIndex) {
-        const acknowledgment = this.getContextualAcknowledgment(userMessage, questionIndex - 1);
-        const response = `${acknowledgment} ${nextQuestion.question}`;
-        
-        // Mark question as asked
-        const marked = globalDiscoveryManager.markQuestionAsked(this.callId, questionIndex, response);
-        
-        if (marked) {
-          this.conversationHistory.push({ role: 'assistant', content: response });
-          await this.sendResponse(response, responseId);
-        }
+      // Mark question as asked
+      const marked = globalDiscoveryManager.markQuestionAsked(this.callId, questionIndex, response);
+      
+      if (marked) {
+        this.conversationHistory.push({ role: 'assistant', content: response });
+        await this.sendResponse(response, responseId);
       }
     }
   }
@@ -277,7 +361,6 @@ CRITICAL RULES:
     console.log('🤖 Generating REAL availability response...');
     
     try {
-      // Get real availability for the next few days
       const today = new Date();
       const tomorrow = new Date(today);
       tomorrow.setDate(today.getDate() + 1);
@@ -338,13 +421,9 @@ CRITICAL RULES:
   detectSpecificTimeRequest(userMessage) {
     console.log('🕐 CHECKING FOR TIME REQUEST:', userMessage);
     
-    // Enhanced patterns for time detection
     const patterns = [
-      // "Monday at 9am", "Tuesday at 2pm"
       /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
-      // "9am Monday", "2pm Tuesday"  
       /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)/i,
-      // "Monday 9", "Tuesday 2"
       /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\s+(\d{1,2})\b/i
     ];
 
@@ -432,7 +511,6 @@ CRITICAL RULES:
       const discoveryData = globalDiscoveryManager.getFinalDiscoveryData(this.callId);
       console.log('📋 Discovery data for booking:', discoveryData);
       
-      // Try to book the appointment
       const bookingResult = await autoBookAppointment(
         this.connectionData.customerName,
         this.connectionData.customerEmail,
@@ -495,7 +573,7 @@ CRITICAL RULES:
   isValidDiscoveryAnswer(userMessage) {
     const message = userMessage.toLowerCase().trim();
     
-    // Filter out echoes and invalid responses
+    // More lenient validation - accept most answers except obvious echoes
     const invalidPatterns = [
       /^(what|how|where|when|why|who)\b/,  // Questions
       /hear about/,
@@ -504,11 +582,11 @@ CRITICAL RULES:
       /running.*ads/,
       /crm system/,
       /pain points/,
-      /^(uh|um|er|ah|okay|ok)$/,  // Fillers
-      /^.{1,2}$/  // Too short
+      /^(uh|um|er|ah)$/,  // Fillers only
     ];
     
-    return !invalidPatterns.some(pattern => pattern.test(message));
+    // Must be at least 2 characters and not match invalid patterns
+    return message.length >= 2 && !invalidPatterns.some(pattern => pattern.test(message));
   }
 
   getGreetingAcknowledgment(userAnswer) {
@@ -567,7 +645,6 @@ CRITICAL RULES:
       if (sessionInfo) {
         console.log(`💾 Session completed: ${sessionInfo.questionsCompleted}/6 questions`);
         
-        // If we have discovery data, send final webhook
         if (sessionInfo.questionsCompleted > 0) {
           const discoveryData = globalDiscoveryManager.getFinalDiscoveryData(this.callId);
           setTimeout(() => {
