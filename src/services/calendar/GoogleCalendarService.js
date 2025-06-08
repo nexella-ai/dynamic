@@ -1,4 +1,4 @@
-// src/services/calendar/GoogleCalendarService.js - FIXED FOR DIRECT CALENDAR EVENTS
+// src/services/calendar/GoogleCalendarService.js - FIXED V2 (Correct Business Hours)
 const { google } = require('googleapis');
 const config = require('../../config/environment');
 
@@ -9,17 +9,19 @@ class GoogleCalendarService {
     this.calendarId = config.GOOGLE_CALENDAR_ID || 'primary';
     this.timezone = config.TIMEZONE || 'America/Phoenix';
     
-    // Business hours configuration for Arizona
+    // FIXED: Business hours configuration for Arizona (9AM-5PM)
     this.businessHours = {
-      start: 9, // 9 AM
-      end: 17,  // 5 PM
+      start: 9, // 9 AM Arizona time
+      end: 17,  // 5 PM Arizona time
       days: [1, 2, 3, 4, 5], // Monday to Friday
-      slotDuration: 60 // 1 hour slots
+      slotDuration: 60, // 1 hour slots
+      availableHours: [9, 10, 11, 14, 15, 16] // 9AM, 10AM, 11AM, 2PM, 3PM, 4PM
     };
     
     console.log('🔧 GoogleCalendarService constructor called');
     console.log('📅 Calendar ID:', this.calendarId);
     console.log('🌍 Timezone:', this.timezone);
+    console.log('🕐 Business Hours:', this.businessHours.availableHours);
   }
 
   async initialize() {
@@ -154,7 +156,7 @@ class GoogleCalendarService {
         return [];
       }
 
-      // Set up time range for the day
+      // FIXED: Set up time range properly in Arizona timezone
       const startOfDay = new Date(targetDate);
       startOfDay.setHours(this.businessHours.start, 0, 0, 0);
       
@@ -187,32 +189,44 @@ class GoogleCalendarService {
       const events = response.data.items || [];
       console.log(`📋 [REAL CALENDAR] Found ${events.length} existing events`);
 
-      // Generate available slots by checking for conflicts
+      // FIXED: Generate slots using specific business hours instead of hour-by-hour
       const availableSlots = [];
-      let currentTime = new Date(startOfDay);
       
-      while (currentTime < endOfDay) {
-        const slotEnd = new Date(currentTime.getTime() + this.businessHours.slotDuration * 60 * 1000);
+      for (const hour of this.businessHours.availableHours) {
+        const slotStart = new Date(targetDate);
+        slotStart.setHours(hour, 0, 0, 0);
+        
+        const slotEnd = new Date(targetDate);
+        slotEnd.setHours(hour + 1, 0, 0, 0);
+        
+        // If it's today, only show future times
+        if (targetDate.toDateString() === today.toDateString()) {
+          const now = new Date();
+          const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
+          if (slotStart <= oneHourFromNow) {
+            console.log(`⏰ Skipping slot at ${hour}:00 - too soon`);
+            continue;
+          }
+        }
         
         // Check if this slot conflicts with any existing event
         const hasConflict = events.some(event => {
           const eventStart = new Date(event.start.dateTime || event.start.date);
           const eventEnd = new Date(event.end.dateTime || event.end.date);
-          return (currentTime < eventEnd && slotEnd > eventStart);
+          return (slotStart < eventEnd && slotEnd > eventStart);
         });
 
         if (!hasConflict) {
           availableSlots.push({
-            startTime: currentTime.toISOString(),
+            startTime: slotStart.toISOString(),
             endTime: slotEnd.toISOString(),
-            displayTime: this.formatDisplayTime(currentTime)
+            displayTime: this.formatDisplayTime(slotStart)
           });
+          
+          console.log(`✅ Available slot: ${this.formatDisplayTime(slotStart)} (${slotStart.toISOString()})`);
         } else {
-          console.log(`❌ Slot conflict at ${this.formatDisplayTime(currentTime)}`);
+          console.log(`❌ Slot conflict at ${this.formatDisplayTime(slotStart)}`);
         }
-
-        // Move to next hour
-        currentTime = new Date(currentTime.getTime() + this.businessHours.slotDuration * 60 * 1000);
       }
 
       console.log(`✅ [REAL CALENDAR] Generated ${availableSlots.length} available slots`);
@@ -246,10 +260,8 @@ class GoogleCalendarService {
     
     const slots = [];
     
-    // Generate demo slots for business hours
-    const demoHours = [9, 10, 11, 14, 15, 16]; // 9AM, 10AM, 11AM, 2PM, 3PM, 4PM
-    
-    demoHours.forEach(h => {
+    // FIXED: Use the same business hours as real calendar
+    this.businessHours.availableHours.forEach(h => {
       const slotTime = new Date(targetDate);
       slotTime.setHours(h, 0, 0, 0);
       
@@ -270,11 +282,11 @@ class GoogleCalendarService {
       });
     });
     
-    console.log(`🎭 Generated ${slots.length} demo slots`);
+    console.log(`🎭 Generated ${slots.length} demo slots with business hours`);
     return slots;
   }
 
-  // Format time for display (Arizona timezone)
+  // FIXED: Format time for display (Arizona timezone)
   formatDisplayTime(date) {
     return date.toLocaleTimeString('en-US', {
       hour: 'numeric',
