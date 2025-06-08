@@ -1,117 +1,33 @@
-// src/services/webhooks/WebhookService.js - FIXED (REAL TYPEFORM DATA, GOOGLE CALENDAR INTEGRATION)
+// src/services/webhooks/WebhookService.js - FIXED WITH REAL METADATA EXTRACTION FROM WORKING CODE
 const axios = require('axios');
 const config = require('../../config/environment');
 const { getCalendarService, isCalendarInitialized } = require('../calendar/CalendarHelpers');
 
-// Store the latest Typeform submission for reference
+// Store the latest Typeform submission for reference (FROM WORKING CODE)
 global.lastTypeformSubmission = null;
 
-// Store active calls metadata
+// Store active calls metadata (FROM WORKING CODE)
 const activeCallsMetadata = new Map();
 
-// Store contact info globally with better logging (FROM WORKING CODE)
+// Store contact info globally (EXACT COPY FROM WORKING CODE)
 function storeContactInfoGlobally(name, email, phone, source = 'Unknown') {
   console.log(`📝 Storing contact info globally from ${source}:`, { name, email, phone });
   
+  // Always update if we have an email
   if (email && email.trim() !== '') {
-    const contactInfo = {
+    global.lastTypeformSubmission = {
       timestamp: new Date().toISOString(),
       email: email.trim(),
       name: (name || '').trim(),
       phone: (phone || '').trim(),
       source: source
     };
-    
-    global.lastTypeformSubmission = contactInfo;
     console.log('✅ Stored contact info globally:', global.lastTypeformSubmission);
-    
-    // Also store in active calls metadata if we have a phone number
-    if (phone && phone.trim()) {
-      // Try to find matching call by phone number
-      for (const [callId, metadata] of activeCallsMetadata) {
-        if (metadata.to_number === phone || metadata.customer_phone === phone) {
-          console.log(`🔗 Linking Typeform data to existing call ${callId}`);
-          metadata.customer_email = email.trim();
-          metadata.customer_name = (name || '').trim();
-          metadata.customer_phone = phone.trim();
-          metadata.typeform_source = true;
-          break;
-        }
-      }
-    }
-    
     return true;
   } else {
     console.warn('⚠️ Cannot store contact info - missing email');
     return false;
   }
-}
-
-// Better call metadata management
-function addCallMetadata(callId, metadata) {
-  console.log(`📞 Adding call metadata for ${callId}:`, metadata);
-  
-  // Enhance metadata with normalized fields
-  const enhancedMetadata = {
-    ...metadata,
-    customer_email: metadata.customer_email || metadata.email || '',
-    customer_name: metadata.customer_name || metadata.name || '',
-    customer_phone: metadata.customer_phone || metadata.phone || metadata.to_number || '',
-    call_id: callId,
-    created_at: Date.now()
-  };
-  
-  activeCallsMetadata.set(callId, enhancedMetadata);
-  
-  // Try to merge with existing Typeform data
-  if (global.lastTypeformSubmission) {
-    const typeformData = global.lastTypeformSubmission;
-    
-    // If phone numbers match or if call has no email but typeform does
-    if ((enhancedMetadata.customer_phone && typeformData.phone && 
-         enhancedMetadata.customer_phone.includes(typeformData.phone.slice(-4))) ||
-        (!enhancedMetadata.customer_email && typeformData.email)) {
-      
-      console.log(`🔗 Merging Typeform data with call ${callId}`);
-      enhancedMetadata.customer_email = enhancedMetadata.customer_email || typeformData.email;
-      enhancedMetadata.customer_name = enhancedMetadata.customer_name || typeformData.name;
-      enhancedMetadata.customer_phone = enhancedMetadata.customer_phone || typeformData.phone;
-      enhancedMetadata.typeform_merged = true;
-      
-      activeCallsMetadata.set(callId, enhancedMetadata);
-    }
-  }
-  
-  console.log(`✅ Final call metadata for ${callId}:`, enhancedMetadata);
-}
-
-// Get real customer data for a call
-function getRealCustomerDataForCall(callId) {
-  console.log(`🔍 Getting real customer data for call ${callId}`);
-  
-  // Method 1: Check call metadata
-  if (activeCallsMetadata.has(callId)) {
-    const metadata = activeCallsMetadata.get(callId);
-    console.log('✅ Found call metadata:', metadata);
-    return {
-      email: metadata.customer_email || metadata.email,
-      name: metadata.customer_name || metadata.name || 'Customer',
-      phone: metadata.customer_phone || metadata.phone || metadata.to_number
-    };
-  }
-  
-  // Method 2: Check global typeform
-  if (global.lastTypeformSubmission) {
-    console.log('✅ Using global Typeform data:', global.lastTypeformSubmission);
-    return {
-      email: global.lastTypeformSubmission.email,
-      name: global.lastTypeformSubmission.name || 'Customer',
-      phone: global.lastTypeformSubmission.phone
-    };
-  }
-  
-  console.warn('⚠️ No real customer data found');
-  return null;
 }
 
 // Update conversation state in trigger server
@@ -130,34 +46,31 @@ async function updateConversationState(callId, discoveryComplete, preferredDay) 
   }
 }
 
-// Enhanced webhook sending function with Google Calendar integration (FROM WORKING CODE WITH CALENDAR)
+// ENHANCED: Send scheduling data with proper email handling - EXACT COPY FROM WORKING CODE
 async function sendSchedulingPreference(name, email, phone, preferredDay, callId, discoveryData = {}) {
   try {
-    console.log('=== WEBHOOK SENDING ===');
-    console.log('Input:', { name, email, phone, preferredDay, callId });
+    console.log('=== ENHANCED WEBHOOK SENDING DEBUG ===');
+    console.log('Input parameters:', { name, email, phone, preferredDay, callId });
     console.log('Raw discovery data input:', JSON.stringify(discoveryData, null, 2));
+    console.log('Discovery data keys:', Object.keys(discoveryData));
     console.log('Global Typeform submission:', global.lastTypeformSubmission);
     
-    // Enhanced email retrieval with multiple fallbacks (FROM WORKING CODE)
+    // ENHANCED: Try multiple methods to get email (FROM WORKING CODE)
     let finalEmail = email;
     let finalName = name;
     let finalPhone = phone;
     
-    // Get real customer data if available
-    const realCustomerData = getRealCustomerDataForCall(callId);
-    if (realCustomerData) {
-      finalEmail = finalEmail || realCustomerData.email;
-      finalName = finalName || realCustomerData.name;
-      finalPhone = finalPhone || realCustomerData.phone;
-      console.log('🔗 Enhanced with real customer data:', realCustomerData);
-    }
-    
+    // Method 1: Use provided email if valid
     if (finalEmail && finalEmail.trim() !== '') {
-      console.log(`Using email: ${finalEmail}`);
-    } else if (global.lastTypeformSubmission && global.lastTypeformSubmission.email) {
+      console.log(`Using provided email: ${finalEmail}`);
+    }
+    // Method 2: Get from global Typeform submission
+    else if (global.lastTypeformSubmission && global.lastTypeformSubmission.email) {
       finalEmail = global.lastTypeformSubmission.email;
       console.log(`Using email from global Typeform: ${finalEmail}`);
-    } else if (callId && activeCallsMetadata.has(callId)) {
+    }
+    // Method 3: Get from call metadata if available
+    else if (callId && activeCallsMetadata.has(callId)) {
       const callMetadata = activeCallsMetadata.get(callId);
       if (callMetadata && callMetadata.customer_email) {
         finalEmail = callMetadata.customer_email;
@@ -165,7 +78,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       }
     }
     
-    // Enhanced name and phone retrieval
+    // Enhanced name and phone retrieval (FROM WORKING CODE)
     if (!finalName || finalName.trim() === '') {
       if (global.lastTypeformSubmission && global.lastTypeformSubmission.name) {
         finalName = global.lastTypeformSubmission.name;
@@ -190,17 +103,20 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     
     console.log(`Final contact info - Email: "${finalEmail}", Name: "${finalName}", Phone: "${finalPhone}"`);
     
+    // CRITICAL: Don't proceed if we still don't have an email
     if (!finalEmail || finalEmail.trim() === '') {
       console.error('❌ CRITICAL: No email found from any source. Cannot send webhook.');
       return { success: false, error: 'No email address available' };
     }
-
-    // Process discovery data with better field mapping (FROM WORKING CODE)
+    
+    // ENHANCED: Process discovery data with better field mapping (FROM WORKING CODE)
     console.log('🔧 PROCESSING DISCOVERY DATA:');
     console.log('Raw discoveryData input:', JSON.stringify(discoveryData, null, 2));
     
+    // Initialize formatted discovery data
     const formattedDiscoveryData = {};
     
+    // Define field mappings from question keys to Airtable field names
     const fieldMappings = {
       'question_0': 'How did you hear about us',
       'question_1': 'Business/Industry', 
@@ -210,6 +126,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       'question_5': 'Pain points'
     };
     
+    // Process all discovery data (FROM WORKING CODE)
     Object.entries(discoveryData).forEach(([key, value]) => {
       console.log(`🔧 Processing key: "${key}" with value: "${value}"`);
       
@@ -217,12 +134,14 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
         const trimmedValue = value.trim();
         
         if (key.startsWith('question_') && fieldMappings[key]) {
+          // Map question_X to the exact Airtable field name
           formattedDiscoveryData[fieldMappings[key]] = trimmedValue;
           console.log(`✅ Mapped ${key} -> "${fieldMappings[key]}" = "${trimmedValue}"`);
         } else if (key === 'How did you hear about us' || key.includes('hear about')) {
           formattedDiscoveryData['How did you hear about us'] = trimmedValue;
           console.log(`✅ Direct mapping: How did you hear about us = "${trimmedValue}"`);
         } else if (key === 'Business/Industry' || key.includes('business') || key.includes('industry')) {
+          // Only map if we don't already have it from question_1
           if (!formattedDiscoveryData['Business/Industry']) {
             formattedDiscoveryData['Business/Industry'] = trimmedValue;
             console.log(`✅ Direct mapping: Business/Industry = "${trimmedValue}"`);
@@ -248,6 +167,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
             console.log(`✅ Direct mapping: Pain points = "${trimmedValue}"`);
           }
         } else {
+          // Keep original key if it doesn't match any pattern
           formattedDiscoveryData[key] = trimmedValue;
           console.log(`📝 Keeping original key: ${key} = "${trimmedValue}"`);
         }
@@ -310,16 +230,16 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       }
     }
     
-    // Create webhook payload
+    // Create the webhook payload (FROM WORKING CODE)
     const webhookData = {
       name: finalName || '',
-      email: finalEmail,
+      email: finalEmail, // This is now guaranteed to have a value
       phone: finalPhone || '',
       preferredDay: preferredDay || '',
       call_id: callId || '',
       schedulingComplete: true,
       discovery_data: formattedDiscoveryData,
-      formatted_discovery: formattedDiscoveryData,
+      formatted_discovery: formattedDiscoveryData, // Send both for compatibility
       // Google Calendar specific fields
       calendar_booking: bookingResult?.success || false,
       meeting_link: meetingDetails?.meetingLink || '',
@@ -327,13 +247,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       event_id: meetingDetails?.eventId || '',
       scheduled_time: meetingDetails?.startTime || '',
       calendar_status: isCalendarInitialized() ? 'real_calendar' : 'calendar_unavailable',
-      // Data source tracking
-      data_source: {
-        typeform: !!global.lastTypeformSubmission,
-        call_metadata: activeCallsMetadata.has(callId),
-        url_params: false
-      },
-      // Individual fields for direct access
+      // Also include individual fields for direct access
       "How did you hear about us": formattedDiscoveryData["How did you hear about us"] || '',
       "Business/Industry": formattedDiscoveryData["Business/Industry"] || '',
       "Main product": formattedDiscoveryData["Main product"] || '',
@@ -351,20 +265,17 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     });
     
     console.log('✅ Scheduling preference sent successfully:', response.data);
-    return { 
-      success: true, 
-      data: response.data,
-      booking: bookingResult,
-      meetingDetails
-    };
-
+    return { success: true, data: response.data };
+    
   } catch (error) {
     console.error('❌ Error sending scheduling preference:', error);
     
-    // Enhanced fallback to n8n with same data processing
+    // Enhanced fallback to n8n with same data processing (FROM WORKING CODE)
     try {
       console.log('🔄 Attempting to send directly to n8n webhook as fallback');
+      const n8nWebhookUrl = config.N8N_WEBHOOK_URL;
       
+      // Use the same processing logic for fallback
       let fallbackEmail = email || (global.lastTypeformSubmission && global.lastTypeformSubmission.email) || '';
       let fallbackName = name || (global.lastTypeformSubmission && global.lastTypeformSubmission.name) || '';
       let fallbackPhone = phone || (global.lastTypeformSubmission && global.lastTypeformSubmission.phone) || '';
@@ -430,7 +341,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       
       console.log('🔄 Fallback webhook data:', JSON.stringify(fallbackWebhookData, null, 2));
       
-      const n8nResponse = await axios.post(config.N8N_WEBHOOK_URL, fallbackWebhookData, {
+      const n8nResponse = await axios.post(n8nWebhookUrl, fallbackWebhookData, {
         headers: { 'Content-Type': 'application/json' },
         timeout: 10000
       });
@@ -443,19 +354,6 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       return { success: false, error: error.message };
     }
   }
-}
-
-// Getters for active calls metadata
-function getActiveCallsMetadata() {
-  return activeCallsMetadata;
-}
-
-function removeCallMetadata(callId) {
-  activeCallsMetadata.delete(callId);
-}
-
-function getCallMetadata(callId) {
-  return activeCallsMetadata.get(callId);
 }
 
 // Handle Typeform webhook
@@ -480,10 +378,6 @@ module.exports = {
   storeContactInfoGlobally,
   updateConversationState,
   sendSchedulingPreference,
-  getActiveCallsMetadata,
-  addCallMetadata,
-  removeCallMetadata,
-  getCallMetadata,
-  getRealCustomerDataForCall,
+  activeCallsMetadata,
   handleTypeformWebhook
 };
