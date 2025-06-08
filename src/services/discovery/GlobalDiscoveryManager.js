@@ -1,4 +1,4 @@
-// src/services/discovery/GlobalDiscoveryManager.js - FIXED ANTI-LOOP VERSION
+// src/services/discovery/GlobalDiscoveryManager.js - FIXED V2 (Better Answer Capture)
 class GlobalDiscoveryManager {
   constructor() {
     // Global storage for all active discovery sessions
@@ -8,7 +8,7 @@ class GlobalDiscoveryManager {
     // Session expires after 30 minutes of inactivity
     this.SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
     
-    console.log('🧠 GlobalDiscoveryManager initialized with anti-loop protection');
+    console.log('🧠 GlobalDiscoveryManager initialized with improved answer capture');
   }
 
   // Get or create discovery session for a call
@@ -16,7 +16,6 @@ class GlobalDiscoveryManager {
     console.log('📞 GET SESSION CALLED');
     console.log('🆔 Call ID:', callId);
     console.log('👤 Customer Data:', customerData);
-    console.log('📊 Current active sessions count:', this.activeSessions.size);
 
     if (!callId) {
       console.warn('⚠️ No callId provided to getSession');
@@ -30,6 +29,7 @@ class GlobalDiscoveryManager {
       console.log('   📊 Questions Completed:', session.progress.questionsCompleted);
       console.log('   🗓️ Scheduling Started:', session.progress.schedulingStarted);
       console.log('   📝 Conversation Phase:', session.progress.conversationPhase);
+      console.log('   ⏳ Waiting for Answer:', session.progress.waitingForAnswer);
       
       // Refresh timeout
       this.refreshSessionTimeout(callId);
@@ -48,9 +48,9 @@ class GlobalDiscoveryManager {
       createdAt: Date.now(),
       lastActivity: Date.now(),
       customerData: {
-        email: customerData.email || '',
-        name: customerData.name || '',
-        phone: customerData.phone || ''
+        email: customerData.customerEmail || customerData.email || '',
+        name: customerData.customerName || customerData.name || '',
+        phone: customerData.customerPhone || customerData.phone || ''
       },
       questions: [
         { question: 'How did you hear about us?', field: 'How did you hear about us', asked: false, answered: false, answer: '', askedAt: null },
@@ -85,7 +85,7 @@ class GlobalDiscoveryManager {
     this.activeSessions.set(callId, session);
     this.refreshSessionTimeout(callId);
     
-    console.log(`✅ Created session for ${callId}`);
+    console.log(`✅ Created session for ${callId} with customer data:`, session.customerData);
     return session;
   }
 
@@ -114,35 +114,30 @@ class GlobalDiscoveryManager {
     this.sessionTimeouts.set(callId, timeout);
   }
 
-  // FIXED: Anti-loop question asking
+  // IMPROVED: Question asking with better state management
   markQuestionAsked(callId, questionIndex, botMessage) {
     const session = this.activeSessions.get(callId);
-    if (!session) return false;
+    if (!session) {
+      console.log('❌ No session found for', callId);
+      return false;
+    }
 
     // ANTI-LOOP: Check if already asked recently
     const now = Date.now();
     if (session.antiLoop.lastQuestionAskedAt > 0) {
       const timeSinceLastQuestion = now - session.antiLoop.lastQuestionAskedAt;
-      if (timeSinceLastQuestion < 5000) { // 5 seconds cooldown
+      if (timeSinceLastQuestion < 3000) { // 3 seconds cooldown
         console.log(`🚫 ANTI-LOOP: Question asked too recently (${timeSinceLastQuestion}ms ago)`);
         return false;
       }
     }
 
-    // ANTI-LOOP: Check question rate limiting
-    session.antiLoop.questionAskedCount++;
-    const minuteAgo = now - 60000;
-    if (session.antiLoop.questionAskedCount > session.antiLoop.maxQuestionsPerMinute) {
-      console.log(`🚫 ANTI-LOOP: Too many questions asked (${session.antiLoop.questionAskedCount} in last minute)`);
-      return false;
-    }
-
     if (questionIndex >= 0 && questionIndex < session.questions.length) {
       const question = session.questions[questionIndex];
       
-      // ANTI-LOOP: Check if question already asked
-      if (question.asked && session.antiLoop.preventRepeatedQuestions) {
-        console.log(`🚫 ANTI-LOOP: Question ${questionIndex + 1} already asked`);
+      // IMPROVED: Allow re-asking if not answered yet
+      if (question.asked && question.answered) {
+        console.log(`🚫 ANTI-LOOP: Question ${questionIndex + 1} already answered`);
         return false;
       }
       
@@ -153,39 +148,45 @@ class GlobalDiscoveryManager {
       session.progress.lastQuestionAsked = question.question;
       session.lastBotMessageTimestamp = now;
       session.antiLoop.lastQuestionAskedAt = now;
+      session.antiLoop.questionAskedCount++;
       
       console.log(`✅ MARKED Q${questionIndex + 1} as asked for ${callId}: "${question.question}"`);
+      console.log(`📊 Now waiting for answer to Q${questionIndex + 1}`);
       this.updateSessionActivity(callId);
       return true;
     }
     return false;
   }
 
-  // FIXED: Safer answer capture
+  // IMPROVED: Better answer capture with validation
   captureAnswer(callId, questionIndex, answer) {
     const session = this.activeSessions.get(callId);
-    if (!session) return false;
+    if (!session) {
+      console.log('❌ No session found for answer capture:', callId);
+      return false;
+    }
 
-    // ANTI-LOOP: Validate answer capture
+    // Validate input
     if (questionIndex < 0 || questionIndex >= session.questions.length) {
-      console.log(`🚫 ANTI-LOOP: Invalid question index ${questionIndex}`);
+      console.log(`🚫 Invalid question index ${questionIndex}`);
       return false;
     }
 
     const question = session.questions[questionIndex];
     
-    // ANTI-LOOP: Check if already answered
+    // Check if already answered
     if (question.answered) {
-      console.log(`🚫 ANTI-LOOP: Question ${questionIndex + 1} already answered`);
+      console.log(`🚫 Question ${questionIndex + 1} already answered`);
       return false;
     }
 
-    // ANTI-LOOP: Validate answer quality
+    // Validate answer quality
     if (!this.isValidAnswer(answer)) {
-      console.log(`🚫 ANTI-LOOP: Invalid answer rejected: "${answer}"`);
+      console.log(`🚫 Invalid answer rejected: "${answer}"`);
       return false;
     }
 
+    // CAPTURE THE ANSWER
     question.answered = true;
     question.answer = answer.trim();
     
@@ -196,7 +197,7 @@ class GlobalDiscoveryManager {
     session.progress.waitingForAnswer = false;
     session.progress.allQuestionsCompleted = session.questions.every(q => q.answered);
     
-    // ANTI-LOOP: Auto-transition to scheduling if all done
+    // Auto-transition to scheduling if all done
     if (session.progress.allQuestionsCompleted && !session.progress.schedulingStarted) {
       console.log('🎉 ALL QUESTIONS COMPLETE - AUTO-TRANSITIONING TO SCHEDULING');
       session.progress.schedulingStarted = true;
@@ -205,12 +206,13 @@ class GlobalDiscoveryManager {
     
     console.log(`✅ CAPTURED answer for ${callId} Q${questionIndex + 1}: "${answer}"`);
     console.log(`📊 Progress: ${session.progress.questionsCompleted}/6 questions completed`);
+    console.log(`⏳ Waiting for answer: ${session.progress.waitingForAnswer}`);
     
     this.updateSessionActivity(callId);
     return true;
   }
 
-  // IMPROVED: Answer validation
+  // IMPROVED: Better answer validation
   isValidAnswer(answer) {
     if (!answer || typeof answer !== 'string') return false;
     
@@ -233,6 +235,7 @@ class GlobalDiscoveryManager {
     
     for (const echo of questionEchoes) {
       if (cleaned.includes(echo)) {
+        console.log(`🚫 Rejected question echo: "${cleaned}" contains "${echo}"`);
         return false;
       }
     }
@@ -240,53 +243,49 @@ class GlobalDiscoveryManager {
     // Reject obvious non-answers
     const nonAnswers = [
       /^(what|how|where|when|why|who)\b/,
-      /^(uh|um|er|ah|okay|ok)$/,
-      /^(yes|no)$/,
+      /^(uh|um|er|ah)$/,
       /^(sorry|excuse me)/
     ];
     
     for (const pattern of nonAnswers) {
       if (pattern.test(cleaned)) {
+        console.log(`🚫 Rejected non-answer pattern: "${cleaned}"`);
         return false;
       }
     }
     
+    console.log(`✅ Valid answer: "${cleaned}"`);
     return true;
   }
 
-  // FIXED: Mark scheduling as started with protection
+  // Mark scheduling as started with protection
   markSchedulingStarted(callId) {
     const session = this.activeSessions.get(callId);
     if (!session) return false;
 
-    // ANTI-LOOP: Only allow if questions are complete or mostly complete
-    if (session.progress.questionsCompleted < 4) {
-      console.log(`🚫 ANTI-LOOP: Cannot start scheduling with only ${session.progress.questionsCompleted} questions completed`);
-      return false;
-    }
-
     session.progress.schedulingStarted = true;
     session.progress.conversationPhase = 'scheduling';
+    session.progress.waitingForAnswer = false; // Clear any pending answer wait
     
     console.log(`🗓️ MARKED scheduling started for ${callId} (${session.progress.questionsCompleted}/6 questions complete)`);
     this.updateSessionActivity(callId);
     return true;
   }
 
-  // Get next unanswered question with anti-loop protection
+  // Get next unanswered question
   getNextUnansweredQuestion(callId) {
     const session = this.activeSessions.get(callId);
     if (!session) return null;
 
-    // ANTI-LOOP: Don't provide questions if scheduling started
+    // Don't provide questions if scheduling started
     if (session.progress.schedulingStarted) {
-      console.log('🚫 ANTI-LOOP: Scheduling started, no more questions');
+      console.log('🚫 Scheduling started, no more questions');
       return null;
     }
 
-    // ANTI-LOOP: Don't provide questions if all complete
+    // Don't provide questions if all complete
     if (session.progress.allQuestionsCompleted) {
-      console.log('🚫 ANTI-LOOP: All questions complete, no more questions');
+      console.log('🚫 All questions complete, no more questions');
       return null;
     }
 
@@ -337,7 +336,7 @@ class GlobalDiscoveryManager {
     return finalData;
   }
 
-  // IMPROVED: Scheduling request detection
+  // Check if user message is scheduling request
   isSchedulingRequest(userMessage, questionsCompleted) {
     const schedulingKeywords = [
       'schedule', 'book', 'appointment', 'call', 'talk', 'meet',
@@ -353,189 +352,6 @@ class GlobalDiscoveryManager {
     
     // Allow scheduling if 4+ questions completed OR explicit scheduling request
     return hasSchedulingKeyword && questionsCompleted >= 4;
-  }
-
-  // FIXED: Question detection with better anti-loop
-  detectQuestionInBotMessage(callId, botMessage) {
-    const session = this.activeSessions.get(callId);
-    if (!session) return false;
-
-    // ANTI-LOOP: Strong protection against detection in wrong phases
-    if (session.progress.schedulingStarted) {
-      console.log('🚫 ANTI-LOOP: Scheduling started - no question detection');
-      return false;
-    }
-
-    if (session.progress.allQuestionsCompleted) {
-      console.log('🚫 ANTI-LOOP: All questions complete - no question detection');
-      return false;
-    }
-
-    if (session.progress.waitingForAnswer) {
-      console.log('🚫 ANTI-LOOP: Already waiting for answer - no new question detection');
-      return false;
-    }
-
-    const botContent = botMessage.toLowerCase();
-    
-    // ANTI-LOOP: Don't detect scheduling content as questions
-    const schedulingIndicators = [
-      'available', 'times', 'slots', 'calendar', 'schedule', 'appointment',
-      'monday', 'tuesday', 'wednesday', 'thursday', 'friday',
-      'am', 'pm', 'morning', 'afternoon', 'evening', 'day works', 'time works'
-    ];
-    
-    const hasSchedulingContent = schedulingIndicators.some(indicator => 
-      botContent.includes(indicator)
-    );
-    
-    if (hasSchedulingContent) {
-      console.log('🚫 ANTI-LOOP: Bot message contains scheduling content - not a discovery question');
-      return false;
-    }
-
-    const nextQuestionIndex = session.questions.findIndex(q => !q.asked && !q.answered);
-    if (nextQuestionIndex === -1) {
-      console.log('🚫 ANTI-LOOP: No more questions to ask');
-      return false;
-    }
-
-    // ANTI-LOOP: Rate limiting check
-    const now = Date.now();
-    if (session.antiLoop.lastQuestionAskedAt > 0) {
-      const timeSinceLastQuestion = now - session.antiLoop.lastQuestionAskedAt;
-      if (timeSinceLastQuestion < 3000) { // 3 seconds minimum between questions
-        console.log(`🚫 ANTI-LOOP: Too soon since last question (${timeSinceLastQuestion}ms)`);
-        return false;
-      }
-    }
-
-    // More flexible detection patterns
-    let detected = false;
-    switch (nextQuestionIndex) {
-      case 0: // How did you hear about us?
-        detected = botContent.includes('hear about') || 
-                  botContent.includes('how did you find') ||
-                  botContent.includes('where did you hear');
-        break;
-        
-      case 1: // What industry or business are you in?
-        detected = botContent.includes('industry') || 
-                  (botContent.includes('business') && !botContent.includes('hear about')) ||
-                  botContent.includes('what field') ||
-                  botContent.includes('line of work');
-        break;
-        
-      case 2: // What's your main product or service?
-        detected = (botContent.includes('product') || botContent.includes('service')) &&
-                  !botContent.includes('industry') &&
-                  !botContent.includes('business');
-        break;
-        
-      case 3: // Are you currently running any ads?
-        detected = (botContent.includes('running') && botContent.includes('ads')) || 
-                  botContent.includes('advertising') ||
-                  botContent.includes('marketing campaigns');
-        break;
-        
-      case 4: // Are you using any CRM system?
-        detected = botContent.includes('crm') || 
-                  (botContent.includes('using') && botContent.includes('system')) ||
-                  botContent.includes('customer management');
-        break;
-        
-      case 5: // What are your biggest pain points or challenges?
-        detected = botContent.includes('pain point') || 
-                  botContent.includes('challenge') || 
-                  botContent.includes('biggest') ||
-                  botContent.includes('struggle') ||
-                  botContent.includes('difficult');
-        break;
-    }
-
-    console.log(`🔍 Question ${nextQuestionIndex + 1} detection - Content: "${botContent.substring(0, 50)}..." - Detected: ${detected}`);
-
-    if (detected) {
-      return this.markQuestionAsked(callId, nextQuestionIndex, botMessage);
-    }
-
-    return false;
-  }
-
-  // ANTI-LOOP: Generate context prompt with strict phase control
-  generateContextPrompt(callId) {
-    const session = this.activeSessions.get(callId);
-    if (!session) return '';
-
-    // ANTI-LOOP: Strict phase-based prompting
-    if (session.progress.schedulingStarted) {
-      console.log('🚫 ANTI-LOOP: Scheduling started - no discovery prompts');
-      return `
-
-SCHEDULING PHASE ACTIVE:
-- All discovery questions are complete (${session.progress.questionsCompleted}/6)
-- Focus ONLY on scheduling and booking
-- Ask about preferred days/times
-- When user gives specific time, confirm booking immediately
-- Do NOT ask any more discovery questions
-
-CRITICAL: You are now in SCHEDULING mode only.`;
-    }
-
-    if (session.progress.allQuestionsCompleted) {
-      console.log('🚫 ANTI-LOOP: All questions complete - transition to scheduling');
-      return `
-
-DISCOVERY COMPLETE - TRANSITION TO SCHEDULING:
-- All 6 discovery questions have been answered
-- Say: "Perfect! I have all the information I need. Let's find you a time that works. What day works best for you?"
-- Do NOT ask any more discovery questions
-- Focus ONLY on scheduling from now on
-
-CRITICAL: Transition to scheduling phase immediately.`;
-    }
-
-    if (!session.progress.greetingCompleted) {
-      return `
-
-GREETING PHASE:
-- Wait for user to respond to greeting
-- After they respond, acknowledge and ask first discovery question
-- Do NOT ask multiple questions at once
-
-Current phase: Greeting`;
-    }
-
-    // Discovery phase prompting
-    const nextUnanswered = session.questions.find(q => !q.answered);
-    if (nextUnanswered) {
-      const questionNumber = session.questions.indexOf(nextUnanswered) + 1;
-      const completed = session.questions
-        .filter(q => q.answered)
-        .map((q, i) => `${session.questions.indexOf(q) + 1}. ${q.question} ✓`)
-        .join('\n');
-
-      return `
-
-DISCOVERY PHASE (${session.progress.questionsCompleted}/6 COMPLETE):
-Completed Questions:
-${completed || 'None yet'}
-
-NEXT QUESTION TO ASK:
-${questionNumber}. ${nextUnanswered.question}
-
-CRITICAL ANTI-LOOP RULES:
-- Ask question ${questionNumber} EXACTLY as written above
-- Ask ONLY this one question, nothing else
-- Wait for user's complete answer before proceeding
-- Do NOT repeat questions that have been answered
-- Do NOT skip to scheduling until all 6 questions are done
-- If user asks about scheduling/times, say: "Let me finish getting some information first, then we'll find you a perfect time."
-
-Current phase: Discovery (Question ${questionNumber})`;
-    }
-
-    return '';
   }
 
   // Cleanup session
@@ -565,6 +381,7 @@ Current phase: Discovery (Question ${questionNumber})`;
       greetingCompleted: session.progress.greetingCompleted,
       waitingForAnswer: session.progress.waitingForAnswer,
       currentQuestionIndex: session.progress.currentQuestionIndex,
+      customerData: session.customerData,
       questions: session.questions.map(q => ({
         question: q.question,
         asked: q.asked,
@@ -587,6 +404,7 @@ Current phase: Discovery (Question ${questionNumber})`;
         questionsCompleted: session.progress.questionsCompleted,
         schedulingStarted: session.progress.schedulingStarted,
         conversationPhase: session.progress.conversationPhase,
+        customerEmail: session.customerData.email,
         age: Date.now() - session.createdAt
       });
     }
@@ -601,6 +419,7 @@ Current phase: Discovery (Question ${questionNumber})`;
     session.progress.schedulingStarted = true;
     session.progress.conversationPhase = 'scheduling';
     session.progress.allQuestionsCompleted = true;
+    session.progress.waitingForAnswer = false;
     
     console.log(`🔧 FORCED scheduling transition for ${callId}`);
     return true;
