@@ -1,4 +1,4 @@
-// src/services/webhooks/WebhookService.js - UPDATED WITH BETTER TYPEFORM INTEGRATION
+// src/services/webhooks/WebhookService.js - FIXED (REAL TYPEFORM DATA, GOOGLE CALENDAR INTEGRATION)
 const axios = require('axios');
 const config = require('../../config/environment');
 const { getCalendarService, isCalendarInitialized } = require('../calendar/CalendarHelpers');
@@ -9,7 +9,7 @@ global.lastTypeformSubmission = null;
 // Store active calls metadata
 const activeCallsMetadata = new Map();
 
-// IMPROVED: Helper function to store contact info globally with better logging
+// Store contact info globally with better logging (FROM WORKING CODE)
 function storeContactInfoGlobally(name, email, phone, source = 'Unknown') {
   console.log(`📝 Storing contact info globally from ${source}:`, { name, email, phone });
   
@@ -47,7 +47,7 @@ function storeContactInfoGlobally(name, email, phone, source = 'Unknown') {
   }
 }
 
-// IMPROVED: Better call metadata management
+// Better call metadata management
 function addCallMetadata(callId, metadata) {
   console.log(`📞 Adding call metadata for ${callId}:`, metadata);
   
@@ -130,7 +130,7 @@ async function updateConversationState(callId, discoveryComplete, preferredDay) 
   }
 }
 
-// Enhanced webhook sending function with Google Calendar integration
+// Enhanced webhook sending function with Google Calendar integration (FROM WORKING CODE WITH CALENDAR)
 async function sendSchedulingPreference(name, email, phone, preferredDay, callId, discoveryData = {}) {
   try {
     console.log('=== WEBHOOK SENDING ===');
@@ -138,7 +138,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
     console.log('Raw discovery data input:', JSON.stringify(discoveryData, null, 2));
     console.log('Global Typeform submission:', global.lastTypeformSubmission);
     
-    // IMPROVED: Enhanced email retrieval with multiple fallbacks
+    // Enhanced email retrieval with multiple fallbacks (FROM WORKING CODE)
     let finalEmail = email;
     let finalName = name;
     let finalPhone = phone;
@@ -195,7 +195,7 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       return { success: false, error: 'No email address available' };
     }
 
-    // Process discovery data with better field mapping
+    // Process discovery data with better field mapping (FROM WORKING CODE)
     console.log('🔧 PROCESSING DISCOVERY DATA:');
     console.log('Raw discoveryData input:', JSON.stringify(discoveryData, null, 2));
     
@@ -262,17 +262,17 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       finalPhone = '+1' + finalPhone.replace(/[^0-9]/g, '');
     }
 
-    // Google Calendar booking logic
+    // Google Calendar booking logic (REAL CALENDAR ONLY)
     let bookingResult = null;
     let meetingDetails = null;
 
     if (preferredDay && preferredDay !== 'Call ended early' && preferredDay !== 'Error occurred') {
       try {
-        console.log('📅 Attempting calendar booking...');
+        console.log('📅 Attempting Google Calendar booking...');
         
         const calendarService = getCalendarService();
         if (!calendarService || !isCalendarInitialized()) {
-          console.log('⚠️ Calendar service not available, skipping booking');
+          throw new Error('Calendar service not available');
         } else {
           const timePreference = calendarService.parseTimePreference('', preferredDay);
           const { getAvailableTimeSlots } = require('../calendar/CalendarHelpers');
@@ -299,8 +299,10 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
                 endTime: selectedSlot.endTime,
                 displayTime: selectedSlot.displayTime
               };
-              console.log('✅ Calendar booking successful');
+              console.log('✅ Google Calendar booking successful');
             }
+          } else {
+            console.log('❌ No available slots found for preferred time');
           }
         }
       } catch (calendarError) {
@@ -324,12 +326,12 @@ async function sendSchedulingPreference(name, email, phone, preferredDay, callId
       event_link: meetingDetails?.eventLink || '',
       event_id: meetingDetails?.eventId || '',
       scheduled_time: meetingDetails?.startTime || '',
-      calendar_status: isCalendarInitialized() ? 'real_calendar' : 'demo_mode',
+      calendar_status: isCalendarInitialized() ? 'real_calendar' : 'calendar_unavailable',
       // Data source tracking
       data_source: {
         typeform: !!global.lastTypeformSubmission,
         call_metadata: activeCallsMetadata.has(callId),
-        url_params: false // Could be enhanced
+        url_params: false
       },
       // Individual fields for direct access
       "How did you hear about us": formattedDiscoveryData["How did you hear about us"] || '',
@@ -456,7 +458,7 @@ function getCallMetadata(callId) {
   return activeCallsMetadata.get(callId);
 }
 
-// New function to handle Typeform webhook
+// Handle Typeform webhook
 function handleTypeformWebhook(typeformData) {
   console.log('📋 Handling Typeform webhook:', typeformData);
   
