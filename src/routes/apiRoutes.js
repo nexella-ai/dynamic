@@ -1,21 +1,22 @@
-// src/routes/apiRoutes.js - API Route Handlers WITH CUSTOMER DATA FIX
+// src/routes/apiRoutes.js - UPDATED WITH CALENDAR TESTING ENDPOINTS
 const express = require('express');
 const axios = require('axios');
 const config = require('../config/environment');
 const { storeContactInfoGlobally } = require('../services/webhooks/WebhookService');
-const { isCalendarInitialized } = require('../services/calendar/CalendarHelpers');
+const { isCalendarInitialized, autoBookAppointment, getAvailableTimeSlots } = require('../services/calendar/CalendarHelpers');
 
 const router = express.Router();
 
 // Root endpoint
 router.get('/', (req, res) => {
-  const status = isCalendarInitialized() ? 'Real Calendar' : 'Demo Mode (add environment variables for real calendar)';
-  res.send(`Nexella WebSocket Server is live! Status: ${status}`);
+  const status = isCalendarInitialized() ? 'Real Calendar ✅' : 'Demo Mode (add environment variables for real calendar) ⚠️';
+  res.send(`Nexella WebSocket Server is live! Calendar Status: ${status}`);
 });
 
-// Health check endpoint
+// Enhanced health check endpoint with calendar status
 router.get('/health', (req, res) => {
   const validation = config.validate();
+  const calendarStatus = isCalendarInitialized();
   
   res.json({
     status: 'healthy',
@@ -24,10 +25,194 @@ router.get('/health', (req, res) => {
       hasOpenAI: !!config.OPENAI_API_KEY,
       hasRetell: !!config.RETELL_API_KEY,
       hasGoogleCalendar: validation.hasGoogleCalendar,
-      calendarMode: validation.hasGoogleCalendar ? 'real' : 'demo'
+      calendarMode: calendarStatus ? 'real_calendar' : 'demo_mode',
+      calendarInitialized: calendarStatus
     },
-    validation: validation
+    validation: validation,
+    calendarDetails: {
+      initialized: calendarStatus,
+      projectId: config.GOOGLE_PROJECT_ID ? 'SET' : 'MISSING',
+      serviceAccount: config.GOOGLE_CLIENT_EMAIL ? 'SET' : 'MISSING',
+      privateKey: config.GOOGLE_PRIVATE_KEY ? 'SET' : 'MISSING'
+    }
   });
+});
+
+// NEW: Calendar debug endpoint
+router.get('/debug/calendar', async (req, res) => {
+  try {
+    console.log('🔍 DEBUGGING CALENDAR SETUP');
+    
+    const debugInfo = {
+      timestamp: new Date().toISOString(),
+      environment: {
+        GOOGLE_PROJECT_ID: config.GOOGLE_PROJECT_ID ? '✅ SET' : '❌ MISSING',
+        GOOGLE_PRIVATE_KEY: config.GOOGLE_PRIVATE_KEY ? '✅ SET' : '❌ MISSING',
+        GOOGLE_CLIENT_EMAIL: config.GOOGLE_CLIENT_EMAIL ? '✅ SET' : '❌ MISSING',
+        GOOGLE_CALENDAR_ID: config.GOOGLE_CALENDAR_ID || 'primary (default)'
+      },
+      calendar: {
+        initialized: isCalendarInitialized(),
+        status: isCalendarInitialized() ? 'READY ✅' : 'NOT READY ❌'
+      },
+      tests: {}
+    };
+
+    // Test calendar initialization
+    try {
+      const { initializeCalendarService } = require('../services/calendar/CalendarHelpers');
+      const initResult = await initializeCalendarService();
+      debugInfo.tests.initialization = {
+        success: initResult,
+        message: initResult ? 'Calendar service initialized successfully' : 'Calendar initialization failed'
+      };
+    } catch (error) {
+      debugInfo.tests.initialization = {
+        success: false,
+        error: error.message
+      };
+    }
+
+    // Test getting available slots
+    if (isCalendarInitialized()) {
+      try {
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        
+        const slots = await getAvailableTimeSlots(tomorrow);
+        debugInfo.tests.availableSlots = {
+          success: true,
+          date: tomorrow.toDateString(),
+          slotsFound: slots.length,
+          sampleSlots: slots.slice(0, 3).map(slot => ({
+            time: slot.displayTime,
+            startTime: slot.startTime
+          }))
+        };
+      } catch (error) {
+        debugInfo.tests.availableSlots = {
+          success: false,
+          error: error.message
+        };
+      }
+    }
+
+    res.json(debugInfo);
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      message: 'Calendar debug failed'
+    });
+  }
+});
+
+// NEW: Test booking endpoint
+router.post('/test-booking', express.json(), async (req, res) => {
+  try {
+    console.log('🧪 Testing calendar booking...');
+    
+    const { name, email, phone, datetime } = req.body;
+    
+    // Validate input
+    if (!name || !email || !datetime) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: name, email, datetime',
+        required: ['name', 'email', 'datetime'],
+        received: { name: !!name, email: !!email, datetime: !!datetime }
+      });
+    }
+    
+    // Check calendar status
+    if (!isCalendarInitialized()) {
+      return res.status(500).json({
+        success: false,
+        error: 'Google Calendar not initialized',
+        hint: 'Check environment variables and calendar setup',
+        calendarStatus: 'NOT_INITIALIZED'
+      });
+    }
+    
+    const bookingDate = new Date(datetime);
+    const discoveryData = {
+      test: 'This is a test booking from API endpoint',
+      source: 'API test endpoint',
+      timestamp: new Date().toISOString()
+    };
+    
+    console.log('📅 Attempting test booking:', {
+      name,
+      email,
+      phone,
+      datetime: bookingDate.toISOString()
+    });
+    
+    const result = await autoBookAppointment(name, email, phone, bookingDate, discoveryData);
+    
+    if (result.success) {
+      console.log('✅ Test booking successful!');
+      
+      // Also test the webhook
+      const { sendSchedulingPreference } = require('../services/webhooks/WebhookService');
+      
+      const webhookResult = await sendSchedulingPreference(
+        name,
+        email,
+        phone,
+        `Test appointment at ${bookingDate.toLocaleString()}`,
+        'test_call_' + Date.now(),
+        {
+          ...discoveryData,
+          appointment_booked: true,
+          booking_confirmed: true,
+          meeting_link: result.meetingLink,
+          event_id: result.eventId,
+          event_link: result.eventLink,
+          test_booking: true
+        }
+      );
+      
+      res.json({
+        success: true,
+        message: 'Test booking completed successfully',
+        calendar: {
+          eventId: result.eventId,
+          meetingLink: result.meetingLink,
+          eventLink: result.eventLink,
+          displayTime: result.displayTime,
+          timezone: result.timezone || 'America/Phoenix'
+        },
+        webhook: {
+          sent: webhookResult.success,
+          error: webhookResult.error || null
+        },
+        bookingDetails: {
+          customerName: name,
+          customerEmail: email,
+          requestedTime: bookingDate.toISOString(),
+          confirmedTime: result.startTime
+        }
+      });
+      
+    } else {
+      console.log('❌ Test booking failed:', result.error);
+      res.status(500).json({
+        success: false,
+        error: result.error,
+        message: result.message || 'Booking failed',
+        calendarStatus: 'BOOKING_FAILED'
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ Test booking error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
 });
 
 // NEW: Set customer data endpoint - for N8N to send Typeform data
@@ -348,14 +533,19 @@ router.get('/calendar-status', (req, res) => {
   res.json({
     initialized: isCalendarInitialized(),
     info: calendarService ? calendarService.getCalendarInfo() : null,
-    mode: isCalendarInitialized() ? 'real_calendar' : 'demo_mode'
+    mode: isCalendarInitialized() ? 'real_calendar' : 'demo_mode',
+    environmentVariables: {
+      projectId: config.GOOGLE_PROJECT_ID ? 'SET' : 'MISSING',
+      serviceAccount: config.GOOGLE_CLIENT_EMAIL ? 'SET' : 'MISSING',
+      privateKey: config.GOOGLE_PRIVATE_KEY ? `SET (length: ${config.GOOGLE_PRIVATE_KEY.length})` : 'MISSING',
+      calendarId: config.GOOGLE_CALENDAR_ID || 'primary (default)'
+    }
   });
 });
 
 // Test endpoint for calendar functionality
 router.get('/test-calendar', async (req, res) => {
   try {
-    const { getAvailableTimeSlots } = require('../services/calendar/CalendarHelpers');
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     
@@ -365,12 +555,14 @@ router.get('/test-calendar', async (req, res) => {
       success: true,
       date: tomorrow.toDateString(),
       availableSlots: slots,
-      mode: isCalendarInitialized() ? 'real_calendar' : 'demo_mode'
+      mode: isCalendarInitialized() ? 'real_calendar' : 'demo_mode',
+      calendarStatus: isCalendarInitialized() ? 'INITIALIZED' : 'NOT_INITIALIZED'
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
+      calendarStatus: isCalendarInitialized() ? 'INITIALIZED_BUT_ERROR' : 'NOT_INITIALIZED'
     });
   }
 });
