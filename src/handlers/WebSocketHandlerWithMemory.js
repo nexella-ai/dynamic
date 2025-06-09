@@ -680,14 +680,31 @@ CRITICAL RULES:
     // Mark scheduling as started if not already
     globalDiscoveryManager.markSchedulingStarted(this.callId);
     
-    // Check for specific time request
-    const specificTimeMatch = this.detectSpecificTimeRequest(userMessage);
-    if (specificTimeMatch) {
-      await this.handleBookingWithMemory(specificTimeMatch, responseId);
+    // FIXED: Use the new appointment booking detection
+    const { detectAndBookAppointment } = require('../services/calendar/CalendarHelpers');
+    
+    const bookingResult = await detectAndBookAppointment(
+      userMessage, 
+      this.connectionData, 
+      globalDiscoveryManager.getFinalDiscoveryData(this.callId)
+    );
+    
+    if (bookingResult) {
+      console.log('📅 APPOINTMENT BOOKING RESULT:', bookingResult);
+      
+      await this.sendResponse(bookingResult.message, responseId);
+      
+      if (bookingResult.success) {
+        // Send webhook with booking confirmation
+        setTimeout(() => this.sendWebhookData({
+          dayName: 'appointment',
+          timeString: 'booked successfully'
+        }, globalDiscoveryManager.getFinalDiscoveryData(this.callId)), 500);
+      }
       return;
     }
 
-    // FIXED: Generate availability response with real Arizona MST times
+    // If no booking detected, generate availability response
     try {
       const availabilityResponse = await this.generateRealAvailabilityResponse();
       this.conversationHistory.push({ role: 'assistant', content: availabilityResponse });
