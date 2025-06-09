@@ -1,4 +1,4 @@
-// src/handlers/WebSocketHandler.js - FIXED FOR AUTOMATIC GOOGLE CALENDAR BOOKING
+// src/handlers/WebSocketHandler.js - UPDATED WITH ENHANCED CALENDAR BOOKING
 const axios = require('axios');
 const config = require('../config/environment');
 const globalDiscoveryManager = require('../services/discovery/GlobalDiscoveryManager');
@@ -6,7 +6,8 @@ const {
   autoBookAppointment,
   getAvailableTimeSlots,
   generateAvailabilityResponse,
-  checkAvailability
+  checkAvailability,
+  isCalendarInitialized
 } = require('../services/calendar/CalendarHelpers');
 const { 
   sendSchedulingPreference, 
@@ -63,7 +64,7 @@ class WebSocketHandler {
       lastAcknowledgment: ''
     };
 
-    // FIXED: Enhanced system prompt for immediate booking
+    // ENHANCED: System prompt with calendar integration
     this.conversationHistory = [
       {
         role: 'system',
@@ -82,6 +83,7 @@ CRITICAL APPOINTMENT BOOKING RULES:
 - Then confirm: "Your appointment is confirmed for [day] at [time] Arizona time. You'll receive a calendar invitation shortly!"
 - Do NOT ask for confirmation - just book it immediately
 - Do NOT offer alternatives unless the specific time is unavailable
+- ALWAYS mention they'll receive a calendar invitation at their email
 
 SCHEDULING APPROACH:
 - Our business hours are 8 AM to 4 PM Arizona time (MST), Monday through Friday
@@ -109,7 +111,13 @@ SPEAKING STYLE:
 - Keep your statements and questions concise but complete
 - Be warm and friendly but speak in a calm, measured way
 
-Remember: When they say a specific day and time, book it IMMEDIATELY. No confirmation needed.`
+CALENDAR INTEGRATION:
+- We have automatic Google Calendar booking enabled
+- When booking appointments, customers will receive automatic calendar invitations
+- Meeting links are generated automatically
+- Always confirm the email address where they'll receive the invitation
+
+Remember: When they say a specific day and time, book it IMMEDIATELY with automatic calendar creation.`
       }
     ];
 
@@ -134,6 +142,10 @@ Remember: When they say a specific day and time, book it IMMEDIATELY. No confirm
   }
 
   async initialize() {
+    // Check calendar status
+    const calendarStatus = isCalendarInitialized();
+    console.log('📅 Calendar Status:', calendarStatus ? 'ENABLED ✅' : 'DISABLED ⚠️');
+    
     // Try to fetch call metadata but don't block if it fails
     if (this.callId) {
       try {
@@ -243,7 +255,7 @@ Remember: When they say a specific day and time, book it IMMEDIATELY. No confirm
     this.ws.on('error', this.handleError.bind(this));
   }
 
-  // FIXED: Enhanced message handling with immediate booking
+  // ENHANCED: Message handling with calendar integration
   async handleMessage(data) {
     try {
       clearTimeout(this.autoGreetingTimer);
@@ -299,7 +311,7 @@ Remember: When they say a specific day and time, book it IMMEDIATELY. No confirm
     }
   }
 
-  // FIXED: Enhanced message processing with immediate booking
+  // ENHANCED: Message processing with improved booking
   async processUserMessage(parsed) {
     const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
     const userMessage = latestUserUtterance?.content || "";
@@ -435,6 +447,180 @@ Remember: When they say a specific day and time, book it IMMEDIATELY. No confirm
     }
   }
 
+  // ENHANCED: Immediate appointment booking with calendar integration
+  async handleImmediateAppointmentBooking(appointmentRequest, responseId) {
+    try {
+      console.log('🎯 PROCESSING IMMEDIATE APPOINTMENT BOOKING WITH CALENDAR');
+      console.log('🕐 Requested time:', appointmentRequest.timeString);
+      console.log('📅 Requested date:', appointmentRequest.dayName);
+      console.log('👤 Customer data:', {
+        name: this.connectionData.customerName,
+        email: this.connectionData.customerEmail,
+        phone: this.connectionData.customerPhone
+      });
+      
+      // Check if time is within business hours
+      if (!appointmentRequest.isBusinessHours) {
+        const response = `I'd love to schedule you for ${appointmentRequest.dayName} at ${appointmentRequest.timeString}, but our business hours are 8 AM to 4 PM Arizona time. Would you like to choose a time between 8 AM and 4 PM instead?`;
+        await this.sendResponse(response, responseId);
+        return;
+      }
+
+      // Validate customer email
+      if (!this.connectionData.customerEmail || this.connectionData.customerEmail === 'prospect@example.com') {
+        console.log('❌ No valid customer email for booking');
+        const response = `I'd love to book that appointment for you! Could you provide your email address so I can send you the calendar invitation?`;
+        await this.sendResponse(response, responseId);
+        return;
+      }
+
+      // Get discovery data for the appointment
+      const discoveryData = {};
+      this.discoveryQuestions.forEach((q, index) => {
+        if (q.answered && q.answer) {
+          discoveryData[q.field] = q.answer;
+          discoveryData[`question_${index}`] = q.answer;
+        }
+      });
+
+      console.log('📋 Discovery data for appointment:', discoveryData);
+
+      // Step 1: Immediately confirm the booking to the user
+      const confirmationResponse = `Perfect! I'm booking you for ${appointmentRequest.dayName} at ${appointmentRequest.timeString} Arizona time right now. Your appointment is confirmed! You'll receive a calendar invitation at ${this.connectionData.customerEmail} shortly.`;
+      await this.sendResponse(confirmationResponse, responseId);
+
+      // Mark as booked to prevent loops
+      this.appointmentBooked = true;
+      this.conversationState = 'completed';
+
+      // Step 2: Attempt real appointment booking
+      console.log('📅 ATTEMPTING REAL CALENDAR BOOKING...');
+      try {
+        // Check if calendar is available
+        if (!isCalendarInitialized()) {
+          throw new Error('Google Calendar not initialized');
+        }
+
+        const bookingResult = await autoBookAppointment(
+          this.connectionData.customerName || 'Customer',
+          this.connectionData.customerEmail,
+          this.connectionData.customerPhone,
+          appointmentRequest.dateTime,
+          discoveryData
+        );
+
+        console.log('📅 Calendar booking result:', bookingResult);
+
+        if (bookingResult.success) {
+          console.log('✅ REAL CALENDAR BOOKING SUCCESSFUL!');
+          console.log('📧 Calendar invitation sent to:', this.connectionData.customerEmail);
+          console.log('🔗 Meeting link:', bookingResult.meetingLink);
+          console.log('📅 Event ID:', bookingResult.eventId);
+
+          // Send success webhook with calendar details
+          setTimeout(async () => {
+            try {
+              await sendSchedulingPreference(
+                this.connectionData.customerName || 'Customer',
+                this.connectionData.customerEmail,
+                this.connectionData.customerPhone,
+                `${appointmentRequest.dayName} at ${appointmentRequest.timeString}`,
+                this.connectionData.callId,
+                {
+                  ...discoveryData,
+                  appointment_booked: true,
+                  booking_confirmed: true,
+                  requested_time: appointmentRequest.timeString,
+                  requested_day: appointmentRequest.dayName,
+                  meeting_link: bookingResult.meetingLink || '',
+                  event_id: bookingResult.eventId || '',
+                  event_link: bookingResult.eventLink || '',
+                  calendar_status: 'success',
+                  customer_email_confirmed: this.connectionData.customerEmail
+                }
+              );
+              console.log('✅ Success webhook sent with calendar details');
+            } catch (webhookError) {
+              console.error('❌ Error sending success webhook:', webhookError.message);
+            }
+          }, 1000);
+
+        } else {
+          // Booking failed - send webhook for manual processing
+          console.log('❌ CALENDAR BOOKING FAILED:', bookingResult.error);
+          
+          setTimeout(async () => {
+            try {
+              await sendSchedulingPreference(
+                this.connectionData.customerName || 'Customer',
+                this.connectionData.customerEmail,
+                this.connectionData.customerPhone,
+                `${appointmentRequest.dayName} at ${appointmentRequest.timeString}`,
+                this.connectionData.callId,
+                {
+                  ...discoveryData,
+                  appointment_requested: true,
+                  calendar_booking_failed: true,
+                  booking_error: bookingResult.error,
+                  requested_time: appointmentRequest.timeString,
+                  requested_day: appointmentRequest.dayName,
+                  booking_confirmed_to_user: true,
+                  calendar_status: 'failed',
+                  needs_manual_booking: true
+                }
+              );
+              console.log('✅ Fallback webhook sent - manual booking needed');
+            } catch (webhookError) {
+              console.error('❌ Error sending fallback webhook:', webhookError.message);
+            }
+          }, 1000);
+        }
+        
+      } catch (bookingError) {
+        console.error('❌ Calendar booking exception:', bookingError.message);
+        
+        // Send webhook for manual processing with error details
+        setTimeout(async () => {
+          try {
+            await sendSchedulingPreference(
+              this.connectionData.customerName || 'Customer',
+              this.connectionData.customerEmail,
+              this.connectionData.customerPhone,
+              `${appointmentRequest.dayName} at ${appointmentRequest.timeString}`,
+              this.connectionData.callId,
+              {
+                ...discoveryData,
+                appointment_requested: true,
+                calendar_system_error: true,
+                error_details: bookingError.message,
+                requested_time: appointmentRequest.timeString,
+                requested_day: appointmentRequest.dayName,
+                booking_confirmed_to_user: true,
+                calendar_status: 'error',
+                needs_manual_booking: true
+              }
+            );
+            console.log('✅ Error webhook sent - manual booking needed');
+          } catch (webhookError) {
+            console.error('❌ Error sending error webhook:', webhookError.message);
+          }
+        }, 1000);
+      }
+
+      this.webhookSent = true;
+      
+    } catch (error) {
+      console.error('❌ Error in immediate appointment booking:', error.message);
+      
+      // Fallback response
+      const errorResponse = `Perfect! I'll get you scheduled for ${appointmentRequest.dayName} at ${appointmentRequest.timeString} Arizona time. You'll receive confirmation details at ${this.connectionData.customerEmail || 'your email'} shortly.`;
+      await this.sendResponse(errorResponse, responseId);
+      
+      this.appointmentBooked = true;
+      this.conversationState = 'completed';
+    }
+  }
+
   // NEW: Detect specific appointment booking requests with higher precision
   detectSpecificAppointmentRequest(userMessage) {
     console.log('🎯 CHECKING FOR SPECIFIC APPOINTMENT REQUEST:', userMessage);
@@ -530,122 +716,6 @@ Remember: When they say a specific day and time, book it IMMEDIATELY. No confirm
     
     targetDate.setHours(hour, minutes, 0, 0);
     return targetDate;
-  }
-
-  // NEW: Handle immediate appointment booking without asking for confirmation
-  async handleImmediateAppointmentBooking(appointmentRequest, responseId) {
-    try {
-      console.log('🎯 PROCESSING IMMEDIATE APPOINTMENT BOOKING');
-      console.log('🕐 Requested time:', appointmentRequest.timeString);
-      console.log('📅 Requested date:', appointmentRequest.dayName);
-      
-      // Check if time is within business hours
-      if (!appointmentRequest.isBusinessHours) {
-        const response = `I'd love to schedule you for ${appointmentRequest.dayName} at ${appointmentRequest.timeString}, but our business hours are 8 AM to 4 PM Arizona time. Would you like to choose a time between 8 AM and 4 PM instead?`;
-        await this.sendResponse(response, responseId);
-        return;
-      }
-
-      // Get discovery data for the appointment
-      const discoveryData = {};
-      this.discoveryQuestions.forEach((q, index) => {
-        if (q.answered && q.answer) {
-          discoveryData[q.field] = q.answer;
-          discoveryData[`question_${index}`] = q.answer;
-        }
-      });
-
-      console.log('📋 Discovery data for appointment:', discoveryData);
-
-      // Step 1: Immediately confirm the booking to the user
-      const confirmationResponse = `Perfect! I'm booking you for ${appointmentRequest.dayName} at ${appointmentRequest.timeString} Arizona time right now. Your appointment is confirmed! You'll receive a calendar invitation shortly.`;
-      await this.sendResponse(confirmationResponse, responseId);
-
-      // Mark as booked to prevent loops
-      this.appointmentBooked = true;
-      this.conversationState = 'completed';
-
-      // Step 2: Attempt real appointment booking in background
-      try {
-        const bookingResult = await autoBookAppointment(
-          this.connectionData.customerName || this.bookingInfo.name || 'Customer',
-          this.connectionData.customerEmail || this.bookingInfo.email,
-          this.connectionData.customerPhone || this.bookingInfo.phone,
-          appointmentRequest.dateTime,
-          discoveryData
-        );
-
-        console.log('📅 Background booking result:', bookingResult);
-
-        // Step 3: Send webhook with booking details
-        setTimeout(async () => {
-          try {
-            await sendSchedulingPreference(
-              this.connectionData.customerName || this.bookingInfo.name || 'Customer',
-              this.connectionData.customerEmail || this.bookingInfo.email,
-              this.connectionData.customerPhone || this.bookingInfo.phone,
-              `${appointmentRequest.dayName} at ${appointmentRequest.timeString}`,
-              this.connectionData.callId,
-              {
-                ...discoveryData,
-                appointment_booked: true,
-                booking_confirmed: true,
-                requested_time: appointmentRequest.timeString,
-                requested_day: appointmentRequest.dayName,
-                meeting_link: bookingResult.meetingLink || '',
-                event_id: bookingResult.eventId || '',
-                event_link: bookingResult.eventLink || ''
-              }
-            );
-            console.log('✅ Webhook sent with immediate booking confirmation');
-          } catch (webhookError) {
-            console.error('❌ Error sending booking webhook:', webhookError.message);
-          }
-        }, 1000);
-
-        this.webhookSent = true;
-        
-      } catch (bookingError) {
-        console.error('❌ Background booking failed:', bookingError.message);
-        
-        // Even if technical booking fails, we already confirmed to user
-        // Send webhook anyway for manual processing
-        setTimeout(async () => {
-          try {
-            await sendSchedulingPreference(
-              this.connectionData.customerName || this.bookingInfo.name || 'Customer',
-              this.connectionData.customerEmail || this.bookingInfo.email,
-              this.connectionData.customerPhone || this.bookingInfo.phone,
-              `${appointmentRequest.dayName} at ${appointmentRequest.timeString}`,
-              this.connectionData.callId,
-              {
-                ...discoveryData,
-                appointment_requested: true,
-                technical_booking_failed: true,
-                requested_time: appointmentRequest.timeString,
-                requested_day: appointmentRequest.dayName,
-                booking_confirmed_to_user: true
-              }
-            );
-            console.log('✅ Fallback webhook sent - manual booking needed');
-          } catch (webhookError) {
-            console.error('❌ Error sending fallback webhook:', webhookError.message);
-          }
-        }, 1000);
-
-        this.webhookSent = true;
-      }
-      
-    } catch (error) {
-      console.error('❌ Error in immediate appointment booking:', error.message);
-      
-      // Fallback response
-      const errorResponse = `Perfect! I'll get you scheduled for ${appointmentRequest.dayName} at ${appointmentRequest.timeString} Arizona time. You'll receive confirmation details shortly.`;
-      await this.sendResponse(errorResponse, responseId);
-      
-      this.appointmentBooked = true;
-      this.conversationState = 'completed';
-    }
   }
 
   // FIXED: Send response with proper timing
@@ -760,7 +830,7 @@ ${questionNumber}. ${nextUnanswered.question}
 CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions. Do NOT skip to scheduling until all 6 are done.`;
       }
     } else {
-      return '\n\nAll 6 discovery questions completed. Ready for scheduling. When user specifies a day and time, book the appointment IMMEDIATELY without asking for confirmation.';
+      return '\n\nAll 6 discovery questions completed. Ready for scheduling. When user specifies a day and time, book the appointment IMMEDIATELY without asking for confirmation. Mention they will receive a calendar invitation.';
     }
     return '';
   }
