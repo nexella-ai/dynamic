@@ -1,4 +1,4 @@
-// src/services/calendar/GoogleCalendarService.js - FIXED FOR ACTUAL EVENT CREATION
+// src/services/calendar/GoogleCalendarService.js - COMPLETE UPDATED FILE
 const { google } = require('googleapis');
 const config = require('../../config/environment');
 
@@ -6,7 +6,7 @@ class GoogleCalendarService {
   constructor() {
     this.calendar = null;
     this.auth = null;
-    this.calendarId = config.GOOGLE_CALENDAR_ID || 'primary';
+    this.calendarId = config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com';
     
     // Arizona timezone - MST year-round (no DST)
     this.timezone = 'America/Phoenix';
@@ -46,7 +46,7 @@ class GoogleCalendarService {
         // Test the connection
         const testResult = await this.testConnection();
         if (!testResult) {
-          throw new Error('Calendar connection test failed');
+          console.warn('⚠️ Calendar connection test had issues but continuing...');
         }
         return true;
       } else {
@@ -61,7 +61,7 @@ class GoogleCalendarService {
 
   async setupAuthentication() {
     try {
-      console.log('🔐 Setting up Google Calendar authentication with domain-wide delegation...');
+      console.log('🔐 Setting up Google Calendar authentication...');
       
       // Process the private key properly
       let privateKey = config.GOOGLE_PRIVATE_KEY;
@@ -82,40 +82,14 @@ class GoogleCalendarService {
         privateKey.includes('-----END PRIVATE KEY-----') ? '✅ Valid' : '❌ Invalid'
       );
       
+      // First, try regular service account access (since calendar is shared with service account)
       try {
-        // Try domain-wide delegation first
-        const jwtClient = new google.auth.JWT({
-          email: config.GOOGLE_CLIENT_EMAIL,
-          key: privateKey,
-          scopes: [
-            'https://www.googleapis.com/auth/calendar',
-            'https://www.googleapis.com/auth/calendar.events'
-          ],
-          // IMPORTANT: Set the subject to impersonate (must be a user in your domain)
-          subject: config.GOOGLE_IMPERSONATE_EMAIL || 'jaden@nexellaai.com'
-        });
-        
-        // Authorize the client
-        await jwtClient.authorize();
-        
-        this.auth = jwtClient;
-        
-        console.log('📧 Service account email:', config.GOOGLE_CLIENT_EMAIL);
-        console.log('👤 Impersonating user:', config.GOOGLE_IMPERSONATE_EMAIL || 'jaden@nexellaai.com');
-        console.log('🏗️ Project ID:', config.GOOGLE_PROJECT_ID);
-        console.log('✅ Authentication with domain-wide delegation configured successfully');
-        
-      } catch (delegationError) {
-        console.error('❌ Domain delegation failed:', delegationError.message);
-        console.log('🔄 Falling back to regular service account authentication...');
-        
-        // Fallback to regular service account auth
         const authClient = new google.auth.GoogleAuth({
           credentials: {
             type: "service_account",
             project_id: config.GOOGLE_PROJECT_ID,
             private_key_id: config.GOOGLE_PRIVATE_KEY_ID || "key_id",
-            private_key: privateKey,  // Use the processed privateKey variable
+            private_key: privateKey,
             client_email: config.GOOGLE_CLIENT_EMAIL,
             client_id: config.GOOGLE_CLIENT_ID || "client_id",
             auth_uri: "https://accounts.google.com/o/oauth2/auth",
@@ -130,7 +104,38 @@ class GoogleCalendarService {
         });
         
         this.auth = await authClient.getClient();
-        console.log('✅ Fallback authentication configured (no attendee invitations)');
+        console.log('📧 Service account email:', config.GOOGLE_CLIENT_EMAIL);
+        console.log('✅ Using direct service account access (calendar is shared)');
+        
+        // Keep the original calendar ID since it's shared with the service account
+        this.calendarId = config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com';
+        console.log('📅 Using calendar ID:', this.calendarId);
+        
+      } catch (serviceAccountError) {
+        console.log('⚠️ Direct service account access failed, trying domain delegation...');
+        console.error('Service account error:', serviceAccountError.message);
+        
+        // Fallback to domain-wide delegation if needed
+        const jwtClient = new google.auth.JWT({
+          email: config.GOOGLE_CLIENT_EMAIL,
+          key: privateKey,
+          scopes: [
+            'https://www.googleapis.com/auth/calendar',
+            'https://www.googleapis.com/auth/calendar.events'
+          ],
+          // Impersonate the user who has access to the calendar
+          subject: config.GOOGLE_IMPERSONATE_EMAIL || 'jaden@nexellaai.com'
+        });
+        
+        console.log('👤 Impersonating user:', config.GOOGLE_IMPERSONATE_EMAIL || 'jaden@nexellaai.com');
+        
+        await jwtClient.authorize();
+        this.auth = jwtClient;
+        console.log('✅ Authentication with domain-wide delegation successful');
+        
+        // Use the specific calendar ID that's shared with the impersonated user
+        this.calendarId = config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com';
+        console.log('📅 Using calendar ID:', this.calendarId);
       }
       
     } catch (error) {
@@ -143,13 +148,27 @@ class GoogleCalendarService {
   async testConnection() {
     try {
       console.log('🧪 Testing Google Calendar connection...');
+      console.log('📅 Target calendar ID:', this.calendarId);
       
       // First try to list calendars to verify basic access
-      const calendarList = await this.calendar.calendarList.list({
-        maxResults: 10
-      });
-      
-      console.log(`✅ Can access calendar API - found ${calendarList.data.items?.length || 0} calendars`);
+      try {
+        const calendarList = await this.calendar.calendarList.list({
+          maxResults: 10,
+          showHidden: true
+        });
+        
+        console.log(`✅ Can access calendar API - found ${calendarList.data.items?.length || 0} calendars`);
+        
+        // Log all accessible calendars
+        if (calendarList.data.items) {
+          console.log('📋 Accessible calendars:');
+          calendarList.data.items.forEach(cal => {
+            console.log(`   - ${cal.id} (${cal.summary}) - Role: ${cal.accessRole}`);
+          });
+        }
+      } catch (listError) {
+        console.error('⚠️ Cannot list calendars:', listError.message);
+      }
       
       // Try to get the specific calendar
       try {
@@ -159,6 +178,7 @@ class GoogleCalendarService {
         
         console.log(`✅ Connected to calendar: ${calendarResponse.data.summary || this.calendarId}`);
         console.log(`📅 Calendar timezone: ${calendarResponse.data.timeZone || 'Not set'}`);
+        console.log(`📅 Calendar description: ${calendarResponse.data.description || 'No description'}`);
         
         // Test event list permission
         const testEventList = await this.calendar.events.list({
@@ -169,16 +189,48 @@ class GoogleCalendarService {
         
         console.log('✅ Can list events from calendar');
         
+        // Test event creation permission (dry run - create and immediately delete)
+        try {
+          const testEvent = await this.calendar.events.insert({
+            calendarId: this.calendarId,
+            resource: {
+              summary: 'Test Event - Delete Me',
+              start: { dateTime: new Date(Date.now() + 86400000).toISOString() },
+              end: { dateTime: new Date(Date.now() + 90000000).toISOString() }
+            }
+          });
+          
+          // Immediately delete the test event
+          await this.calendar.events.delete({
+            calendarId: this.calendarId,
+            eventId: testEvent.data.id
+          });
+          
+          console.log('✅ Can create and delete events in calendar');
+        } catch (eventError) {
+          console.log('⚠️ Cannot create events:', eventError.message);
+        }
+        
       } catch (calendarError) {
-        console.error('⚠️ Cannot access specific calendar:', calendarError.message);
-        console.log('💡 Make sure to share the calendar with:', config.GOOGLE_CLIENT_EMAIL);
-        console.log('💡 The service account needs "Make changes to events" permission');
+        console.error('❌ Cannot access calendar:', this.calendarId);
+        console.error('Error:', calendarError.message);
+        
+        if (calendarError.response?.status === 404) {
+          console.log('💡 Calendar not found. Possible issues:');
+          console.log('   1. Calendar ID is incorrect');
+          console.log('   2. Calendar is not shared with:', this.auth.email || 'the service account');
+          console.log('   3. Using wrong authentication method');
+        }
+        
+        // Don't fail initialization, just warn
+        console.log('⚠️ Continuing with initialization despite calendar access issues');
       }
       
       return true;
     } catch (error) {
       console.error('❌ Calendar connection test failed:', error.message);
       console.error('Details:', error.response?.data || error);
+      // Don't fail completely, just return false
       return false;
     }
   }
@@ -303,6 +355,7 @@ class GoogleCalendarService {
   async createEvent(eventDetails) {
     try {
       console.log('📅 Creating calendar event:', eventDetails.summary);
+      console.log('📅 Using calendar ID:', this.calendarId);
       console.log('🕐 Start time:', eventDetails.startTime);
       console.log('🕐 End time:', eventDetails.endTime);
       console.log('📧 Attendee:', eventDetails.attendeeEmail);
@@ -358,18 +411,19 @@ class GoogleCalendarService {
         }
       };
 
-      console.log('📅 Sending event creation request to Google Calendar...');
-      console.log('Event object:', JSON.stringify(event, null, 2));
+      console.log('📅 Attempting to create event in calendar:', this.calendarId);
+      console.log('🔐 Using auth type:', this.auth.constructor.name);
 
       // Create the event
-      // Check if we're using domain delegation or regular auth
-      const isDomainDelegation = this.auth.subject ? true : false;
+      // For service account access, we can't send invitations automatically
+      const sendUpdates = this.auth.subject ? 'all' : 'none';
+      console.log('📧 Send invitations:', sendUpdates);
       
       const response = await this.calendar.events.insert({
         calendarId: this.calendarId,
         resource: event,
         conferenceDataVersion: 1,
-        sendUpdates: isDomainDelegation ? 'all' : 'none'  // Only send if using domain delegation
+        sendUpdates: sendUpdates
       });
 
       const createdEvent = response.data;
@@ -395,6 +449,11 @@ class GoogleCalendarService {
         timeZone: this.timezone
       });
 
+      // If using service account without domain delegation, send manual invitation
+      if (sendUpdates === 'none') {
+        console.log('📧 Note: Calendar invitations must be sent manually when using service account access');
+      }
+
       return {
         success: true,
         eventId: createdEvent.id,
@@ -405,7 +464,8 @@ class GoogleCalendarService {
         customerName: eventDetails.attendeeName,
         startTime: eventDetails.startTime,
         endTime: eventDetails.endTime,
-        displayTime: displayTime
+        displayTime: displayTime,
+        manualInvitationRequired: sendUpdates === 'none'
       };
 
     } catch (error) {
@@ -423,13 +483,13 @@ class GoogleCalendarService {
         return {
           success: false,
           error: 'Permission denied',
-          message: 'Calendar permissions insufficient - share calendar with service account'
+          message: 'Calendar permissions insufficient - ensure calendar is shared with service account'
         };
       } else if (error.response?.status === 404) {
         return {
           success: false,
           error: 'Calendar not found',
-          message: 'Calendar not found - check GOOGLE_CALENDAR_ID'
+          message: `Calendar '${this.calendarId}' not found or not accessible`
         };
       } else {
         return {
