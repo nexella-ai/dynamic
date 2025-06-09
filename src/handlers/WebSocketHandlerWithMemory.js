@@ -1,4 +1,4 @@
-// src/handlers/WebSocketHandlerWithMemory.js - FIXED TO GET REAL CUSTOMER DATA
+// src/handlers/WebSocketHandlerWithMemory.js - FIXED FOR IMMEDIATE APPOINTMENT BOOKING
 const axios = require('axios');
 const config = require('../config/environment');
 const globalDiscoveryManager = require('../services/discovery/GlobalDiscoveryManager');
@@ -66,6 +66,13 @@ CONVERSATION FLOW:
    - "What are your biggest pain points or challenges?"
 3. SCHEDULING: After ALL 6 questions, transition to scheduling
 
+CRITICAL APPOINTMENT BOOKING RULES:
+- When customer specifies a day AND time (like "Tuesday at 10 AM"), IMMEDIATELY book it
+- Say: "Perfect! I'm booking you for [day] at [time] Arizona time right now."
+- Then confirm: "Your appointment is confirmed for [day] at [time] Arizona time. You'll receive a calendar invitation shortly!"
+- Do NOT ask for confirmation - just book it immediately
+- Do NOT offer alternatives unless the specific time is unavailable
+
 SCHEDULING APPROACH:
 - Our business hours are 8 AM to 4 PM Arizona time (MST), Monday through Friday
 - When suggesting times, use proper Arizona times: 8:00 AM, 9:00 AM, 10:00 AM, 11:00 AM, 1:00 PM, 2:00 PM, 3:00 PM
@@ -83,7 +90,8 @@ CRITICAL RULES:
 - Ask questions slowly, one at a time
 - CAPTURE answers properly before moving to next question
 - Be conversational but follow the exact question order
-- Use memory to enhance, not replace, the conversation flow`
+- Use memory to enhance, not replace, the conversation flow
+- When they specify a time, book it IMMEDIATELY without asking for confirmation`
       }
     ];
     
@@ -93,6 +101,7 @@ CRITICAL RULES:
     this.minimumResponseDelay = 2000;
     this.conversationContext = '';
     this.customerProfile = null;
+    this.appointmentBooked = false; // CRITICAL: Track if appointment is already booked
     
     this.initialize();
   }
@@ -447,17 +456,19 @@ CRITICAL RULES:
     const progress = globalDiscoveryManager.getProgress(this.callId);
     console.log(`📊 CURRENT PROGRESS: ${progress?.questionsCompleted || 0}/6 questions, Phase: ${progress?.conversationPhase || 'greeting'}`);
 
+    // CRITICAL FIX: Check for appointment booking FIRST, before anything else
+    if (progress?.questionsCompleted >= 6 && !this.appointmentBooked) {
+      const appointmentMatch = this.detectSpecificAppointmentRequest(userMessage);
+      if (appointmentMatch) {
+        console.log('🎯 IMMEDIATE APPOINTMENT BOOKING DETECTED:', appointmentMatch);
+        await this.handleImmediateAppointmentBooking(appointmentMatch, parsed.response_id);
+        return; // Exit early - booking is done
+      }
+    }
+
     // Handle discovery phase with memory enhancement
     if (progress?.questionsCompleted < 6 && !progress?.schedulingStarted) {
       await this.handleDiscoveryPhaseWithMemory(userMessage, parsed.response_id);
-      return;
-    }
-
-    // Check for specific time booking request
-    const specificTimeMatch = this.detectSpecificTimeRequest(userMessage);
-    if (specificTimeMatch && progress?.questionsCompleted >= 5) {
-      console.log('🕐 BOOKING REQUEST DETECTED:', specificTimeMatch.timeString);
-      await this.handleBookingWithMemory(specificTimeMatch, parsed.response_id);
       return;
     }
 
@@ -469,6 +480,142 @@ CRITICAL RULES:
 
     // Fallback - Use enhanced response with memory
     await this.generateEnhancedResponse(userMessage, parsed.response_id);
+  }
+
+  // NEW: Detect specific appointment booking requests
+  detectSpecificAppointmentRequest(userMessage) {
+    console.log('🎯 CHECKING FOR SPECIFIC APPOINTMENT REQUEST:', userMessage);
+    
+    // More specific patterns for immediate booking
+    const specificPatterns = [
+      // "Tuesday at 10 AM" or "Tuesday 10 AM"
+      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
+      // "10 AM Tuesday" or "10 AM on Tuesday"
+      /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
+      // "Tuesday 10" (assuming business hours)
+      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2})\b/i,
+      // "Tuesday, ten AM" or "Tuesday ten AM"
+      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday),?\s+(ten|nine|eight|eleven|one|two|three)\s*(am|pm)?/i
+    ];
+
+    for (let i = 0; i < specificPatterns.length; i++) {
+      const pattern = specificPatterns[i];
+      const match = userMessage.match(pattern);
+      if (match) {
+        console.log('🎯 SPECIFIC APPOINTMENT PATTERN MATCHED:', match);
+        return this.parseAppointmentMatch(match, i);
+      }
+    }
+    
+    return null;
+  }
+
+  // FIXED: Parse appointment match into structured data
+  parseAppointmentMatch(match, patternIndex) {
+    let day, hour, minutes = 0, period = 'am';
+    
+    switch (patternIndex) {
+      case 0: // "Tuesday at 10am"
+        day = match[1];
+        hour = parseInt(match[2]);
+        minutes = parseInt(match[3] || '0');
+        period = match[4] || 'am';
+        break;
+      case 1: // "10am Tuesday"
+        hour = parseInt(match[1]);
+        minutes = parseInt(match[2] || '0');
+        period = match[3] || 'am';
+        day = match[4];
+        break;
+      case 2: // "Tuesday 10"
+        day = match[1];
+        hour = parseInt(match[2]);
+        // Smart assumption for business hours
+        period = hour >= 8 && hour <= 11 ? 'am' : (hour >= 1 && hour <= 4 ? 'pm' : 'am');
+        break;
+      case 3: // "Tuesday, ten AM"
+        day = match[1];
+        const wordToNum = {
+          'eight': 8, 'nine': 9, 'ten': 10, 'eleven': 11,
+          'one': 1, 'two': 2, 'three': 3
+        };
+        hour = wordToNum[match[2].toLowerCase()] || 10;
+        period = match[3] || (hour >= 8 && hour <= 11 ? 'am' : 'pm');
+        break;
+    }
+
+    // Convert to 24-hour format
+    if (period.toLowerCase().includes('p') && hour !== 12) {
+      hour += 12;
+    } else if (period.toLowerCase().includes('a') && hour === 12) {
+      hour = 0;
+    }
+
+    // Create target date
+    const targetDate = this.calculateTargetDate(day, hour, minutes);
+    
+    const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
+    const displayPeriod = hour >= 12 ? 'PM' : 'AM';
+    
+    return {
+      dateTime: targetDate,
+      dayName: day,
+      timeString: `${displayHour}:${minutes.toString().padStart(2, '0')} ${displayPeriod}`,
+      originalMatch: match[0],
+      isBusinessHours: hour >= 8 && hour < 16, // 8 AM - 4 PM Arizona MST
+      hour: hour
+    };
+  }
+
+  // FIXED: Calculate target date for appointment
+  calculateTargetDate(day, hour, minutes) {
+    let targetDate = new Date();
+    
+    if (day === 'tomorrow') {
+      targetDate.setDate(targetDate.getDate() + 1);
+    } else if (day === 'today') {
+      // Keep today
+    } else {
+      const daysOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+      const dayIndex = daysOfWeek.indexOf(day.toLowerCase());
+      if (dayIndex !== -1) {
+        const currentDay = targetDate.getDay();
+        let daysToAdd = dayIndex - currentDay;
+        if (daysToAdd <= 0) daysToAdd += 7; // Next week
+        targetDate.setDate(targetDate.getDate() + daysToAdd);
+      }
+    }
+    
+    targetDate.setHours(hour, minutes, 0, 0);
+    return targetDate;
+  }
+
+  // NEW: Handle immediate appointment booking without asking for confirmation
+  async handleImmediateAppointmentBooking(appointmentRequest, responseId) {
+    try {
+      console.log('🎯 PROCESSING IMMEDIATE APPOINTMENT BOOKING WITH MEMORY');
+      console.log('🕐 Requested time:', appointmentRequest.timeString);
+      console.log('📅 Requested date:', appointmentRequest.dayName);
+      
+      // Check if time is within business hours
+      if (!appointmentRequest.isBusinessHours) {
+        const response = `I'd love to schedule you for ${appointmentRequest.dayName} at ${appointmentRequest.timeString}, but our business hours are 8 AM to 4 PM Arizona time. Would you like to choose a time between 8 AM and 4 PM instead?`;
+        await this.sendResponse(response, responseId);
+        return;
+      }
+
+      // Get discovery data for the appointment
+      const discoveryData = globalDiscoveryManager.getFinalDiscoveryData(this.callId);
+      console.log('📋 Discovery data for appointment:', discoveryData);
+
+      // Step 1: Immediately confirm the booking to the user
+      const confirmationResponse = `Perfect! I'm booking you for ${appointmentRequest.dayName} at ${appointmentRequest.timeString} Arizona time right now. Your appointment is confirmed! You'll receive a calendar invitation shortly.`;
+      await this.sendResponse(confirmationResponse, responseId);
+
+      // Mark as booked to prevent loops
+      this.appointmentBooked = true;
+      globalDiscoveryManager.markSchedulingStarted(this.callId);
+    }
   }
 
   async handleInitialGreeting(userMessage, responseId) {
@@ -680,88 +827,14 @@ CRITICAL RULES:
     // Mark scheduling as started if not already
     globalDiscoveryManager.markSchedulingStarted(this.callId);
     
-    // FIXED: Use the new appointment booking detection
-    const { detectAndBookAppointment } = require('../services/calendar/CalendarHelpers');
-    
-    const bookingResult = await detectAndBookAppointment(
-      userMessage, 
-      this.connectionData, 
-      globalDiscoveryManager.getFinalDiscoveryData(this.callId)
-    );
-    
-    if (bookingResult) {
-      console.log('📅 APPOINTMENT BOOKING RESULT:', bookingResult);
-      
-      await this.sendResponse(bookingResult.message, responseId);
-      
-      if (bookingResult.success) {
-        // Send webhook with booking confirmation
-        setTimeout(() => this.sendWebhookData({
-          dayName: 'appointment',
-          timeString: 'booked successfully'
-        }, globalDiscoveryManager.getFinalDiscoveryData(this.callId)), 500);
-      }
-      return;
-    }
-
-    // If no booking detected, generate availability response
+    // If no specific appointment detected, generate availability response
     try {
       const availabilityResponse = await this.generateRealAvailabilityResponse();
       this.conversationHistory.push({ role: 'assistant', content: availabilityResponse });
       await this.sendResponse(availabilityResponse, responseId);
     } catch (error) {
       console.error('❌ Error generating availability:', error.message);
-      await this.sendResponse("Let me check my calendar for available times. What day works best for you?", responseId);
-    }
-  }
-
-  async handleBookingWithMemory(timeRequest, responseId) {
-    try {
-      console.log('🔄 ATTEMPTING APPOINTMENT BOOKING WITH MEMORY:', timeRequest.timeString);
-      
-      const discoveryData = globalDiscoveryManager.getFinalDiscoveryData(this.callId);
-      console.log('📋 Discovery data for booking:', discoveryData);
-      
-      // FIXED: Only attempt booking if we have customer email
-      if (!this.connectionData.customerEmail) {
-        console.log('❌ No customer email available for booking');
-        const response = `Perfect! I'll get you scheduled for ${timeRequest.dayName} at ${timeRequest.timeString} Arizona time. You'll receive confirmation details shortly!`;
-        await this.sendResponse(response, responseId);
-        return;
-      }
-      
-      const bookingResult = await autoBookAppointment(
-        this.connectionData.customerName,
-        this.connectionData.customerEmail,
-        this.connectionData.customerPhone,
-        timeRequest.dateTime,
-        discoveryData
-      );
-      
-      let response;
-      if (bookingResult?.success) {
-        console.log('✅ BOOKING SUCCESSFUL!');
-        response = `Perfect! I've booked your consultation for ${timeRequest.dayName} at ${timeRequest.timeString} Arizona time. You'll receive a calendar invitation shortly!`;
-        
-        // Store successful booking in memory
-        if (this.memoryService) {
-          await this.handleSuccessfulBooking(timeRequest, discoveryData);
-        }
-      } else {
-        console.log('⚠️ BOOKING FAILED, but confirming anyway');
-        response = `Great! I'll get you scheduled for ${timeRequest.dayName} at ${timeRequest.timeString} Arizona time. You'll receive confirmation details shortly!`;
-      }
-      
-      this.conversationHistory.push({ role: 'assistant', content: response });
-      await this.sendResponse(response, responseId);
-      
-      // Send webhook in background
-      setTimeout(() => this.sendWebhookData(timeRequest, discoveryData), 500);
-      
-    } catch (error) {
-      console.error('❌ Booking error:', error.message);
-      const fallbackResponse = `Perfect! I'll get you scheduled for ${timeRequest.dayName} at ${timeRequest.timeString} Arizona time. You'll receive confirmation details shortly!`;
-      await this.sendResponse(fallbackResponse, responseId);
+      await this.sendResponse("Let me check my calendar for available times. What day and time would work best for you?", responseId);
     }
   }
 
@@ -866,7 +939,8 @@ CRITICAL RULES:
           questionsCompleted: sessionInfo.questionsCompleted,
           schedulingCompleted: sessionInfo.schedulingStarted || false,
           userSentiment: this.detectUserSentiment(),
-          callEndReason: 'user_disconnect'
+          callEndReason: 'user_disconnect',
+          appointmentBooked: this.appointmentBooked || false
         };
         
         // Get discovery data
@@ -971,92 +1045,6 @@ CRITICAL RULES:
     return message.length >= 2 && !invalidPatterns.some(pattern => pattern.test(message));
   }
 
-  detectSpecificTimeRequest(userMessage) {
-    console.log('🕐 CHECKING FOR TIME REQUEST:', userMessage);
-    
-    const patterns = [
-      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
-      /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)/i,
-      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\s+(\d{1,2})\b/i
-    ];
-
-    for (let i = 0; i < patterns.length; i++) {
-      const pattern = patterns[i];
-      const match = userMessage.match(pattern);
-      if (match) {
-        console.log('🕐 TIME PATTERN MATCHED:', match);
-        return this.parseTimeMatch(match, i);
-      }
-    }
-    return null;
-  }
-
-  parseTimeMatch(match, patternIndex) {
-    let day, hour, minutes = 0, period = 'am';
-    
-    switch (patternIndex) {
-      case 0: // "Monday at 9am"
-        day = match[1];
-        hour = parseInt(match[2]);
-        minutes = parseInt(match[3] || '0');
-        period = match[4] || 'am';
-        break;
-      case 1: // "9am Monday"
-        hour = parseInt(match[1]);
-        minutes = parseInt(match[2] || '0');
-        period = match[3] || 'am';
-        day = match[4];
-        break;
-      case 2: // "Monday 9"
-        day = match[1];
-        hour = parseInt(match[2]);
-        period = hour >= 9 && hour <= 11 ? 'am' : (hour >= 1 && hour <= 5 ? 'pm' : 'am');
-        break;
-    }
-
-    // Convert to 24-hour format
-    if (period.toLowerCase().includes('p') && hour !== 12) {
-      hour += 12;
-    } else if (period.toLowerCase().includes('a') && hour === 12) {
-      hour = 0;
-    }
-
-    // Create target date
-    const targetDate = this.calculateTargetDate(day, hour, minutes);
-    
-    const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
-    const displayPeriod = hour >= 12 ? 'PM' : 'AM';
-    
-    return {
-      dateTime: targetDate,
-      dayName: day,
-      timeString: `${displayHour}:${minutes.toString().padStart(2, '0')} ${displayPeriod}`,
-      originalMatch: match[0]
-    };
-  }
-
-  calculateTargetDate(day, hour, minutes) {
-    let targetDate = new Date();
-    
-    if (day === 'tomorrow') {
-      targetDate.setDate(targetDate.getDate() + 1);
-    } else if (day === 'today') {
-      // Keep today
-    } else {
-      const daysOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-      const dayIndex = daysOfWeek.indexOf(day.toLowerCase());
-      if (dayIndex !== -1) {
-        const currentDay = targetDate.getDay();
-        let daysToAdd = dayIndex - currentDay;
-        if (daysToAdd <= 0) daysToAdd += 7; // Next week
-        targetDate.setDate(targetDate.getDate() + daysToAdd);
-      }
-    }
-    
-    targetDate.setHours(hour, minutes, 0, 0);
-    return targetDate;
-  }
-
   async generateRealAvailabilityResponse() {
     console.log('🤖 Generating REAL availability response...');
     
@@ -1143,3 +1131,85 @@ CRITICAL RULES:
 }
 
 module.exports = WebSocketHandlerWithMemory;
+      globalDiscoveryManager.markSchedulingStarted(this.callId);
+
+      // Step 2: Attempt real appointment booking in background
+      try {
+        const bookingResult = await autoBookAppointment(
+          this.connectionData.customerName || 'Customer',
+          this.connectionData.customerEmail,
+          this.connectionData.customerPhone,
+          appointmentRequest.dateTime,
+          discoveryData
+        );
+
+        console.log('📅 Background booking result:', bookingResult);
+
+        // Step 3: Send webhook with booking details
+        setTimeout(async () => {
+          try {
+            await sendSchedulingPreference(
+              this.connectionData.customerName || 'Customer',
+              this.connectionData.customerEmail,
+              this.connectionData.customerPhone,
+              `${appointmentRequest.dayName} at ${appointmentRequest.timeString}`,
+              this.callId,
+              {
+                ...discoveryData,
+                appointment_booked: true,
+                booking_confirmed: true,
+                requested_time: appointmentRequest.timeString,
+                requested_day: appointmentRequest.dayName,
+                meeting_link: bookingResult.meetingLink || '',
+                event_id: bookingResult.eventId || '',
+                event_link: bookingResult.eventLink || ''
+              }
+            );
+            console.log('✅ Webhook sent with immediate booking confirmation');
+          } catch (webhookError) {
+            console.error('❌ Error sending booking webhook:', webhookError.message);
+          }
+        }, 1000);
+
+        // Store successful booking in memory
+        if (this.memoryService) {
+          await this.handleSuccessfulBooking(appointmentRequest, discoveryData);
+        }
+        
+      } catch (bookingError) {
+        console.error('❌ Background booking failed:', bookingError.message);
+        
+        // Even if technical booking fails, we already confirmed to user
+        // Send webhook anyway for manual processing
+        setTimeout(async () => {
+          try {
+            await sendSchedulingPreference(
+              this.connectionData.customerName || 'Customer',
+              this.connectionData.customerEmail,
+              this.connectionData.customerPhone,
+              `${appointmentRequest.dayName} at ${appointmentRequest.timeString}`,
+              this.callId,
+              {
+                ...discoveryData,
+                appointment_requested: true,
+                technical_booking_failed: true,
+                requested_time: appointmentRequest.timeString,
+                requested_day: appointmentRequest.dayName,
+                booking_confirmed_to_user: true
+              }
+            );
+            console.log('✅ Fallback webhook sent - manual booking needed');
+          } catch (webhookError) {
+            console.error('❌ Error sending fallback webhook:', webhookError.message);
+          }
+        }, 1000);
+      }
+      
+    } catch (error) {
+      console.error('❌ Error in immediate appointment booking:', error.message);
+      
+      // Fallback response
+      const errorResponse = `Perfect! I'll get you scheduled for ${appointmentRequest.dayName} at ${appointmentRequest.timeString} Arizona time. You'll receive confirmation details shortly.`;
+      await this.sendResponse(errorResponse, responseId);
+      
+      this.appointmentBooked = true;
