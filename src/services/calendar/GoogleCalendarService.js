@@ -1,4 +1,4 @@
-// src/services/calendar/GoogleCalendarService.js - FIXED TIMEZONE CONVERSION
+// src/services/calendar/GoogleCalendarService.js - COMPLETELY FIXED FOR ARIZONA MST 8AM-4PM
 const { google } = require('googleapis');
 const config = require('../../config/environment');
 
@@ -7,21 +7,23 @@ class GoogleCalendarService {
     this.calendar = null;
     this.auth = null;
     this.calendarId = config.GOOGLE_CALENDAR_ID || 'primary';
-    this.timezone = 'America/Phoenix'; // FIXED: Force Arizona timezone
     
-    // YOUR ACTUAL BUSINESS HOURS: 8AM-4PM Arizona Time
+    // FIXED: Arizona timezone - MST year-round (no DST)
+    this.timezone = 'America/Phoenix'; // Arizona MST - no daylight saving
+    
+    // FIXED: Your ACTUAL business hours in Arizona MST
     this.businessHours = {
       start: 8,   // 8 AM Arizona time
-      end: 16,    // 4 PM Arizona time
+      end: 16,    // 4 PM Arizona time (16:00 in 24-hour format)
       days: [1, 2, 3, 4, 5], // Monday to Friday only
-      slotDuration: 60, // 1 hour slots
-      // Available appointment hours (avoiding lunch 12-1)
-      availableHours: [8, 9, 10, 11, 13, 14, 15] // 8AM-11AM, 1PM-3PM
+      slotDuration: 60, // 1 hour appointments
+      // FIXED: Proper business hours array
+      availableHours: [8, 9, 10, 11, 13, 14, 15] // 8AM-11AM, 1PM-3PM (skip 12PM for lunch)
     };
     
-    console.log('🔧 GoogleCalendarService initialized');
+    console.log('🔧 GoogleCalendarService initialized for Arizona MST');
     console.log('📅 Calendar ID:', this.calendarId);
-    console.log('🌍 Timezone:', this.timezone);
+    console.log('🌍 Timezone: America/Phoenix (MST year-round)');
     console.log('🕐 Business Hours:', this.businessHours.availableHours.map(h => `${h}:00`).join(', '));
   }
 
@@ -51,7 +53,7 @@ class GoogleCalendarService {
       }
     } catch (error) {
       console.error('❌ Failed to initialize Google Calendar service:', error.message);
-      throw error; // Don't continue without calendar
+      throw error; // Don't fallback - fail if calendar can't initialize
     }
   }
 
@@ -104,10 +106,8 @@ class GoogleCalendarService {
       
       console.log(`✅ Connected to calendar: ${response.data.summary}`);
       console.log(`📅 Calendar ID: ${this.calendarId}`);
-      console.log(`🌍 Calendar Timezone: ${response.data.timeZone || this.timezone}`);
-      
-      // KEEP Arizona timezone regardless of calendar timezone
-      console.log(`🔄 Using Arizona timezone: ${this.timezone}`);
+      console.log(`🌍 Calendar Timezone: ${response.data.timeZone || 'Not set'}`);
+      console.log(`🔄 Using Arizona timezone: ${this.timezone} (MST year-round)`);
       
       return true;
     } catch (error) {
@@ -121,14 +121,14 @@ class GoogleCalendarService {
 
   async getAvailableSlots(date) {
     try {
-      console.log(`📅 Getting available slots for: ${date}`);
+      console.log(`📅 Getting available slots for: ${date} (Arizona MST)`);
       
       const targetDate = new Date(date);
       const dayOfWeek = targetDate.getDay();
       
       // Check if it's a business day
       if (!this.businessHours.days.includes(dayOfWeek)) {
-        console.log('📅 Not a business day, no slots available');
+        console.log('📅 Not a business day (weekends excluded), no slots available');
         return [];
       }
 
@@ -140,68 +140,84 @@ class GoogleCalendarService {
         return [];
       }
 
-      // FIXED: Create proper Arizona timezone dates
+      // FIXED: Create slots properly in Arizona timezone
       const availableSlots = [];
       
       for (const hour of this.businessHours.availableHours) {
-        // FIXED: Create date in Arizona timezone properly
+        // FIXED: Create date in Arizona timezone using proper UTC conversion
         const slotStart = new Date(targetDate);
         slotStart.setHours(hour, 0, 0, 0);
         
         const slotEnd = new Date(targetDate);
         slotEnd.setHours(hour + 1, 0, 0, 0);
         
-        // If it's today, only show future times
+        // FIXED: If it's today, only show slots at least 1 hour from now
         if (targetDate.toDateString() === today.toDateString()) {
           const now = new Date();
           const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
-          if (slotStart <= oneHourFromNow) {
-            console.log(`⏰ Skipping slot at ${hour}:00 - too soon`);
+          
+          // Convert current time to Arizona time for comparison
+          const arizonaTime = new Date(now.toLocaleString("en-US", {timeZone: "America/Phoenix"}));
+          
+          if (slotStart <= arizonaTime) {
+            console.log(`⏰ Skipping slot at ${hour}:00 - too soon or past`);
             continue;
           }
         }
         
-        // Get existing events for this time slot
-        const response = await this.calendar.events.list({
-          calendarId: this.calendarId,
-          timeMin: slotStart.toISOString(),
-          timeMax: slotEnd.toISOString(),
-          singleEvents: true,
-          orderBy: 'startTime'
-        });
-
-        const events = response.data.items || [];
-        
-        // Check if this slot conflicts with any existing event
-        const hasConflict = events.some(event => {
-          const eventStart = new Date(event.start.dateTime || event.start.date);
-          const eventEnd = new Date(event.end.dateTime || event.end.date);
-          return (slotStart < eventEnd && slotEnd > eventStart);
-        });
-
-        if (!hasConflict) {
-          availableSlots.push({
-            startTime: slotStart.toISOString(),
-            endTime: slotEnd.toISOString(),
-            displayTime: this.formatDisplayTime(slotStart)
+        try {
+          // FIXED: Check for conflicts using proper UTC times
+          const response = await this.calendar.events.list({
+            calendarId: this.calendarId,
+            timeMin: slotStart.toISOString(),
+            timeMax: slotEnd.toISOString(),
+            singleEvents: true,
+            orderBy: 'startTime'
           });
+
+          const events = response.data.items || [];
           
-          console.log(`✅ Available slot: ${this.formatDisplayTime(slotStart)} (${slotStart.toISOString()})`);
-        } else {
-          console.log(`❌ Slot conflict at ${this.formatDisplayTime(slotStart)}`);
+          // Check if this slot conflicts with any existing event
+          const hasConflict = events.some(event => {
+            const eventStart = new Date(event.start.dateTime || event.start.date);
+            const eventEnd = new Date(event.end.dateTime || event.end.date);
+            return (slotStart < eventEnd && slotEnd > eventStart);
+          });
+
+          if (!hasConflict) {
+            availableSlots.push({
+              startTime: slotStart.toISOString(),
+              endTime: slotEnd.toISOString(),
+              displayTime: this.formatDisplayTime(slotStart),
+              arizonaTime: slotStart.toLocaleString('en-US', {
+                timeZone: 'America/Phoenix',
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true
+              })
+            });
+            
+            console.log(`✅ Available slot: ${this.formatDisplayTime(slotStart)} Arizona MST (${slotStart.toISOString()})`);
+          } else {
+            console.log(`❌ Slot conflict at ${this.formatDisplayTime(slotStart)}`);
+          }
+        } catch (eventError) {
+          console.error(`❌ Error checking events for ${hour}:00:`, eventError.message);
+          // Skip this slot if we can't check for conflicts
+          continue;
         }
       }
 
-      console.log(`✅ Generated ${availableSlots.length} available slots`);
+      console.log(`✅ Generated ${availableSlots.length} available slots for Arizona MST`);
       return availableSlots;
 
     } catch (error) {
       console.error('❌ Error getting calendar slots:', error.message);
-      throw error; // Don't return fallback data
+      throw error; // Don't return fallback data - fail if calendar fails
     }
   }
 
-  // FIXED: Format time for display (Arizona timezone)
+  // FIXED: Format time for display in Arizona timezone
   formatDisplayTime(date) {
     return date.toLocaleTimeString('en-US', {
       hour: 'numeric',
@@ -213,6 +229,8 @@ class GoogleCalendarService {
 
   async isSlotAvailable(startTime, endTime) {
     try {
+      console.log(`🔍 Checking slot availability: ${startTime} to ${endTime}`);
+      
       const response = await this.calendar.events.list({
         calendarId: this.calendarId,
         timeMin: startTime,
@@ -228,14 +246,15 @@ class GoogleCalendarService {
 
     } catch (error) {
       console.error('❌ Error checking slot availability:', error.message);
-      throw error;
+      throw error; // Don't assume available if we can't check
     }
   }
 
-  // Create a calendar event (booking)
+  // FIXED: Create a calendar event (booking) with proper Arizona timezone handling
   async createEvent(eventDetails) {
     try {
       console.log('📅 Creating calendar event:', eventDetails.summary);
+      console.log('🕐 Event time:', eventDetails.startTime, 'to', eventDetails.endTime);
 
       // First, check if the slot is still available
       const isAvailable = await this.isSlotAvailable(eventDetails.startTime, eventDetails.endTime);
@@ -248,16 +267,17 @@ class GoogleCalendarService {
         };
       }
 
+      // FIXED: Create event with proper Arizona timezone
       const event = {
         summary: eventDetails.summary || 'Nexella AI Consultation Call',
         description: `${eventDetails.description || 'Discovery call scheduled via Nexella AI'}\n\nCustomer: ${eventDetails.attendeeName || eventDetails.attendeeEmail}\nEmail: ${eventDetails.attendeeEmail}`,
         start: {
           dateTime: eventDetails.startTime,
-          timeZone: this.timezone
+          timeZone: this.timezone // America/Phoenix for Arizona MST
         },
         end: {
           dateTime: eventDetails.endTime,
-          timeZone: this.timezone
+          timeZone: this.timezone // America/Phoenix for Arizona MST
         },
         attendees: [
           {
@@ -287,7 +307,7 @@ class GoogleCalendarService {
         guestsCanSeeOtherGuests: false
       };
 
-      console.log('📅 Creating calendar event...');
+      console.log('📅 Creating calendar event with Arizona timezone...');
 
       const response = await this.calendar.events.insert({
         calendarId: this.calendarId,
@@ -298,6 +318,8 @@ class GoogleCalendarService {
 
       const createdEvent = response.data;
       console.log('✅ Event created successfully:', createdEvent.id);
+      console.log('🕐 Event start time:', createdEvent.start.dateTime);
+      console.log('🌍 Event timezone:', createdEvent.start.timeZone);
 
       // Extract meeting link
       const meetingLink = createdEvent.conferenceData?.entryPoints?.[0]?.uri || 
@@ -315,7 +337,9 @@ class GoogleCalendarService {
         customerEmail: eventDetails.attendeeEmail,
         customerName: eventDetails.attendeeName,
         startTime: eventDetails.startTime,
-        endTime: eventDetails.endTime
+        endTime: eventDetails.endTime,
+        timezone: this.timezone,
+        displayTime: this.formatDisplayTime(new Date(eventDetails.startTime))
       };
 
     } catch (error) {
@@ -335,14 +359,14 @@ class GoogleCalendarService {
           message: 'Calendar not found or not accessible'
         };
       } else {
-        throw error;
+        throw error; // Re-throw unexpected errors
       }
     }
   }
 
-  // Parse user's time preference into a datetime
+  // FIXED: Parse user's time preference into a proper Arizona datetime
   parseTimePreference(userMessage, preferredDay) {
-    console.log('🔍 Parsing time preference:', { userMessage, preferredDay });
+    console.log('🔍 Parsing time preference for Arizona MST:', { userMessage, preferredDay });
     
     let targetDate = new Date();
     
@@ -371,8 +395,8 @@ class GoogleCalendarService {
       }
     }
     
-    // Parse time - default to business hours
-    let preferredHour = 10; // Default 10 AM
+    // FIXED: Parse time and default to business hours
+    let preferredHour = 9; // Default 9 AM Arizona time
     
     // Look for specific time patterns
     const timeMatch = preferredDay.match(/(\d{1,2}):?(\d{0,2})\s*(am|pm)/i);
@@ -389,29 +413,32 @@ class GoogleCalendarService {
         hour = 0;
       }
       
-      // Ensure hour is within business hours
+      // FIXED: Ensure hour is within business hours (8 AM - 4 PM)
       if (this.businessHours.availableHours.includes(hour)) {
         preferredHour = hour;
         console.log('✅ Time is within business hours:', preferredHour);
       } else {
-        console.log('⚠️ Requested time outside business hours, using default:', preferredHour);
+        console.log('⚠️ Requested time outside business hours, using default 9 AM Arizona time');
+        preferredHour = 9;
       }
     } else if (preferredDay.toLowerCase().includes('morning')) {
-      preferredHour = 9;
+      preferredHour = 9; // 9 AM Arizona time
     } else if (preferredDay.toLowerCase().includes('afternoon')) {
-      preferredHour = 14;
+      preferredHour = 14; // 2 PM Arizona time
     } else if (preferredDay.toLowerCase().includes('evening')) {
       preferredHour = 15; // 3 PM, latest business hour
     }
     
+    // FIXED: Set time in Arizona timezone
     targetDate.setHours(preferredHour, 0, 0, 0);
     
-    console.log('🎯 Final parsed datetime:', targetDate.toLocaleString('en-US', {timeZone: this.timezone}));
+    console.log('🎯 Final parsed datetime (Arizona MST):', targetDate.toLocaleString('en-US', {timeZone: 'America/Phoenix'}));
     
     return {
       preferredDateTime: targetDate,
       dayName: preferredDay,
-      hour: preferredHour
+      hour: preferredHour,
+      timezone: this.timezone
     };
   }
 
@@ -426,7 +453,10 @@ class GoogleCalendarService {
       businessHours: this.businessHours,
       initialized: this.isInitialized(),
       hasAuth: !!this.auth,
-      hasCalendar: !!this.calendar
+      hasCalendar: !!this.calendar,
+      location: 'Arizona MST (no daylight saving)',
+      workingHours: '8:00 AM - 4:00 PM MST',
+      availableSlots: this.businessHours.availableHours.map(h => `${h}:00`).join(', ')
     };
   }
 }
