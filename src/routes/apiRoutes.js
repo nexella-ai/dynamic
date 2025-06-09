@@ -1,4 +1,4 @@
-// src/routes/apiRoutes.js - UPDATED WITH CALENDAR TESTING ENDPOINTS
+// src/routes/apiRoutes.js - COMPLETE FILE WITH CALENDAR TESTING
 const express = require('express');
 const axios = require('axios');
 const config = require('../config/environment');
@@ -103,6 +103,204 @@ router.get('/debug/calendar', async (req, res) => {
       success: false,
       error: error.message,
       message: 'Calendar debug failed'
+    });
+  }
+});
+
+// NEW: COMPREHENSIVE Calendar test endpoint
+router.get('/test-calendar-booking', async (req, res) => {
+  try {
+    console.log('🧪 COMPREHENSIVE CALENDAR BOOKING TEST');
+    
+    const results = {
+      timestamp: new Date().toISOString(),
+      environment: {},
+      authentication: {},
+      connection: {},
+      availability: {},
+      booking: {}
+    };
+    
+    // 1. Check environment variables
+    results.environment = {
+      GOOGLE_PROJECT_ID: config.GOOGLE_PROJECT_ID ? '✅ SET' : '❌ MISSING',
+      GOOGLE_PRIVATE_KEY: config.GOOGLE_PRIVATE_KEY ? `✅ SET (${config.GOOGLE_PRIVATE_KEY.length} chars)` : '❌ MISSING',
+      GOOGLE_CLIENT_EMAIL: config.GOOGLE_CLIENT_EMAIL ? `✅ SET (${config.GOOGLE_CLIENT_EMAIL})` : '❌ MISSING',
+      GOOGLE_CALENDAR_ID: config.GOOGLE_CALENDAR_ID || 'primary',
+      privateKeyValid: config.GOOGLE_PRIVATE_KEY?.includes('-----BEGIN PRIVATE KEY-----') ? '✅ Valid format' : '❌ Invalid format'
+    };
+    
+    // 2. Test authentication
+    try {
+      const { initializeCalendarService, getCalendarService } = require('../services/calendar/CalendarHelpers');
+      const initialized = await initializeCalendarService();
+      results.authentication.initialized = initialized;
+      results.authentication.status = initialized ? '✅ SUCCESS' : '❌ FAILED';
+      
+      const calendarService = getCalendarService();
+      if (calendarService) {
+        results.authentication.serviceInfo = calendarService.getCalendarInfo();
+      }
+    } catch (authError) {
+      results.authentication.error = authError.message;
+      results.authentication.status = '❌ FAILED';
+    }
+    
+    // 3. Test calendar connection
+    if (results.authentication.initialized) {
+      try {
+        const calendarService = getCalendarService();
+        
+        // Test listing calendars
+        const { google } = require('googleapis');
+        const calendar = google.calendar({ version: 'v3', auth: calendarService.auth });
+        
+        const calendarList = await calendar.calendarList.list({ maxResults: 10 });
+        results.connection.calendarAccess = '✅ Can access Calendar API';
+        results.connection.calendarsFound = calendarList.data.items?.length || 0;
+        
+        // Test specific calendar access
+        try {
+          const calendarInfo = await calendar.calendars.get({
+            calendarId: config.GOOGLE_CALENDAR_ID || 'primary'
+          });
+          results.connection.targetCalendar = {
+            id: calendarInfo.data.id,
+            summary: calendarInfo.data.summary,
+            timeZone: calendarInfo.data.timeZone,
+            access: '✅ Can access target calendar'
+          };
+        } catch (calError) {
+          results.connection.targetCalendar = {
+            error: calError.message,
+            access: '❌ Cannot access target calendar',
+            hint: `Share calendar with: ${config.GOOGLE_CLIENT_EMAIL}`
+          };
+        }
+        
+        // Test event creation permission
+        try {
+          const testList = await calendar.events.list({
+            calendarId: config.GOOGLE_CALENDAR_ID || 'primary',
+            maxResults: 1
+          });
+          results.connection.eventPermissions = '✅ Can read events';
+        } catch (permError) {
+          results.connection.eventPermissions = '❌ Cannot read events';
+        }
+        
+      } catch (connError) {
+        results.connection.error = connError.message;
+        results.connection.status = '❌ Connection failed';
+      }
+    }
+    
+    // 4. Test getting available slots
+    if (results.authentication.initialized) {
+      try {
+        const { getAvailableTimeSlots } = require('../services/calendar/CalendarHelpers');
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        
+        const slots = await getAvailableTimeSlots(tomorrow);
+        results.availability = {
+          date: tomorrow.toDateString(),
+          slotsFound: slots.length,
+          slots: slots.slice(0, 3).map(s => ({
+            time: s.displayTime,
+            start: s.startTime,
+            end: s.endTime
+          })),
+          status: slots.length > 0 ? '✅ Slots available' : '⚠️ No slots available'
+        };
+      } catch (slotError) {
+        results.availability.error = slotError.message;
+        results.availability.status = '❌ Failed to get slots';
+      }
+    }
+    
+    // 5. Test actual booking
+    if (results.authentication.initialized && req.query.testBooking === 'true') {
+      try {
+        const { autoBookAppointment } = require('../services/calendar/CalendarHelpers');
+        
+        // Book for tomorrow at 10 AM
+        const bookingDate = new Date();
+        bookingDate.setDate(bookingDate.getDate() + 1);
+        bookingDate.setHours(10, 0, 0, 0);
+        
+        const bookingResult = await autoBookAppointment(
+          'Test Customer',
+          'test@example.com',
+          '+1234567890',
+          bookingDate,
+          { test: 'This is a test booking' }
+        );
+        
+        results.booking = bookingResult;
+        
+        if (bookingResult.success) {
+          results.booking.status = '✅ BOOKING SUCCESSFUL!';
+          console.log('🎉 TEST BOOKING CREATED:', bookingResult.eventId);
+          
+          // Try to delete the test event
+          try {
+            const calendarService = getCalendarService();
+            const { google } = require('googleapis');
+            const calendar = google.calendar({ version: 'v3', auth: calendarService.auth });
+            
+            await calendar.events.delete({
+              calendarId: config.GOOGLE_CALENDAR_ID || 'primary',
+              eventId: bookingResult.eventId
+            });
+            results.booking.cleanup = '✅ Test event deleted';
+          } catch (deleteError) {
+            results.booking.cleanup = '⚠️ Could not delete test event';
+          }
+        }
+      } catch (bookingError) {
+        results.booking.error = bookingError.message;
+        results.booking.status = '❌ Booking failed';
+        results.booking.stack = bookingError.stack;
+      }
+    } else if (!req.query.testBooking) {
+      results.booking.status = 'ℹ️ Add ?testBooking=true to test actual booking';
+    }
+    
+    // Summary
+    results.summary = {
+      ready: !!(results.authentication.initialized && 
+               results.connection.targetCalendar?.access?.includes('✅') &&
+               results.availability.slotsFound > 0),
+      issues: []
+    };
+    
+    if (!results.environment.GOOGLE_PROJECT_ID.includes('✅')) {
+      results.summary.issues.push('Missing GOOGLE_PROJECT_ID');
+    }
+    if (!results.environment.GOOGLE_PRIVATE_KEY.includes('✅')) {
+      results.summary.issues.push('Missing GOOGLE_PRIVATE_KEY');
+    }
+    if (!results.environment.GOOGLE_CLIENT_EMAIL.includes('✅')) {
+      results.summary.issues.push('Missing GOOGLE_CLIENT_EMAIL');
+    }
+    if (!results.environment.privateKeyValid?.includes('✅')) {
+      results.summary.issues.push('Invalid private key format');
+    }
+    if (!results.authentication.initialized) {
+      results.summary.issues.push('Calendar service not initialized');
+    }
+    if (results.connection.targetCalendar?.access?.includes('❌')) {
+      results.summary.issues.push(`Calendar not shared with service account: ${config.GOOGLE_CLIENT_EMAIL}`);
+    }
+    
+    res.json(results);
+    
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      stack: error.stack
     });
   }
 });
