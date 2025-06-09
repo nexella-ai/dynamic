@@ -61,7 +61,7 @@ class GoogleCalendarService {
 
   async setupAuthentication() {
     try {
-      console.log('🔐 Setting up Google Calendar authentication...');
+      console.log('🔐 Setting up Google Calendar authentication with domain-wide delegation...');
       
       // Process the private key properly
       let privateKey = config.GOOGLE_PRIVATE_KEY;
@@ -82,6 +82,35 @@ class GoogleCalendarService {
         privateKey.includes('-----END PRIVATE KEY-----') ? '✅ Valid' : '❌ Invalid'
       );
       
+      // Create JWT client with domain-wide delegation
+      const jwtClient = new google.auth.JWT({
+        email: config.GOOGLE_CLIENT_EMAIL,
+        key: privateKey,
+        scopes: [
+          'https://www.googleapis.com/auth/calendar',
+          'https://www.googleapis.com/auth/calendar.events'
+        ],
+        // IMPORTANT: Set the subject to impersonate (must be a user in your domain)
+        subject: config.GOOGLE_IMPERSONATE_EMAIL || 'nexellaai@gmail.com'
+      });
+      
+      // Authorize the client
+      await jwtClient.authorize();
+      
+      this.auth = jwtClient;
+      
+      console.log('📧 Service account email:', config.GOOGLE_CLIENT_EMAIL);
+      console.log('👤 Impersonating user:', config.GOOGLE_IMPERSONATE_EMAIL || 'nexellaai@gmail.com');
+      console.log('🏗️ Project ID:', config.GOOGLE_PROJECT_ID);
+      console.log('✅ Authentication with domain-wide delegation configured successfully');
+      
+    } catch (error) {
+      console.error('❌ Authentication setup failed:', error.message);
+      console.error('Stack:', error.stack);
+      
+      // Fallback to regular service account auth if domain delegation fails
+      console.log('🔄 Falling back to regular service account authentication...');
+      
       const authClient = new google.auth.GoogleAuth({
         credentials: {
           type: "service_account",
@@ -101,17 +130,8 @@ class GoogleCalendarService {
         ]
       });
       
-      // Get the auth client
       this.auth = await authClient.getClient();
-      
-      console.log('📧 Service account email:', config.GOOGLE_CLIENT_EMAIL);
-      console.log('🏗️ Project ID:', config.GOOGLE_PROJECT_ID);
-      console.log('✅ Authentication client created successfully');
-      
-    } catch (error) {
-      console.error('❌ Authentication setup failed:', error.message);
-      console.error('Stack:', error.stack);
-      throw error;
+      console.log('✅ Fallback authentication configured (no attendee invitations)');
     }
   }
 
@@ -337,11 +357,12 @@ class GoogleCalendarService {
       console.log('Event object:', JSON.stringify(event, null, 2));
 
       // Create the event
+      // With domain-wide delegation, we can send invitations
       const response = await this.calendar.events.insert({
         calendarId: this.calendarId,
         resource: event,
         conferenceDataVersion: 1,
-        sendUpdates: 'all'
+        sendUpdates: 'all'  // Send invitations to attendees
       });
 
       const createdEvent = response.data;
