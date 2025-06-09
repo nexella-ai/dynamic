@@ -1,4 +1,4 @@
-// server.js - Main Server Entry Point (UPDATED WITH CUSTOMER DATA VALIDATION)
+// server.js - STRICT REAL CUSTOMER DATA VALIDATION + REAL NEXELLA KNOWLEDGE
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const http = require('http');
@@ -40,44 +40,93 @@ const validation = config.validate();
 console.log('🔧 Environment validation:', validation);
 
 if (!validation.isValid) {
-  console.warn('⚠️ Missing required environment variables:', validation.missing);
-  console.warn('⚠️ Server may not function properly');
+  console.error('❌ CRITICAL: Missing required environment variables:', validation.missing);
+  console.error('❌ Server cannot function without proper configuration');
+  // Don't exit in development, but warn heavily
+  if (process.env.NODE_ENV === 'production') {
+    process.exit(1);
+  }
 }
 
-// CUSTOMER DATA VALIDATION FUNCTIONS
+// ================================
+// STRICT CUSTOMER DATA VALIDATION
+// ================================
 
 function validateCustomerData(req) {
-  console.log('🔍 VALIDATING CUSTOMER DATA...');
+  console.log('🔍 STRICT CUSTOMER DATA VALIDATION STARTING...');
   
-  // Check global Typeform submission
-  if (global.lastTypeformSubmission && global.lastTypeformSubmission.email) {
-    console.log('✅ Valid Typeform data found:', global.lastTypeformSubmission.email);
-    return {
-      isValid: true,
-      source: 'typeform',
-      email: global.lastTypeformSubmission.email,
-      name: global.lastTypeformSubmission.name
-    };
+  // List of fake/demo emails to reject
+  const FAKE_EMAILS = [
+    'prospect@example.com',
+    'test@test.com',
+    'demo@demo.com',
+    'fake@fake.com',
+    'sample@sample.com'
+  ];
+  
+  function isValidEmail(email) {
+    if (!email || typeof email !== 'string') return false;
+    
+    const cleanEmail = email.toLowerCase().trim();
+    
+    // Reject specific fake emails
+    if (FAKE_EMAILS.includes(cleanEmail)) {
+      console.error('❌ REJECTED: Specific fake email detected:', cleanEmail);
+      return false;
+    }
+    
+    // Reject domains that are clearly fake
+    const fakeDomains = ['example.com', 'test.com', 'demo.com', 'fake.com', 'sample.com'];
+    const domain = cleanEmail.split('@')[1];
+    if (domain && fakeDomains.includes(domain)) {
+      console.error('❌ REJECTED: Fake domain detected:', domain);
+      return false;
+    }
+    
+    // Basic email format validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      console.error('❌ REJECTED: Invalid email format:', cleanEmail);
+      return false;
+    }
+    
+    return true;
   }
   
-  // Check URL parameters
+  // Method 1: Check global Typeform submission (highest priority)
+  if (global.lastTypeformSubmission && global.lastTypeformSubmission.email) {
+    const email = global.lastTypeformSubmission.email;
+    
+    if (isValidEmail(email)) {
+      console.log('✅ Valid Typeform data found:', email);
+      return {
+        isValid: true,
+        source: 'typeform',
+        email: email.toLowerCase().trim(),
+        name: global.lastTypeformSubmission.name || '',
+        phone: global.lastTypeformSubmission.phone || ''
+      };
+    }
+  }
+  
+  // Method 2: Check URL parameters
   const urlParams = new URLSearchParams(req.url.split('?')[1] || '');
   const emailFromUrl = urlParams.get('customer_email') || urlParams.get('email');
   const nameFromUrl = urlParams.get('customer_name') || urlParams.get('name');
   const phoneFromUrl = urlParams.get('customer_phone') || urlParams.get('phone');
   
-  if (emailFromUrl && emailFromUrl !== 'prospect@example.com') {
+  if (emailFromUrl && isValidEmail(emailFromUrl)) {
     console.log('✅ Valid URL parameter data found:', emailFromUrl);
     return {
       isValid: true,
       source: 'url_params',
-      email: emailFromUrl,
-      name: nameFromUrl,
-      phone: phoneFromUrl
+      email: emailFromUrl.toLowerCase().trim(),
+      name: nameFromUrl || '',
+      phone: phoneFromUrl || ''
     };
   }
   
-  // Check webhook metadata (if available)
+  // Method 3: Check webhook metadata (if available)
   try {
     const { getActiveCallsMetadata } = require('./src/services/webhooks/WebhookService');
     if (getActiveCallsMetadata && typeof getActiveCallsMetadata === 'function') {
@@ -89,14 +138,14 @@ function validateCustomerData(req) {
         const callMetadata = activeCallsMetadata.get(callId);
         const email = callMetadata.customer_email || callMetadata.email;
         
-        if (email && email !== 'prospect@example.com') {
+        if (email && isValidEmail(email)) {
           console.log('✅ Valid webhook metadata found:', email);
           return {
             isValid: true,
             source: 'webhook_metadata',
-            email: email,
-            name: callMetadata.customer_name || callMetadata.name,
-            phone: callMetadata.customer_phone || callMetadata.phone
+            email: email.toLowerCase().trim(),
+            name: callMetadata.customer_name || callMetadata.name || '',
+            phone: callMetadata.customer_phone || callMetadata.phone || ''
           };
         }
       }
@@ -105,11 +154,12 @@ function validateCustomerData(req) {
     console.log('⚠️ Webhook metadata check failed:', error.message);
   }
   
-  console.error('❌ NO VALID CUSTOMER DATA FOUND');
+  console.error('❌ STRICT VALIDATION FAILED: NO VALID CUSTOMER DATA FOUND');
   console.error('📝 Validation results:');
-  console.error('   - Typeform submission:', !!global.lastTypeformSubmission);
-  console.error('   - URL email param:', !!emailFromUrl);
+  console.error('   - Typeform submission valid:', global.lastTypeformSubmission ? isValidEmail(global.lastTypeformSubmission.email) : false);
+  console.error('   - URL email param valid:', emailFromUrl ? isValidEmail(emailFromUrl) : false);
   console.error('   - Request URL:', req.url);
+  console.error('🚫 CONNECTION WILL BE REJECTED - REAL CUSTOMER DATA REQUIRED');
   
   return {
     isValid: false,
@@ -127,7 +177,7 @@ function shouldUseMemoryHandler(req) {
     return false;
   }
   
-  // Test mode - always use memory for testing
+  // Test mode - always use memory for testing (only with valid customer data)
   if (config.MEMORY_TEST_MODE) {
     console.log('🧪 Test mode - using memory handler');
     return true;
@@ -137,13 +187,13 @@ function shouldUseMemoryHandler(req) {
   const urlParams = new URLSearchParams(req.url.split('?')[1] || '');
   const customerEmail = urlParams.get('customer_email') || urlParams.get('email');
   
-  // Beta customers list
+  // Beta customers list (only with valid customer data)
   if (customerEmail && config.MEMORY_BETA_CUSTOMERS.includes(customerEmail)) {
     console.log('🌟 Beta customer detected - using memory handler');
     return true;
   }
   
-  // Percentage-based rollout
+  // Percentage-based rollout (only with valid customer data)
   if (config.MEMORY_ROLLOUT_PERCENTAGE > 0) {
     const hash = hashString(req.url || '');
     const percentage = hash % 100;
@@ -185,74 +235,284 @@ if (DocumentIngestionService) {
 // API Routes
 app.use('/', apiRoutes);
 
-// KNOWLEDGE BASE ADMIN ENDPOINTS
+// =======================================
+// REAL NEXELLA.IO KNOWLEDGE BASE
+// =======================================
 
 if (ingestionService) {
-  // Ingest sample data for testing
-  app.post('/admin/ingest/sample-data', async (req, res) => {
+  // Ingest REAL Nexella.io company knowledge
+  app.post('/admin/ingest/nexella-knowledge', async (req, res) => {
     try {
-      console.log('🧪 Ingesting sample data...');
+      console.log('🏢 Ingesting REAL Nexella.io company knowledge...');
       
-      const sampleFAQs = [
+      const REAL_NEXELLA_FAQS = [
+        // Company Overview (from actual website)
+        {
+          question: "What is Nexella AI?",
+          answer: "Nexella AI is an AI-driven Revenue Rescue System that automates lead response, customer follow-ups, and support to help businesses close more deals, recover wasted leads, and slash support costs. We guarantee measurable results within 30 days or it's free.",
+          category: "company_overview"
+        },
+        {
+          question: "What is your main value proposition?",
+          answer: "We help businesses stop bleeding sales by automating their lead response, customer follow-ups, and support. Our guarantee is 'Book 30% More In 30 Days Or Your Money Back.' We solve the problem that the average business loses 50% of leads due to slow response times.",
+          category: "value_proposition"
+        },
         {
           question: "What services does Nexella AI provide?",
-          answer: "Nexella AI provides AI-powered call automation, lead qualification, and appointment scheduling solutions for businesses across all industries.",
+          answer: "Nexella AI provides SMS Revive (texting dead leads), AI Voice Calls, AI Texting, Appointment Bookings, SMS Follow-Ups, AI Voice Call Follow-UPS, Monthly Reports, CRM Integration, and Review Collector.",
+          category: "services"
+        },
+        
+        // Specific Services (from actual website)
+        {
+          question: "What is SMS Revive?",
+          answer: "SMS Revive is our SMS system that will text your dead leads and revive them, resulting in booked appointments from low interest customers.",
           category: "services"
         },
         {
-          question: "How much does it cost?",
-          answer: "Our pricing starts at $500/month for up to 500 calls, $1,200/month for up to 1,500 calls, and $3,000/month for up to 5,000 calls. Custom solutions available for higher volumes.",
+          question: "How do your AI Voice Calls work?",
+          answer: "Our human-like AI will call your customers, log every detail, and schedule appointments for you. We also offer AI Voice Call Follow-UPS where our human-like AI will call and follow-up with your customers to make sure we close on them.",
+          category: "services"
+        },
+        {
+          question: "What is AI Texting?",
+          answer: "Our Texting App integrates directly or extends from your website so customers can receive immediate info and book from a human-like agent.",
+          category: "services"
+        },
+        {
+          question: "Do you handle appointment bookings?",
+          answer: "Yes, our AI Systems will book your appointments hands-free for you.",
+          category: "services"
+        },
+        {
+          question: "What kind of follow-ups do you provide?",
+          answer: "We provide both SMS Follow-Ups (SMS Flows that follow-up on leads making sure they don't lose interest and close) and AI Voice Call Follow-UPS (human-like AI calls to follow-up with customers).",
+          category: "services"
+        },
+        
+        // Success Stories (from actual website)
+        {
+          question: "Do you have any success stories?",
+          answer: "Yes! We took Retroshot from $10k/mo to over $200k/mo in 6 months using our SMS Flows, AI sales assistants, and Ad Strategies. We also took Nebula Orb from $25k/mo to over $250k/mo in 8 months using our SMS Flows, AI sales assistants, AI Voice Call, AI Texting, SMS Revive, and Ad Strategies.",
+          category: "success_stories"
+        },
+        
+        // Plans (from actual website - no specific pricing shown)
+        {
+          question: "What plans do you offer?",
+          answer: "We offer three plans: Basic (includes SMS Revive, AI Chatbot, Appointment Booking, CRM Integration, Monthly reports), Pro (most popular - includes everything in Basic plus AI Voice Call, AI Voice Call Follow Ups, SMS Follow Ups, Pre Qualification Flows), and Performance Based (includes everything in Pro plus additional features).",
           category: "pricing"
         },
         {
-          question: "What industries do you serve?",
-          answer: "We serve healthcare, real estate, professional services, e-commerce, home services, and many other industries with customized solutions.",
-          category: "general"
+          question: "How much does Nexella AI cost?",
+          answer: "We offer custom pricing based on your specific needs. Contact us for a personalized quote. We have Basic, Pro, and Performance Based plans available with yearly billing options.",
+          category: "pricing"
         },
+        
+        // Technical Features
         {
-          question: "Which CRMs do you integrate with?",
-          answer: "We integrate with Salesforce, HubSpot, Pipedrive, Zoho CRM, Microsoft Dynamics, and custom APIs.",
+          question: "Do you integrate with CRMs?",
+          answer: "Yes, we easily integrate with several of the most popular CRMs.",
           category: "technical"
         },
         {
-          question: "How quickly can we get started?",
-          answer: "Most clients are up and running within 5-7 business days, including consultation, setup, integration, and testing.",
-          category: "onboarding"
-        }
-      ];
-      
-      const sampleProducts = [
-        {
-          id: "ai-call-automation",
-          name: "AI Call Automation",
-          description: "AI agents that handle outbound sales calls with human-like conversations",
-          features: ["Natural language processing", "CRM integration", "Real-time calendar sync", "Lead scoring"],
-          pricing: "Starting at $500/month",
-          targetMarket: "Small to medium businesses",
-          category: "automation"
+          question: "Do you provide reporting?",
+          answer: "Yes, we provide monthly reports so you can view our analytics month by month to see how good of a job we're doing.",
+          category: "technical"
         },
         {
-          id: "lead-qualification",
-          name: "Lead Qualification System",
-          description: "Automatically qualify prospects based on your custom criteria",
-          features: ["Custom qualification questions", "Lead scoring algorithms", "Automated follow-up", "CRM integration"],
-          pricing: "Starting at $300/month",
-          targetMarket: "Sales teams",
-          category: "qualification"
+          question: "Do you collect reviews?",
+          answer: "Yes, we collect reviews automatically after the customer was taken care of.",
+          category: "technical"
+        },
+        
+        // REAL FAQ ANSWERS from website screenshots
+        {
+          question: "How fast is your response time?",
+          answer: "Our AI Systems respond to leads immediately or we can set a delay to your liking.",
+          category: "performance"
+        },
+        {
+          question: "Will you book my appointments to my calendar?",
+          answer: "Our AI systems will text/call your leads, follow up, collect information and book your appointments automatically to your calendar.",
+          category: "features"
+        },
+        {
+          question: "Can your service ask questions to qualify leads?",
+          answer: "Yes, we can add a string of questions to qualify leads. You tell us exactly what you need and we will train our AI to speak your company's language.",
+          category: "features"
+        },
+        {
+          question: "What type of support does your team offer?",
+          answer: "Nexella provides comprehensive support to assist you every step of the way. Our dedicated support team is available to address any questions, concerns, or technical issues you may encounter. You can reach out to us via email at info@nexella.io, through our online chat feature inside the platform and for certain plans via a dedicated slack support channel.",
+          category: "support"
+        },
+        {
+          question: "Can I cancel my subscription anytime?",
+          answer: "Yes, if for any reason you decide Nexella AI is not for you. You are welcome to cancel inside of your account or contact our team.",
+          category: "billing"
+        },
+        {
+          question: "Can I integrate Nexella with other tools or platforms?",
+          answer: "Yes, Nexella offers flexible integration options to seamlessly connect with your existing tools and platforms. Whether it's CRM software, helpdesk systems, or other communication channels, you can integrate Nexella to enhance workflow efficiency and maximize productivity.",
+          category: "technical"
+        },
+        {
+          question: "Can I make outbound and inbound calls with Nexella AI?",
+          answer: "Yes. Nexella supports both inbound and outbound call capabilities in all plans.",
+          category: "features"
+        },
+        {
+          question: "Do I need to bring my own Twilio and other APIs?",
+          answer: "No, when you create an account with Nexella AI, the Platform, Voice, LLM, Transcription and Telephony systems are already included. We focus on bringing a centralized solution for lightning speed deployments and best results.",
+          category: "technical"
+        },
+        {
+          question: "Can I use my number for outgoing calls with Nexella AI?",
+          answer: "Yes. Nexella AI allows you to import your Caller ID for free",
+          category: "features"
+        },
+        {
+          question: "Can I use Nexella AI for Sales Calls?",
+          answer: "Yes, absolutely! Nexella is designed to enhance sales calls by providing AI-powered agents that can engage with customers, answer questions, and assist in closing deals effectively.",
+          category: "use_cases"
+        },
+        {
+          question: "Can I use Nexella AI for Customer Support?",
+          answer: "Certainly! Nexella is ideal for customer support, allowing you to automate responses, handle inquiries, and provide assistance to customers in a timely and efficient manner.",
+          category: "use_cases"
         }
       ];
       
-      const faqResult = await ingestionService.ingestFAQs(sampleFAQs);
-      const productResult = await ingestionService.ingestProductInfo(sampleProducts);
-      const docResult = await ingestionService.ingestCompanyDocuments();
+      const REAL_NEXELLA_PRODUCTS = [
+        {
+          id: "sms-revive",
+          name: "SMS Revive",
+          description: "SMS system that texts your dead leads and revives them, resulting in booked appointments from low interest customers.",
+          features: ["Dead lead revival", "SMS automation", "Appointment booking from cold leads"],
+          pricing: "Contact for pricing",
+          targetMarket: "Businesses with accumulated dead leads",
+          category: "sms_automation"
+        },
+        {
+          id: "ai-voice-calls",
+          name: "AI Voice Calls",
+          description: "Human-like AI that calls your customers, logs every detail, and schedules appointments for you.",
+          features: ["Human-like conversations", "Detail logging", "Automatic appointment scheduling", "Follow-up calls"],
+          pricing: "Available in Pro and Performance Based plans",
+          targetMarket: "Sales teams and appointment-based businesses",
+          category: "voice_automation"
+        },
+        {
+          id: "ai-texting",
+          name: "AI Texting",
+          description: "Texting App that integrates directly with your website so customers can receive immediate info and book from a human-like agent.",
+          features: ["Website integration", "Immediate response", "Human-like texting", "Appointment booking"],
+          pricing: "Included in all plans",
+          targetMarket: "Businesses with website traffic",
+          category: "text_automation"
+        },
+        {
+          id: "appointment-booking",
+          name: "Appointment Booking System",
+          description: "AI Systems that book your appointments hands-free.",
+          features: ["Hands-free booking", "Calendar integration", "Automated scheduling"],
+          pricing: "Included in all plans",
+          targetMarket: "Service-based businesses",
+          category: "scheduling"
+        },
+        {
+          id: "sms-follow-ups",
+          name: "SMS Follow-Ups",
+          description: "SMS Flows that follow-up on leads making sure they don't lose interest and close.",
+          features: ["Automated follow-up sequences", "Interest maintenance", "Closing assistance"],
+          pricing: "Available in Pro and Performance Based plans",
+          targetMarket: "Sales teams",
+          category: "follow_up"
+        }
+      ];
+      
+      const REAL_COMPANY_CONTEXT = `
+        Nexella AI Company Information (REAL):
+        
+        Mission: To help businesses stop bleeding sales by automating lead response, customer follow-ups, and support.
+        
+        Value Proposition: "Book 30% More In 30 Days Or Your Money Back" - guaranteed results or it's free.
+        
+        Website: nexella.io
+        Support Email: info@nexella.io
+        
+        Core Problem We Solve:
+        - The average business loses 50% of leads due to slow response times
+        - Every minute you delay responding to a lead, your competition wins
+        - Appointment no-shows and weak follow-ups drain calendar and cash flow
+        - Overwhelmed support teams cause refund requests, bad reviews, and lost trust
+        
+        Our Solution:
+        - AI-driven Revenue Rescue System
+        - Automate lead response, customer follow-ups, and support
+        - Deliver measurable results within 30 days
+        
+        Proven Results:
+        - Took Retroshot from $10k/mo to over $200k/mo in 6 months
+        - Took Nebula Orb from $25k/mo to over $250k/mo in 8 months
+        
+        Service Categories:
+        1. SMS Systems (SMS Revive, SMS Follow-Ups)
+        2. AI Voice Systems (AI Voice Calls, AI Voice Call Follow-UPS)
+        3. AI Texting and Chat
+        4. Appointment Booking
+        5. CRM Integration
+        6. Monthly Reporting
+        7. Review Collection
+        
+        Plans:
+        - Basic: SMS Revive, AI Chatbot, Appointment Booking, CRM Integration, Monthly reports
+        - Pro (Popular): Everything in Basic + AI Voice Call, AI Voice Call Follow Ups, SMS Follow Ups, Pre Qualification Flows
+        - Performance Based: Everything in Pro + additional features
+        
+        Technical Infrastructure:
+        - Platform, Voice, LLM, Transcription and Telephony systems included
+        - No need for external Twilio or API setup
+        - Supports caller ID import for free
+        - Flexible integration with CRMs and other platforms
+        
+        Target Market:
+        - Businesses losing leads due to slow response times
+        - Companies with dead lead databases
+        - Service-based businesses needing appointment scheduling
+        - Sales teams wanting to automate follow-ups
+        - Businesses overwhelmed with support requests
+      `;
+      
+      // Ingest real knowledge
+      const faqResult = await ingestionService.ingestFAQs(REAL_NEXELLA_FAQS);
+      const productResult = await ingestionService.ingestProductInfo(REAL_NEXELLA_PRODUCTS);
+      
+      // Store real company context
+      await ingestionService.memoryService.storeMemories([{
+        id: 'nexella_real_company_context',
+        values: await ingestionService.memoryService.createEmbedding(REAL_COMPANY_CONTEXT),
+        metadata: {
+          memory_type: 'company_context',
+          source: 'nexella_website_real',
+          content: REAL_COMPANY_CONTEXT,
+          ingestedAt: new Date().toISOString()
+        }
+      }]);
       
       res.json({
         success: true,
-        message: 'Sample data ingested successfully',
+        message: 'REAL Nexella.io knowledge base ingested successfully',
         results: {
           faqs: faqResult,
           products: productResult,
-          documents: docResult
+          companyContext: 'stored'
+        },
+        summary: {
+          faqsCount: REAL_NEXELLA_FAQS.length,
+          productsCount: REAL_NEXELLA_PRODUCTS.length,
+          source: 'real_website_data'
         }
       });
     } catch (error) {
@@ -263,7 +523,7 @@ if (ingestionService) {
     }
   });
 
-  // Ingest documents from knowledge-base folder
+  // Other ingestion endpoints...
   app.post('/admin/ingest/documents', async (req, res) => {
     try {
       console.log('📚 Starting document ingestion...');
@@ -284,7 +544,6 @@ if (ingestionService) {
     }
   });
 
-  // Search company knowledge
   app.get('/admin/search/knowledge', async (req, res) => {
     try {
       const { q: query, limit = 5 } = req.query;
@@ -316,7 +575,6 @@ if (ingestionService) {
     }
   });
 
-  // Get ingestion statistics
   app.get('/admin/stats/ingestion', async (req, res) => {
     try {
       const stats = await ingestionService.getIngestionStats();
@@ -337,12 +595,10 @@ if (ingestionService) {
 app.get('/health/memory', async (req, res) => {
   try {
     if (config.ENABLE_MEMORY && WebSocketHandlerWithMemory) {
-      // Test if memory system is working
       try {
         const RAGMemoryService = require('./src/services/memory/RAGMemoryService');
         const memoryService = new RAGMemoryService();
         
-        // Simple test - this will initialize the service
         const stats = await memoryService.getMemoryStats();
         
         res.json({
@@ -377,7 +633,7 @@ app.get('/health/memory', async (req, res) => {
   }
 });
 
-// Admin endpoint to toggle memory system (optional)
+// Admin endpoint to toggle memory system
 app.post('/admin/memory/toggle', (req, res) => {
   const { enabled, percentage, betaCustomers } = req.body;
   
@@ -410,49 +666,77 @@ app.post('/admin/memory/toggle', (req, res) => {
   }
 });
 
-// WebSocket Connection Handler (UPDATED WITH CUSTOMER DATA VALIDATION)
+// =======================================
+// STRICT WEBSOCKET CONNECTION HANDLER
+// =======================================
+
 wss.on('connection', async (ws, req) => {
   try {
     console.log('🔗 NEW WEBSOCKET CONNECTION ATTEMPT');
     
-    // VALIDATE CUSTOMER DATA FIRST
+    // STRICT CUSTOMER DATA VALIDATION - NO FALLBACKS
     const customerValidation = validateCustomerData(req);
     
     if (!customerValidation.isValid) {
-      console.error('❌ CONNECTION REJECTED: No valid customer data');
-      ws.close(1008, 'Customer data required');
+      console.error('❌ CONNECTION REJECTED: No valid customer data found');
+      console.error('📧 Required: Real customer email (not test/demo/example)');
+      console.error('🚫 Closing connection immediately');
+      
+      // Send rejection message before closing
+      ws.send(JSON.stringify({
+        error: 'CUSTOMER_DATA_REQUIRED',
+        message: 'Valid customer data required for connection',
+        code: 1008
+      }));
+      
+      // Close connection with policy violation code
+      ws.close(1008, 'Customer data validation failed');
       return;
     }
     
     console.log(`✅ CUSTOMER DATA VALIDATED: ${customerValidation.email} (source: ${customerValidation.source})`);
     
-    // Decide which handler to use
+    // Additional validation: Check if this is a real business email
+    const email = customerValidation.email;
+    const domain = email.split('@')[1];
+    
+    // Log for analytics but don't reject (some real customers use gmail/yahoo)
+    if (['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com'].includes(domain)) {
+      console.log(`📝 Note: Personal email domain detected: ${domain} (allowed but logged)`);
+    }
+    
+    // Decide which handler to use based on memory system settings
     const useMemory = shouldUseMemoryHandler(req);
     
     if (useMemory) {
-      console.log('🧠 Initializing MEMORY-ENABLED WebSocket handler');
+      console.log('🧠 Initializing MEMORY-ENHANCED WebSocket handler');
+      console.log('📚 AI will have access to company knowledge and customer history');
       new WebSocketHandlerWithMemory(ws, req);
     } else {
       console.log('📞 Initializing REGULAR WebSocket handler');
+      console.log('💬 AI will use standard conversation flow');
       new WebSocketHandler(ws, req);
     }
-  } catch (error) {
-    console.error('❌ Error creating WebSocket handler:', error.message);
     
-    // Don't fall back - close connection if customer data is required
-    if (error.message.includes('REAL_CUSTOMER_DATA_REQUIRED')) {
-      console.error('❌ CLOSING CONNECTION: Real customer data required');
-      ws.close(1008, 'Customer data validation failed');
-    } else {
-      // For other errors, try fallback to regular handler
-      try {
-        console.log('🔄 Falling back to regular handler');
-        new WebSocketHandler(ws, req);
-      } catch (fallbackError) {
-        console.error('❌ Fallback handler also failed:', fallbackError.message);
-        ws.close(1011, 'Handler initialization failed');
-      }
+    // Log successful connection for analytics
+    console.log(`📊 SUCCESSFUL CONNECTION - Email: ${email}, Source: ${customerValidation.source}, Memory: ${useMemory ? 'YES' : 'NO'}`);
+    
+  } catch (error) {
+    console.error('❌ CRITICAL ERROR in WebSocket connection:', error.message);
+    console.error('📍 Stack trace:', error.stack);
+    
+    // Always close connection on any error - no fallbacks
+    try {
+      ws.send(JSON.stringify({
+        error: 'CONNECTION_ERROR',
+        message: 'Unable to establish connection',
+        code: 1011
+      }));
+    } catch (sendError) {
+      console.error('❌ Could not send error message to client:', sendError.message);
     }
+    
+    ws.close(1011, 'Internal server error');
   }
 });
 
@@ -485,7 +769,10 @@ process.on('SIGINT', () => {
   });
 });
 
-// Start server and initialize services
+// =======================================
+// SERVER STARTUP & INITIALIZATION
+// =======================================
+
 const PORT = config.PORT;
 server.listen(PORT, async () => {
   // Determine if we're in production or development
@@ -494,21 +781,38 @@ server.listen(PORT, async () => {
   const protocol = isProduction ? 'https:' : 'http:';
   const wsProtocol = isProduction ? 'wss:' : 'ws:';
   
-  console.log(`✅ Nexella WebSocket Server listening on port ${PORT}`);
+  console.log('🚀 NEXELLA AI SERVER STARTING...');
+  console.log(`✅ Server listening on port ${PORT}`);
   
   if (isProduction) {
     console.log(`🌐 Production Server URL: ${host}`);
     console.log(`🔗 Production WebSocket URL: ${host.replace('https:', 'wss:')}`);
-    console.log(`🚀 Server is LIVE and accessible 24/7 from anywhere!`);
+    console.log(`🚀 Server is LIVE and accessible 24/7!`);
   } else {
     console.log(`🌐 Development Server URL: http://localhost:${PORT}`);
     console.log(`🔗 Development WebSocket URL: ws://localhost:${PORT}`);
   }
   
+  // STRICT CUSTOMER DATA VALIDATION STATUS
+  console.log('🔒 STRICT CUSTOMER DATA VALIDATION: ENFORCED ✅');
+  console.log('🚫 Fake/demo/test emails will be REJECTED');
+  console.log('📧 Required: Real customer emails only');
+  console.log('📝 Accepted sources:');
+  console.log('   ✓ Typeform submissions');
+  console.log('   ✓ URL parameters (?customer_email=...)');
+  console.log('   ✓ Webhook metadata');
+  console.log('   ✓ Trigger server endpoints');
+  
   // Memory System Status
   if (config.ENABLE_MEMORY) {
     if (WebSocketHandlerWithMemory) {
-      console.log('🧠 Memory System: ENABLED ✅');
+      console.log('🧠 MEMORY SYSTEM: ENABLED ✅');
+      console.log('📚 AI agents have access to:');
+      console.log('   ✓ Customer conversation history');
+      console.log('   ✓ Company knowledge base');
+      console.log('   ✓ Previous interaction context');
+      console.log('   ✓ Personalized responses');
+      
       if (config.MEMORY_TEST_MODE) {
         console.log('🧪 Memory Test Mode: ACTIVE');
       }
@@ -516,7 +820,7 @@ server.listen(PORT, async () => {
         console.log(`🌟 Beta Customers: ${config.MEMORY_BETA_CUSTOMERS.length} customers`);
       }
       if (config.MEMORY_ROLLOUT_PERCENTAGE > 0) {
-        console.log(`🎲 Rollout: ${config.MEMORY_ROLLOUT_PERCENTAGE}% of traffic`);
+        console.log(`🎲 Memory Rollout: ${config.MEMORY_ROLLOUT_PERCENTAGE}% of traffic`);
       }
     } else {
       console.log('🧠 Memory System: ENABLED but handler missing ⚠️');
@@ -524,62 +828,68 @@ server.listen(PORT, async () => {
     }
   } else {
     console.log('📞 Memory System: DISABLED');
+    console.log('💬 AI agents use standard conversation flow');
   }
   
   // Knowledge System Status
   if (ingestionService) {
-    console.log('📚 Knowledge System: ENABLED ✅');
-    console.log(`🔗 Admin endpoints available: ${host}/admin/ingest/sample-data`);
+    console.log('📚 KNOWLEDGE SYSTEM: ENABLED ✅');
+    console.log('🏢 Real Nexella.io knowledge available:');
+    console.log('   ✓ Company FAQ and services');
+    console.log('   ✓ Product information');
+    console.log('   ✓ Success stories');
+    console.log('   ✓ Technical capabilities');
+    console.log(`🔗 Admin endpoints:`);
+    console.log(`   📤 Ingest knowledge: ${isProduction ? host : 'http://localhost:' + PORT}/admin/ingest/nexella-knowledge`);
+    console.log(`   🔍 Search knowledge: ${isProduction ? host : 'http://localhost:' + PORT}/admin/search/knowledge?q=pricing`);
+    console.log(`   📊 View stats: ${isProduction ? host : 'http://localhost:' + PORT}/admin/stats/ingestion`);
   } else {
     console.log('📚 Knowledge System: DISABLED');
   }
   
-  // Customer Data Validation Status
-  console.log('🔒 Customer Data Validation: ENFORCED ✅');
-  console.log('📝 Connections require valid customer email from:');
-  console.log('   - Typeform submissions');
-  console.log('   - URL parameters (?customer_email=...)');
-  console.log('   - Webhook metadata');
-  console.log('   - Trigger server endpoints');
-  
-  // Initialize Google Calendar service after server starts
+  // Initialize Google Calendar service
   try {
-    console.log('🚀 Initializing Nexella WebSocket Server...');
+    console.log('🗓️ Initializing Google Calendar service...');
     
     calendarInitialized = await initializeCalendarService();
     
     if (calendarInitialized) {
-      console.log('✅ Google Calendar service ready');
-      console.log('📅 Calendar Status: Real Google Calendar ✅');
+      console.log('✅ GOOGLE CALENDAR: CONNECTED ✅');
+      console.log('📅 Real appointment booking available');
     } else {
-      console.log('⚠️ Google Calendar service disabled - using demo mode');
-      console.log('📅 Calendar Status: Demo Mode ⚠️');
-      console.log('💡 Add Google Calendar environment variables for real scheduling');
-    }
-    
-    console.log('✅ Server initialization complete');
-    
-    if (isProduction) {
-      console.log('🎉 Production deployment successful! Server running 24/7.');
-      
-      // Show memory system status in production
-      if (config.ENABLE_MEMORY && WebSocketHandlerWithMemory) {
-        console.log('🧠 Memory-enhanced AI agent is LIVE!');
-        console.log(`🔗 Test memory health: ${host}/health/memory`);
-      }
-      
-      // Show knowledge system status in production
-      if (ingestionService) {
-        console.log('📚 Knowledge-enhanced AI agent is LIVE!');
-        console.log(`🔗 Ingest sample data: ${host}/admin/ingest/sample-data`);
-      }
-      
-      console.log('🔒 SECURITY: Only connections with valid customer data accepted');
+      console.log('⚠️ GOOGLE CALENDAR: DISABLED ⚠️');
+      console.log('📅 Add Google Calendar environment variables for real scheduling');
     }
     
   } catch (error) {
-    console.error('❌ Server initialization error:', error.message);
-    console.log('⚠️ Some features may be limited');
-    console.log('📅 Calendar Status: Error ❌');
+    console.error('❌ Calendar initialization error:', error.message);
+    console.log('📅 CALENDAR STATUS: ERROR ❌');
+  }
+  
+  // Final startup summary
+  console.log('');
+  console.log('🎉 NEXELLA AI SERVER READY!');
+  console.log('');
+  console.log('📋 SYSTEM STATUS SUMMARY:');
+  console.log(`   🔒 Customer Validation: STRICT`);
+  console.log(`   🧠 Memory System: ${config.ENABLE_MEMORY && WebSocketHandlerWithMemory ? 'ENABLED' : 'DISABLED'}`);
+  console.log(`   📚 Knowledge System: ${ingestionService ? 'ENABLED' : 'DISABLED'}`);
+  console.log(`   📅 Calendar Integration: ${calendarInitialized ? 'CONNECTED' : 'DISABLED'}`);
+  console.log(`   🌐 Environment: ${isProduction ? 'PRODUCTION' : 'DEVELOPMENT'}`);
+  console.log('');
+  
+  if (isProduction) {
+    console.log('🚀 PRODUCTION READY - Server accessible worldwide!');
+    
+    // Show key URLs for production
+    console.log('🔗 Key URLs:');
+    console.log(`   📊 Health Check: ${host}/health`);
+    console.log(`   🧠 Memory Health: ${host}/health/memory`);
+    console.log(`   📚 Ingest Knowledge: ${host}/admin/ingest/nexella-knowledge`);
+    
+    console.log('✅ All systems operational for real customer connections!');
+  } else {
+    console.log('💻 Development server ready for testing');
+    console.log('💡 Use real customer emails to test connections');
   }
 });
