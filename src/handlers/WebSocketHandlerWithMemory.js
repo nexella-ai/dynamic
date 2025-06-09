@@ -1,4 +1,4 @@
-// src/handlers/WebSocketHandlerWithMemory.js - Enhanced with RAG Memory
+// src/handlers/WebSocketHandlerWithMemory.js - Enhanced with RAG Memory (FIXED)
 const axios = require('axios');
 const config = require('../config/environment');
 const globalDiscoveryManager = require('../services/discovery/GlobalDiscoveryManager');
@@ -8,9 +8,17 @@ const {
   generateAvailabilityResponse
 } = require('../services/calendar/CalendarHelpers');
 const { 
-  sendSchedulingPreference, 
-  getActiveCallsMetadata
+  sendSchedulingPreference
 } = require('../services/webhooks/WebhookService');
+
+// Safe import for getActiveCallsMetadata - may not exist
+let getActiveCallsMetadata = null;
+try {
+  const webhookService = require('../services/webhooks/WebhookService');
+  getActiveCallsMetadata = webhookService.getActiveCallsMetadata;
+} catch (error) {
+  console.log('⚠️ getActiveCallsMetadata not available - using fallback');
+}
 
 // Import Memory Service
 let RAGMemoryService = null;
@@ -154,9 +162,19 @@ CRITICAL RULES:
       };
     }
     
-    // Method 2: Check active calls metadata from webhook service
-    const activeCallsMetadata = getActiveCallsMetadata();
-    if (activeCallsMetadata && activeCallsMetadata.has(this.callId)) {
+    // Method 2: Check active calls metadata from webhook service (FIXED)
+    let activeCallsMetadata = null;
+    try {
+      if (getActiveCallsMetadata && typeof getActiveCallsMetadata === 'function') {
+        activeCallsMetadata = getActiveCallsMetadata();
+      } else {
+        console.log('⚠️ getActiveCallsMetadata not available - skipping webhook metadata check');
+      }
+    } catch (error) {
+      console.log('⚠️ Error getting active calls metadata:', error.message);
+    }
+    
+    if (activeCallsMetadata && activeCallsMetadata.has && activeCallsMetadata.has(this.callId)) {
       const callMetadata = activeCallsMetadata.get(this.callId);
       console.log('✅ Using data from webhook active calls metadata:', callMetadata);
       return {
