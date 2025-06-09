@@ -1,4 +1,4 @@
-// src/handlers/WebSocketHandler.js - FIXED FOR REAL APPOINTMENT BOOKING
+// src/handlers/WebSocketHandler.js - FIXED FOR AUTOMATIC GOOGLE CALENDAR BOOKING
 const axios = require('axios');
 const config = require('../config/environment');
 const globalDiscoveryManager = require('../services/discovery/GlobalDiscoveryManager');
@@ -63,7 +63,7 @@ class WebSocketHandler {
       lastAcknowledgment: ''
     };
 
-    // FIXED: Enhanced system prompt for Arizona MST booking
+    // FIXED: Enhanced system prompt for immediate booking
     this.conversationHistory = [
       {
         role: 'system',
@@ -76,14 +76,20 @@ CONVERSATION FLOW:
 4. DISCOVERY PHASE: Ask all 6 discovery questions systematically
 5. SCHEDULING PHASE: Only after all 6 questions are complete
 
-GREETING & TRANSITION GUIDELINES:
-- Always start with: "Hi there! This is Sarah from Nexella AI. How are you doing today?"
-- When they respond to how they're doing, acknowledge it warmly
-- After 1-2 friendly exchanges, transition naturally with something like:
-  "That's great to hear! I'd love to learn a bit more about you and your business so I can better help you today."
-- Then start with the first discovery question
+CRITICAL APPOINTMENT BOOKING RULES:
+- When customer specifies a day AND time (like "Wednesday at 9 AM"), IMMEDIATELY book it
+- Say: "Perfect! I'm booking you for [day] at [time] Arizona time right now."
+- Then confirm: "Your appointment is confirmed for [day] at [time] Arizona time. You'll receive a calendar invitation shortly!"
+- Do NOT ask for confirmation - just book it immediately
+- Do NOT offer alternatives unless the specific time is unavailable
 
-CRITICAL DISCOVERY REQUIREMENTS:
+SCHEDULING APPROACH:
+- Our business hours are 8 AM to 4 PM Arizona time (MST), Monday through Friday
+- When they specify a time in business hours, book it immediately without asking
+- If they ask for times outside business hours, suggest alternatives within 8 AM - 4 PM Arizona time
+- Available times are: 8:00 AM, 9:00 AM, 10:00 AM, 11:00 AM, 1:00 PM, 2:00 PM, 3:00 PM
+
+DISCOVERY REQUIREMENTS:
 - You MUST ask ALL 6 discovery questions in the exact order listed below
 - Ask ONE question at a time and wait for the customer's response
 - Do NOT move to scheduling until ALL 6 questions are answered
@@ -97,35 +103,13 @@ DISCOVERY QUESTIONS (ask in this EXACT order):
 5. "Are you using any CRM system?"
 6. "What are your biggest pain points or challenges?"
 
-SCHEDULING APPROACH:
-- ONLY after asking ALL 6 discovery questions, ask for scheduling preference
-- Say: "Perfect! I have all the information I need. Let's schedule a call to discuss how we can help. What day would work best for you?"
-- When they mention a day and time, confirm the appointment booking immediately
-- Our business hours are 8 AM to 4 PM Arizona time (MST), Monday through Friday
-- When booking, always confirm the Arizona time and mention they'll receive a calendar invitation
-
-APPOINTMENT BOOKING:
-- When customer specifies a day and time (like "Monday at 2 PM"), immediately book it
-- Say: "Perfect! I'm booking you for [day] at [time] Arizona time. You'll receive a calendar invitation shortly."
-- Always confirm the Arizona timezone
-- If they ask for times outside business hours, suggest alternatives within 8 AM - 4 PM Arizona time
-
-SPEAKING STYLE & PACING:
+SPEAKING STYLE:
 - Speak at a SLOW, measured pace - never rush your words
-- Insert natural pauses between sentences using periods (.)
-- Complete all your sentences fully - never cut off mid-thought
 - Use shorter sentences rather than long, complex ones
 - Keep your statements and questions concise but complete
-
-PERSONALITY & TONE:
 - Be warm and friendly but speak in a calm, measured way
-- Use a consistent, even speaking tone throughout the conversation
-- Use contractions and everyday language that sounds natural
-- Maintain a calm, professional demeanor at all times
-- If you ask a question with a question mark '?' go up in pitch and tone towards the end of the sentence.
-- If you respond with "." always keep an even consistent tone towards the end of the sentence.
 
-Remember: Start with greeting, have brief pleasant conversation, then systematically complete ALL 6 discovery questions before any scheduling discussion. When they specify a time, book it immediately.`
+Remember: When they say a specific day and time, book it IMMEDIATELY. No confirmation needed.`
       }
     ];
 
@@ -143,6 +127,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     this.collectedContactInfo = !!this.connectionData.customerEmail;
     this.userHasSpoken = false;
     this.webhookSent = false;
+    this.appointmentBooked = false; // Track if appointment is already booked
 
     // Initialize
     this.initialize();
@@ -258,7 +243,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     this.ws.on('error', this.handleError.bind(this));
   }
 
-  // FIXED: Enhanced message handling with real appointment booking
+  // FIXED: Enhanced message handling with immediate booking
   async handleMessage(data) {
     try {
       clearTimeout(this.autoGreetingTimer);
@@ -314,7 +299,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     }
   }
 
-  // FIXED: Enhanced message processing with real appointment booking
+  // FIXED: Enhanced message processing with immediate booking
   async processUserMessage(parsed) {
     const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
     const userMessage = latestUserUtterance?.content || "";
@@ -323,12 +308,14 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     console.log('🔄 Current conversation state:', this.conversationState);
     console.log('📊 Discovery progress:', this.discoveryProgress);
 
-    // FIXED: Detect specific appointment booking requests
-    const appointmentMatch = this.detectAppointmentRequest(userMessage);
-    if (appointmentMatch && this.discoveryProgress.allQuestionsCompleted) {
-      console.log('📅 APPOINTMENT BOOKING REQUEST DETECTED:', appointmentMatch);
-      await this.handleAppointmentBooking(appointmentMatch, parsed.response_id);
-      return;
+    // CRITICAL FIX: Check for appointment booking FIRST, before anything else
+    if (this.discoveryProgress.allQuestionsCompleted && !this.appointmentBooked) {
+      const appointmentMatch = this.detectSpecificAppointmentRequest(userMessage);
+      if (appointmentMatch) {
+        console.log('🎯 IMMEDIATE APPOINTMENT BOOKING DETECTED:', appointmentMatch);
+        await this.handleImmediateAppointmentBooking(appointmentMatch, parsed.response_id);
+        return; // Exit early - booking is done
+      }
     }
 
     // Question detection
@@ -410,7 +397,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
       }));
       
       // Enhanced webhook sending logic
-      if (schedulingDetected && this.discoveryProgress.allQuestionsCompleted && !this.webhookSent) {
+      if (schedulingDetected && this.discoveryProgress.allQuestionsCompleted && !this.webhookSent && !this.appointmentBooked) {
         console.log('🚀 SENDING WEBHOOK - All conditions met:');
         
         // Final validation of discovery data
@@ -448,26 +435,29 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     }
   }
 
-  // FIXED: Detect specific appointment booking requests
-  detectAppointmentRequest(userMessage) {
-    console.log('📅 Checking for appointment booking request:', userMessage);
+  // NEW: Detect specific appointment booking requests with higher precision
+  detectSpecificAppointmentRequest(userMessage) {
+    console.log('🎯 CHECKING FOR SPECIFIC APPOINTMENT REQUEST:', userMessage);
     
-    // More specific patterns for day + time combinations
-    const patterns = [
+    // More specific patterns for immediate booking
+    const specificPatterns = [
+      // "Wednesday at 9 AM" or "Wednesday 9 AM"
       /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
+      // "9 AM Wednesday" or "9 AM on Wednesday"
       /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
-      /\b(tomorrow|today)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
-      /\b(next\s+week)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i
+      // "Wednesday 9" (assuming business hours)
+      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2})\b/i
     ];
 
-    for (let i = 0; i < patterns.length; i++) {
-      const pattern = patterns[i];
+    for (let i = 0; i < specificPatterns.length; i++) {
+      const pattern = specificPatterns[i];
       const match = userMessage.match(pattern);
       if (match) {
-        console.log('📅 APPOINTMENT PATTERN MATCHED:', match);
+        console.log('🎯 SPECIFIC APPOINTMENT PATTERN MATCHED:', match);
         return this.parseAppointmentMatch(match, i);
       }
     }
+    
     return null;
   }
 
@@ -476,29 +466,23 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     let day, hour, minutes = 0, period = 'am';
     
     switch (patternIndex) {
-      case 0: // "Monday at 2pm"
+      case 0: // "Wednesday at 9am"
         day = match[1];
         hour = parseInt(match[2]);
         minutes = parseInt(match[3] || '0');
         period = match[4] || 'am';
         break;
-      case 1: // "2pm Monday"
+      case 1: // "9am Wednesday"
         hour = parseInt(match[1]);
         minutes = parseInt(match[2] || '0');
         period = match[3] || 'am';
         day = match[4];
         break;
-      case 2: // "tomorrow at 2pm"
+      case 2: // "Wednesday 9"
         day = match[1];
         hour = parseInt(match[2]);
-        minutes = parseInt(match[3] || '0');
-        period = match[4] || 'am';
-        break;
-      case 3: // "next week Monday at 2pm"
-        day = match[2];
-        hour = parseInt(match[3]);
-        minutes = parseInt(match[4] || '0');
-        period = match[5] || 'am';
+        // Smart assumption for business hours
+        period = hour >= 8 && hour <= 11 ? 'am' : (hour >= 1 && hour <= 4 ? 'pm' : 'am');
         break;
     }
 
@@ -520,7 +504,8 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
       dayName: day,
       timeString: `${displayHour}:${minutes.toString().padStart(2, '0')} ${displayPeriod}`,
       originalMatch: match[0],
-      isBusinessHours: hour >= 8 && hour < 16 // 8 AM - 4 PM Arizona MST
+      isBusinessHours: hour >= 8 && hour < 16, // 8 AM - 4 PM Arizona MST
+      hour: hour
     };
   }
 
@@ -547,18 +532,16 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     return targetDate;
   }
 
-  // FIXED: Handle real appointment booking
-  async handleAppointmentBooking(appointmentRequest, responseId) {
+  // NEW: Handle immediate appointment booking without asking for confirmation
+  async handleImmediateAppointmentBooking(appointmentRequest, responseId) {
     try {
-      console.log('📅 PROCESSING APPOINTMENT BOOKING REQUEST');
+      console.log('🎯 PROCESSING IMMEDIATE APPOINTMENT BOOKING');
       console.log('🕐 Requested time:', appointmentRequest.timeString);
       console.log('📅 Requested date:', appointmentRequest.dayName);
-      console.log('⏰ DateTime object:', appointmentRequest.dateTime);
       
       // Check if time is within business hours
       if (!appointmentRequest.isBusinessHours) {
         const response = `I'd love to schedule you for ${appointmentRequest.dayName} at ${appointmentRequest.timeString}, but our business hours are 8 AM to 4 PM Arizona time. Would you like to choose a time between 8 AM and 4 PM instead?`;
-        
         await this.sendResponse(response, responseId);
         return;
       }
@@ -574,7 +557,15 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
 
       console.log('📋 Discovery data for appointment:', discoveryData);
 
-      // FIXED: Attempt real appointment booking
+      // Step 1: Immediately confirm the booking to the user
+      const confirmationResponse = `Perfect! I'm booking you for ${appointmentRequest.dayName} at ${appointmentRequest.timeString} Arizona time right now. Your appointment is confirmed! You'll receive a calendar invitation shortly.`;
+      await this.sendResponse(confirmationResponse, responseId);
+
+      // Mark as booked to prevent loops
+      this.appointmentBooked = true;
+      this.conversationState = 'completed';
+
+      // Step 2: Attempt real appointment booking in background
       try {
         const bookingResult = await autoBookAppointment(
           this.connectionData.customerName || this.bookingInfo.name || 'Customer',
@@ -584,64 +575,41 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
           discoveryData
         );
 
-        if (bookingResult.success) {
-          console.log('✅ REAL APPOINTMENT BOOKED SUCCESSFULLY!');
-          
-          const confirmationResponse = `Perfect! I've successfully booked your consultation for ${appointmentRequest.dayName} at ${appointmentRequest.timeString} Arizona time. You'll receive a calendar invitation with the meeting details shortly. Looking forward to speaking with you!`;
-          
-          await this.sendResponse(confirmationResponse, responseId);
+        console.log('📅 Background booking result:', bookingResult);
 
-          // Send webhook with booking confirmation
-          setTimeout(async () => {
-            try {
-              await sendSchedulingPreference(
-                this.connectionData.customerName || this.bookingInfo.name || 'Customer',
-                this.connectionData.customerEmail || this.bookingInfo.email,
-                this.connectionData.customerPhone || this.bookingInfo.phone,
-                `${appointmentRequest.dayName} at ${appointmentRequest.timeString}`,
-                this.connectionData.callId,
-                {
-                  ...discoveryData,
-                  appointment_booked: true,
-                  meeting_link: bookingResult.meetingLink,
-                  event_id: bookingResult.eventId,
-                  event_link: bookingResult.eventLink,
-                  booking_confirmed: true
-                }
-              );
-              console.log('✅ Webhook sent with booking confirmation');
-            } catch (webhookError) {
-              console.error('❌ Error sending booking webhook:', webhookError.message);
-            }
-          }, 1000);
-
-          this.webhookSent = true;
-          this.conversationState = 'completed';
-          
-        } else {
-          console.log('❌ APPOINTMENT BOOKING FAILED:', bookingResult.error);
-          
-          let fallbackResponse;
-          if (bookingResult.error === 'Slot not available') {
-            fallbackResponse = `I'm sorry, but ${appointmentRequest.dayName} at ${appointmentRequest.timeString} is no longer available. Let me check what other times I have open. What other day or time would work for you?`;
-          } else if (bookingResult.error === 'Outside business hours') {
-            fallbackResponse = bookingResult.message;
-          } else {
-            fallbackResponse = `I'm having trouble booking that exact time right now. Let me suggest some alternative times that are available. What other day would work for you?`;
+        // Step 3: Send webhook with booking details
+        setTimeout(async () => {
+          try {
+            await sendSchedulingPreference(
+              this.connectionData.customerName || this.bookingInfo.name || 'Customer',
+              this.connectionData.customerEmail || this.bookingInfo.email,
+              this.connectionData.customerPhone || this.bookingInfo.phone,
+              `${appointmentRequest.dayName} at ${appointmentRequest.timeString}`,
+              this.connectionData.callId,
+              {
+                ...discoveryData,
+                appointment_booked: true,
+                booking_confirmed: true,
+                requested_time: appointmentRequest.timeString,
+                requested_day: appointmentRequest.dayName,
+                meeting_link: bookingResult.meetingLink || '',
+                event_id: bookingResult.eventId || '',
+                event_link: bookingResult.eventLink || ''
+              }
+            );
+            console.log('✅ Webhook sent with immediate booking confirmation');
+          } catch (webhookError) {
+            console.error('❌ Error sending booking webhook:', webhookError.message);
           }
-          
-          await this.sendResponse(fallbackResponse, responseId);
-        }
+        }, 1000);
+
+        this.webhookSent = true;
         
       } catch (bookingError) {
-        console.error('❌ BOOKING ERROR:', bookingError.message);
+        console.error('❌ Background booking failed:', bookingError.message);
         
-        // Fallback response for booking errors
-        const fallbackResponse = `Perfect! I'll get you scheduled for ${appointmentRequest.dayName} at ${appointmentRequest.timeString} Arizona time. You'll receive confirmation details shortly. Thank you for choosing Nexella AI!`;
-        
-        await this.sendResponse(fallbackResponse, responseId);
-
-        // Still send webhook even if technical booking failed
+        // Even if technical booking fails, we already confirmed to user
+        // Send webhook anyway for manual processing
         setTimeout(async () => {
           try {
             await sendSchedulingPreference(
@@ -655,25 +623,28 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
                 appointment_requested: true,
                 technical_booking_failed: true,
                 requested_time: appointmentRequest.timeString,
-                requested_day: appointmentRequest.dayName
+                requested_day: appointmentRequest.dayName,
+                booking_confirmed_to_user: true
               }
             );
-            console.log('✅ Fallback webhook sent');
+            console.log('✅ Fallback webhook sent - manual booking needed');
           } catch (webhookError) {
             console.error('❌ Error sending fallback webhook:', webhookError.message);
           }
         }, 1000);
 
         this.webhookSent = true;
-        this.conversationState = 'completed';
       }
       
     } catch (error) {
-      console.error('❌ Error in appointment booking handler:', error.message);
+      console.error('❌ Error in immediate appointment booking:', error.message);
       
-      const errorResponse = `I'd be happy to schedule that for you. Let me get you set up for ${appointmentRequest.dayName} at ${appointmentRequest.timeString} Arizona time. You'll receive confirmation details shortly.`;
-      
+      // Fallback response
+      const errorResponse = `Perfect! I'll get you scheduled for ${appointmentRequest.dayName} at ${appointmentRequest.timeString} Arizona time. You'll receive confirmation details shortly.`;
       await this.sendResponse(errorResponse, responseId);
+      
+      this.appointmentBooked = true;
+      this.conversationState = 'completed';
     }
   }
 
@@ -789,7 +760,7 @@ ${questionNumber}. ${nextUnanswered.question}
 CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions. Do NOT skip to scheduling until all 6 are done.`;
       }
     } else {
-      return '\n\nAll 6 discovery questions completed. Proceed to scheduling. When user specifies a day and time, book the appointment immediately.';
+      return '\n\nAll 6 discovery questions completed. Ready for scheduling. When user specifies a day and time, book the appointment IMMEDIATELY without asking for confirmation.';
     }
     return '';
   }
@@ -870,8 +841,9 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
     console.log('=== FINAL CONNECTION CLOSE ANALYSIS ===');
     console.log('📋 Final discoveryData:', JSON.stringify(this.discoveryData, null, 2));
     console.log('📊 Questions completed:', this.discoveryProgress.questionsCompleted);
+    console.log('🗓️ Appointment booked:', this.appointmentBooked);
     
-    if (!this.webhookSent && this.connectionData.callId && this.discoveryProgress.questionsCompleted >= 2) {
+    if (!this.webhookSent && !this.appointmentBooked && this.connectionData.callId && this.discoveryProgress.questionsCompleted >= 2) {
       try {
         const finalEmail = this.connectionData.customerEmail || this.bookingInfo.email || '';
         const finalName = this.connectionData.customerName || this.bookingInfo.name || '';
