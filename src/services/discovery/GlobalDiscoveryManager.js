@@ -1,4 +1,4 @@
-// src/services/discovery/GlobalDiscoveryManager.js - FIXED (NO MOCK DATA)
+// src/services/discovery/GlobalDiscoveryManager.js - FIXED WITH ENHANCED ANTI-LOOP PROTECTION
 class GlobalDiscoveryManager {
   constructor() {
     // Global storage for all active discovery sessions
@@ -78,7 +78,10 @@ class GlobalDiscoveryManager {
         questionAskedCount: 0,
         lastQuestionAskedAt: 0,
         maxQuestionsPerMinute: 6,
-        preventRepeatedQuestions: true
+        preventRepeatedQuestions: true,
+        lastAnswerCapturedAt: 0,
+        answerCaptureCount: 0,
+        maxAnswerCapturesPerMinute: 10
       }
     };
 
@@ -114,7 +117,7 @@ class GlobalDiscoveryManager {
     this.sessionTimeouts.set(callId, timeout);
   }
 
-  // Question asking with better state management
+  // ENHANCED: Question asking with comprehensive anti-loop protection
   markQuestionAsked(callId, questionIndex, botMessage) {
     const session = this.activeSessions.get(callId);
     if (!session) {
@@ -122,7 +125,7 @@ class GlobalDiscoveryManager {
       return false;
     }
 
-    // ANTI-LOOP: Check if already asked recently
+    // ANTI-LOOP 1: Check if already asked recently (timing protection)
     const now = Date.now();
     if (session.antiLoop.lastQuestionAskedAt > 0) {
       const timeSinceLastQuestion = now - session.antiLoop.lastQuestionAskedAt;
@@ -132,12 +135,30 @@ class GlobalDiscoveryManager {
       }
     }
 
+    // ANTI-LOOP 2: Check question rate limiting
+    const oneMinuteAgo = now - 60000;
+    if (session.antiLoop.questionAskedCount > 0 && session.antiLoop.lastQuestionAskedAt > oneMinuteAgo) {
+      if (session.antiLoop.questionAskedCount >= session.antiLoop.maxQuestionsPerMinute) {
+        console.log(`🚫 ANTI-LOOP: Too many questions asked recently (${session.antiLoop.questionAskedCount} in last minute)`);
+        return false;
+      }
+    } else {
+      // Reset counter if more than a minute has passed
+      session.antiLoop.questionAskedCount = 0;
+    }
+
     if (questionIndex >= 0 && questionIndex < session.questions.length) {
       const question = session.questions[questionIndex];
       
-      // Allow re-asking if not answered yet
+      // ANTI-LOOP 3: Allow re-asking if not answered yet, but prevent excessive repetition
       if (question.asked && question.answered) {
         console.log(`🚫 ANTI-LOOP: Question ${questionIndex + 1} already answered`);
+        return false;
+      }
+      
+      // ANTI-LOOP 4: Prevent asking the same question too frequently
+      if (question.asked && question.askedAt && (now - question.askedAt) < 10000) { // 10 seconds
+        console.log(`🚫 ANTI-LOOP: Question ${questionIndex + 1} asked too recently`);
         return false;
       }
       
@@ -158,12 +179,25 @@ class GlobalDiscoveryManager {
     return false;
   }
 
-  // Better answer capture with validation
+  // ENHANCED: Answer capture with comprehensive validation and anti-loop protection
   captureAnswer(callId, questionIndex, answer) {
     const session = this.activeSessions.get(callId);
     if (!session) {
       console.log('❌ No session found for answer capture:', callId);
       return false;
+    }
+
+    // ANTI-LOOP 1: Check answer capture rate limiting
+    const now = Date.now();
+    const oneMinuteAgo = now - 60000;
+    if (session.antiLoop.lastAnswerCapturedAt > oneMinuteAgo) {
+      if (session.antiLoop.answerCaptureCount >= session.antiLoop.maxAnswerCapturesPerMinute) {
+        console.log(`🚫 ANTI-LOOP: Too many answer captures recently (${session.antiLoop.answerCaptureCount} in last minute)`);
+        return false;
+      }
+    } else {
+      // Reset counter if more than a minute has passed
+      session.antiLoop.answerCaptureCount = 0;
     }
 
     // Validate input
@@ -174,16 +208,25 @@ class GlobalDiscoveryManager {
 
     const question = session.questions[questionIndex];
     
-    // Check if already answered
+    // ANTI-LOOP 2: Check if already answered recently
     if (question.answered) {
       console.log(`🚫 Question ${questionIndex + 1} already answered`);
       return false;
     }
 
-    // Validate answer quality
-    if (!this.isValidAnswer(answer)) {
+    // ANTI-LOOP 3: Validate answer quality with enhanced checking
+    if (!this.isValidAnswer(answer, questionIndex)) {
       console.log(`🚫 Invalid answer rejected: "${answer}"`);
       return false;
+    }
+
+    // ANTI-LOOP 4: Prevent rapid answer capturing
+    if (session.antiLoop.lastAnswerCapturedAt > 0) {
+      const timeSinceLastCapture = now - session.antiLoop.lastAnswerCapturedAt;
+      if (timeSinceLastCapture < 1000) { // 1 second minimum between captures
+        console.log(`🚫 ANTI-LOOP: Answer capture too rapid (${timeSinceLastCapture}ms ago)`);
+        return false;
+      }
     }
 
     // CAPTURE THE ANSWER
@@ -196,6 +239,10 @@ class GlobalDiscoveryManager {
     session.progress.questionsCompleted++;
     session.progress.waitingForAnswer = false;
     session.progress.allQuestionsCompleted = session.questions.every(q => q.answered);
+    
+    // Update anti-loop tracking
+    session.antiLoop.lastAnswerCapturedAt = now;
+    session.antiLoop.answerCaptureCount++;
     
     // Auto-transition to scheduling if all done
     if (session.progress.allQuestionsCompleted && !session.progress.schedulingStarted) {
@@ -212,8 +259,8 @@ class GlobalDiscoveryManager {
     return true;
   }
 
-  // Better answer validation
-  isValidAnswer(answer) {
+  // ENHANCED: Better answer validation with context awareness
+  isValidAnswer(answer, questionIndex = -1) {
     if (!answer || typeof answer !== 'string') return false;
     
     const cleaned = answer.trim().toLowerCase();
@@ -240,11 +287,27 @@ class GlobalDiscoveryManager {
       }
     }
     
+    // ENHANCED: Reject obvious scheduling requests when expecting discovery answers
+    if (questionIndex >= 0 && questionIndex < 6) {
+      const schedulingKeywords = [
+        'tuesday at', 'wednesday at', 'monday at', 'thursday at', 'friday at',
+        'schedule', 'book appointment', 'what times', 'available'
+      ];
+      
+      for (const keyword of schedulingKeywords) {
+        if (cleaned.includes(keyword)) {
+          console.log(`🚫 Rejected scheduling request as discovery answer: "${cleaned}"`);
+          return false;
+        }
+      }
+    }
+    
     // Reject obvious non-answers
     const nonAnswers = [
       /^(what|how|where|when|why|who)\b/,
       /^(uh|um|er|ah)$/,
-      /^(sorry|excuse me)/
+      /^(sorry|excuse me)/,
+      /^(i don't know|not sure)$/
     ];
     
     for (const pattern of nonAnswers) {
@@ -258,10 +321,16 @@ class GlobalDiscoveryManager {
     return true;
   }
 
-  // Mark scheduling as started with protection
+  // ENHANCED: Mark scheduling as started with additional protection
   markSchedulingStarted(callId) {
     const session = this.activeSessions.get(callId);
     if (!session) return false;
+
+    // ANTI-LOOP: Prevent scheduling from starting multiple times
+    if (session.progress.schedulingStarted) {
+      console.log(`🚫 ANTI-LOOP: Scheduling already started for ${callId}`);
+      return false;
+    }
 
     session.progress.schedulingStarted = true;
     session.progress.conversationPhase = 'scheduling';
@@ -272,7 +341,7 @@ class GlobalDiscoveryManager {
     return true;
   }
 
-  // Get next unanswered question
+  // Get next unanswered question with anti-loop protection
   getNextUnansweredQuestion(callId) {
     const session = this.activeSessions.get(callId);
     if (!session) return null;
@@ -336,7 +405,7 @@ class GlobalDiscoveryManager {
     return finalData;
   }
 
-  // Check if user message is scheduling request
+  // ENHANCED: Check if user message is scheduling request with better detection
   isSchedulingRequest(userMessage, questionsCompleted) {
     const schedulingKeywords = [
       'schedule', 'book', 'appointment', 'call', 'talk', 'meet',
@@ -350,8 +419,11 @@ class GlobalDiscoveryManager {
       userLower.includes(keyword)
     );
     
-    // Allow scheduling if 4+ questions completed OR explicit scheduling request
-    return hasSchedulingKeyword && questionsCompleted >= 4;
+    // Enhanced logic: Allow scheduling if 4+ questions completed OR explicit scheduling request
+    const isExplicitScheduling = userLower.includes('schedule') || userLower.includes('book') || 
+                                userLower.includes('appointment') || userLower.includes('available');
+    
+    return hasSchedulingKeyword && (questionsCompleted >= 4 || isExplicitScheduling);
   }
 
   // Cleanup session
@@ -405,7 +477,11 @@ class GlobalDiscoveryManager {
         schedulingStarted: session.progress.schedulingStarted,
         conversationPhase: session.progress.conversationPhase,
         customerEmail: session.customerData.email,
-        age: Date.now() - session.createdAt
+        age: Date.now() - session.createdAt,
+        antiLoopStats: {
+          questionAskedCount: session.antiLoop.questionAskedCount,
+          answerCaptureCount: session.antiLoop.answerCaptureCount
+        }
       });
     }
     return sessions;
@@ -432,13 +508,48 @@ class GlobalDiscoveryManager {
 
     session.antiLoop.questionAskedCount = 0;
     session.antiLoop.lastQuestionAskedAt = 0;
+    session.antiLoop.answerCaptureCount = 0;
+    session.antiLoop.lastAnswerCapturedAt = 0;
     
     console.log(`🔧 RESET anti-loop counters for ${callId}`);
     return true;
+  }
+
+  // Periodic cleanup of old sessions and counters
+  performPeriodicCleanup() {
+    const now = Date.now();
+    let cleanedSessions = 0;
+    
+    for (const [callId, session] of this.activeSessions) {
+      // Clean up very old sessions (over 2 hours)
+      const sessionAge = now - session.createdAt;
+      if (sessionAge > 2 * 60 * 60 * 1000) { // 2 hours
+        this.cleanupSession(callId);
+        cleanedSessions++;
+      } else {
+        // Reset anti-loop counters if they're old
+        const oneMinuteAgo = now - 60000;
+        if (session.antiLoop.lastQuestionAskedAt < oneMinuteAgo) {
+          session.antiLoop.questionAskedCount = 0;
+        }
+        if (session.antiLoop.lastAnswerCapturedAt < oneMinuteAgo) {
+          session.antiLoop.answerCaptureCount = 0;
+        }
+      }
+    }
+    
+    if (cleanedSessions > 0) {
+      console.log(`🧹 Periodic cleanup: removed ${cleanedSessions} old sessions`);
+    }
   }
 }
 
 // Create global singleton instance
 const globalDiscoveryManager = new GlobalDiscoveryManager();
+
+// Run periodic cleanup every 5 minutes
+setInterval(() => {
+  globalDiscoveryManager.performPeriodicCleanup();
+}, 5 * 60 * 1000);
 
 module.exports = globalDiscoveryManager;
