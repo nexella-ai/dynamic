@@ -1,4 +1,4 @@
-// src/services/calendar/GoogleCalendarService.js - COMPLETE UPDATED FILE
+// src/services/calendar/GoogleCalendarService.js - COMPLETE FILE FOR GMAIL CALENDAR
 const { google } = require('googleapis');
 const config = require('../../config/environment');
 
@@ -61,7 +61,7 @@ class GoogleCalendarService {
 
   async setupAuthentication() {
     try {
-      console.log('🔐 Setting up Google Calendar authentication...');
+      console.log('🔐 Setting up Google Calendar authentication for Gmail calendar...');
       
       // Process the private key properly
       let privateKey = config.GOOGLE_PRIVATE_KEY;
@@ -82,61 +82,33 @@ class GoogleCalendarService {
         privateKey.includes('-----END PRIVATE KEY-----') ? '✅ Valid' : '❌ Invalid'
       );
       
-      // First, try regular service account access (since calendar is shared with service account)
-      try {
-        const authClient = new google.auth.GoogleAuth({
-          credentials: {
-            type: "service_account",
-            project_id: config.GOOGLE_PROJECT_ID,
-            private_key_id: config.GOOGLE_PRIVATE_KEY_ID || "key_id",
-            private_key: privateKey,
-            client_email: config.GOOGLE_CLIENT_EMAIL,
-            client_id: config.GOOGLE_CLIENT_ID || "client_id",
-            auth_uri: "https://accounts.google.com/o/oauth2/auth",
-            token_uri: "https://oauth2.googleapis.com/token",
-            auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-            client_x509_cert_url: `https://www.googleapis.com/oauth2/v1/certs/${encodeURIComponent(config.GOOGLE_CLIENT_EMAIL)}`
-          },
-          scopes: [
-            'https://www.googleapis.com/auth/calendar',
-            'https://www.googleapis.com/auth/calendar.events'
-          ]
-        });
-        
-        this.auth = await authClient.getClient();
-        console.log('📧 Service account email:', config.GOOGLE_CLIENT_EMAIL);
-        console.log('✅ Using direct service account access (calendar is shared)');
-        
-        // Keep the original calendar ID since it's shared with the service account
-        this.calendarId = config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com';
-        console.log('📅 Using calendar ID:', this.calendarId);
-        
-      } catch (serviceAccountError) {
-        console.log('⚠️ Direct service account access failed, trying domain delegation...');
-        console.error('Service account error:', serviceAccountError.message);
-        
-        // Fallback to domain-wide delegation if needed
-        const jwtClient = new google.auth.JWT({
-          email: config.GOOGLE_CLIENT_EMAIL,
-          key: privateKey,
-          scopes: [
-            'https://www.googleapis.com/auth/calendar',
-            'https://www.googleapis.com/auth/calendar.events'
-          ],
-          // Impersonate the user who has access to the calendar
-          subject: config.GOOGLE_IMPERSONATE_EMAIL || 'jaden@nexellaai.com'
-        });
-        
-        console.log('👤 Impersonating user:', config.GOOGLE_IMPERSONATE_EMAIL || 'jaden@nexellaai.com');
-        
-        await jwtClient.authorize();
-        this.auth = jwtClient;
-        console.log('✅ Authentication with domain-wide delegation successful');
-        
-        // Use the specific calendar ID that's shared with the impersonated user
-        this.calendarId = config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com';
-        console.log('📅 Using calendar ID:', this.calendarId);
-      }
+      // Use direct service account access for Gmail calendar
+      const authClient = new google.auth.GoogleAuth({
+        credentials: {
+          type: "service_account",
+          project_id: config.GOOGLE_PROJECT_ID,
+          private_key_id: config.GOOGLE_PRIVATE_KEY_ID || "key_id",
+          private_key: privateKey,
+          client_email: config.GOOGLE_CLIENT_EMAIL,
+          client_id: config.GOOGLE_CLIENT_ID || "client_id",
+          auth_uri: "https://accounts.google.com/o/oauth2/auth",
+          token_uri: "https://oauth2.googleapis.com/token",
+          auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+          client_x509_cert_url: `https://www.googleapis.com/oauth2/v1/certs/${encodeURIComponent(config.GOOGLE_CLIENT_EMAIL)}`
+        },
+        scopes: [
+          'https://www.googleapis.com/auth/calendar',
+          'https://www.googleapis.com/auth/calendar.events'
+        ]
+      });
+      
+      this.auth = await authClient.getClient();
+      this.calendarId = config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com';
+      
+      console.log('✅ Service account authentication successful');
+      console.log('📧 Service account email:', config.GOOGLE_CLIENT_EMAIL);
+      console.log('📅 Using Gmail calendar:', this.calendarId);
+      console.log('ℹ️ Note: Calendar invitations will not be sent automatically (Gmail limitation)');
       
     } catch (error) {
       console.error('❌ Authentication setup failed:', error.message);
@@ -376,10 +348,15 @@ class GoogleCalendarService {
         };
       }
 
-      // Create the event object
+      // Create the event object WITHOUT attendees (Gmail limitation)
       const event = {
         summary: eventDetails.summary || 'Nexella AI Consultation Call',
-        description: eventDetails.description || 'Discovery call scheduled via Nexella AI',
+        description: `${eventDetails.description || 'Discovery call scheduled via Nexella AI'}\n\n` +
+                     `Customer Information:\n` +
+                     `Name: ${eventDetails.attendeeName || 'Not provided'}\n` +
+                     `Email: ${eventDetails.attendeeEmail}\n` +
+                     `Phone: ${eventDetails.attendeePhone || 'Not provided'}\n\n` +
+                     `Note: Please manually send calendar invitation to the customer.`,
         start: {
           dateTime: eventDetails.startTime,
           timeZone: this.timezone
@@ -388,12 +365,7 @@ class GoogleCalendarService {
           dateTime: eventDetails.endTime,
           timeZone: this.timezone
         },
-        attendees: [
-          {
-            email: eventDetails.attendeeEmail,
-            displayName: eventDetails.attendeeName || eventDetails.attendeeEmail
-          }
-        ],
+        // NO attendees field to avoid the error
         conferenceData: {
           createRequest: {
             requestId: `nexella_${Date.now()}`,
@@ -411,19 +383,14 @@ class GoogleCalendarService {
         }
       };
 
-      console.log('📅 Attempting to create event in calendar:', this.calendarId);
-      console.log('🔐 Using auth type:', this.auth.constructor.name);
-
-      // Create the event
-      // For service account access, we can't send invitations automatically
-      const sendUpdates = this.auth.subject ? 'all' : 'none';
-      console.log('📧 Send invitations:', sendUpdates);
+      console.log('📅 Creating event without attendees (Gmail calendar limitation)');
+      console.log('ℹ️ Customer information will be stored in event description');
       
       const response = await this.calendar.events.insert({
         calendarId: this.calendarId,
         resource: event,
         conferenceDataVersion: 1,
-        sendUpdates: sendUpdates
+        sendUpdates: 'none' // No attendees to notify
       });
 
       const createdEvent = response.data;
@@ -449,23 +416,22 @@ class GoogleCalendarService {
         timeZone: this.timezone
       });
 
-      // If using service account without domain delegation, send manual invitation
-      if (sendUpdates === 'none') {
-        console.log('📧 Note: Calendar invitations must be sent manually when using service account access');
-      }
+      console.log('⚠️ IMPORTANT: Calendar invitation must be sent manually or through your notification system');
+      console.log('💡 You can share the meeting link with the customer:', meetingLink);
 
       return {
         success: true,
         eventId: createdEvent.id,
         meetingLink: meetingLink,
         eventLink: createdEvent.htmlLink,
-        message: 'Appointment created successfully',
+        message: 'Appointment created successfully (without automatic invitation)',
         customerEmail: eventDetails.attendeeEmail,
         customerName: eventDetails.attendeeName,
         startTime: eventDetails.startTime,
         endTime: eventDetails.endTime,
         displayTime: displayTime,
-        manualInvitationRequired: sendUpdates === 'none'
+        manualInvitationRequired: true,
+        note: 'Please send calendar invitation manually to the customer'
       };
 
     } catch (error) {
