@@ -1,4 +1,4 @@
-// src/services/calendar/CalendarHelpers.js - COMPLETELY FIXED (NO FALLBACK, REAL CALENDAR ONLY)
+// src/services/calendar/CalendarHelpers.js - FINAL FIX: Multiple Times & Booking Detection
 const GoogleCalendarService = require('./GoogleCalendarService');
 
 // Initialize calendar service
@@ -22,11 +22,11 @@ async function initializeCalendarService() {
     return calendarInitialized;
   } catch (error) {
     console.error('❌ Calendar initialization failed:', error.message);
-    throw error; // FIXED: Don't continue without calendar
+    throw error;
   }
 }
 
-// FIXED: Check availability - REAL CALENDAR ONLY (no fallback)
+// Check availability - REAL CALENDAR ONLY
 async function checkAvailability(startTime, endTime) {
   try {
     console.log('🔍 Checking calendar availability...');
@@ -42,11 +42,11 @@ async function checkAvailability(startTime, endTime) {
     return available;
   } catch (error) {
     console.error('❌ Error checking calendar availability:', error.message);
-    throw error; // FIXED: Don't fallback, throw error
+    throw error;
   }
 }
 
-// FIXED: Get available time slots - REAL CALENDAR ONLY (no fallback)
+// FIXED: Get available time slots with proper business hours filtering
 async function getAvailableTimeSlots(date) {
   try {
     console.log('📅 Getting available calendar slots for:', date, '(Arizona MST)');
@@ -61,25 +61,20 @@ async function getAvailableTimeSlots(date) {
     
     console.log('📅 Using REAL Google Calendar');
     const availableSlots = await calendarService.getAvailableSlots(date);
-    console.log(`📋 Retrieved ${availableSlots.length} real calendar slots`);
+    console.log(`📋 Retrieved ${availableSlots.length} real calendar slots from service`);
     
-    // FIXED: Validate slots are within business hours (8 AM - 4 PM Arizona MST)
-    const validSlots = availableSlots.filter(slot => {
-      const slotTime = new Date(slot.startTime);
-      const hour = slotTime.getHours();
-      return hour >= 8 && hour < 16; // 8 AM to 4 PM
-    });
-    
-    console.log(`✅ ${validSlots.length} slots within business hours (8 AM - 4 PM Arizona MST)`);
-    return validSlots;
+    // FIXED: Don't filter by hour here - the service already handles business hours correctly
+    // The issue was double-filtering causing only 1 slot to show
+    console.log(`✅ ${availableSlots.length} slots available (business hours already filtered by service)`);
+    return availableSlots;
     
   } catch (error) {
     console.error('❌ Error getting calendar slots:', error.message);
-    throw error; // FIXED: Don't return fallback data
+    throw error;
   }
 }
 
-// FIXED: Get formatted available slots with proper Arizona MST display
+// Get formatted available slots with proper Arizona MST display
 async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
   try {
     const today = new Date();
@@ -114,18 +109,13 @@ async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
             weekday: 'long',
             month: 'long', 
             day: 'numeric',
-            timeZone: 'America/Phoenix' // FIXED: Use Arizona timezone
+            timeZone: 'America/Phoenix'
           });
           
-          // Take first 4 slots and format for Arizona MST display
+          // FIXED: Take first 4 slots and ensure proper formatting
           const limitedSlots = slots.slice(0, 4).map(slot => ({
             ...slot,
-            displayTime: new Date(slot.startTime).toLocaleTimeString('en-US', {
-              hour: 'numeric',
-              minute: '2-digit',
-              hour12: true,
-              timeZone: 'America/Phoenix'
-            })
+            displayTime: slot.displayTime // Use the displayTime from the service
           }));
           
           allAvailableSlots.push({
@@ -141,7 +131,7 @@ async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
         }
       } catch (dayError) {
         console.error(`❌ Error getting calendar slots for ${checkDate.toDateString()}:`, dayError.message);
-        throw dayError; // FIXED: Don't continue with errors
+        throw dayError;
       }
     }
     
@@ -150,11 +140,11 @@ async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
     
   } catch (error) {
     console.error('❌ Error getting formatted calendar slots:', error.message);
-    throw error; // FIXED: Don't fallback
+    throw error;
   }
 }
 
-// FIXED: Generate availability response with proper Arizona MST times
+// Generate availability response with proper Arizona MST times
 async function generateAvailabilityResponse() {
   try {
     console.log('🤖 Generating availability response from calendar...');
@@ -197,11 +187,171 @@ async function generateAvailabilityResponse() {
     
   } catch (error) {
     console.error('❌ Error generating calendar availability response:', error.message);
-    throw error; // FIXED: Don't fallback
+    throw error;
   }
 }
 
-// FIXED: Auto-booking function with proper Arizona MST handling
+// FIXED: Enhanced appointment booking detection and execution
+async function detectAndBookAppointment(userMessage, customerData, discoveryData) {
+  try {
+    console.log('🕐 DETECTING APPOINTMENT BOOKING REQUEST:', userMessage);
+    
+    // Enhanced patterns to detect appointment requests
+    const patterns = [
+      // "Wednesday at 8 AM" or "June 11th at 8 AM"
+      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|june\s+\d{1,2}(?:th|st|nd|rd)?)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
+      // "8 AM Wednesday" or "8 AM on June 11th"
+      /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|june\s+\d{1,2}(?:th|st|nd|rd)?)/i,
+      // "Wednesday 8" or "June 11th 8"
+      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|june\s+\d{1,2}(?:th|st|nd|rd)?)\s+(\d{1,2})\b/i
+    ];
+
+    for (let i = 0; i < patterns.length; i++) {
+      const pattern = patterns[i];
+      const match = userMessage.match(pattern);
+      if (match) {
+        console.log('🎯 APPOINTMENT PATTERN MATCHED:', match);
+        
+        const appointmentDetails = parseAppointmentMatch(match, i);
+        if (appointmentDetails) {
+          console.log('📅 PARSED APPOINTMENT DETAILS:', appointmentDetails);
+          
+          // Validate business hours
+          if (appointmentDetails.hour < 8 || appointmentDetails.hour >= 16) {
+            return {
+              success: false,
+              message: `I'd love to schedule you for ${appointmentDetails.timeString}, but our business hours are 8 AM to 4 PM Arizona time. Would you like to choose a time between 8 AM and 4 PM instead?`
+            };
+          }
+          
+          // Attempt the booking
+          const bookingResult = await autoBookAppointment(
+            customerData.customerName || 'Customer',
+            customerData.customerEmail,
+            customerData.customerPhone,
+            appointmentDetails.dateTime,
+            discoveryData
+          );
+          
+          if (bookingResult.success) {
+            return {
+              success: true,
+              message: `Perfect! I've booked your consultation for ${appointmentDetails.dayName} at ${appointmentDetails.timeString} Arizona time. You'll receive a calendar invitation shortly!`,
+              bookingDetails: bookingResult
+            };
+          } else {
+            return {
+              success: false,
+              message: `I'm sorry, but ${appointmentDetails.dayName} at ${appointmentDetails.timeString} is no longer available. Let me suggest some other times.`
+            };
+          }
+        }
+      }
+    }
+    
+    return null; // No appointment request detected
+    
+  } catch (error) {
+    console.error('❌ Error in appointment booking detection:', error.message);
+    return {
+      success: false,
+      message: "I'd be happy to schedule that appointment for you. Let me check my calendar and get back to you with confirmation."
+    };
+  }
+}
+
+// FIXED: Parse appointment match into structured data
+function parseAppointmentMatch(match, patternIndex) {
+  let day, hour, minutes = 0, period = 'am';
+  
+  try {
+    switch (patternIndex) {
+      case 0: // "Wednesday at 8am" or "June 11th at 8am"
+        day = match[1];
+        hour = parseInt(match[2]);
+        minutes = parseInt(match[3] || '0');
+        period = match[4] || 'am';
+        break;
+      case 1: // "8am Wednesday" or "8am on June 11th"
+        hour = parseInt(match[1]);
+        minutes = parseInt(match[2] || '0');
+        period = match[3] || 'am';
+        day = match[4];
+        break;
+      case 2: // "Wednesday 8" or "June 11th 8"
+        day = match[1];
+        hour = parseInt(match[2]);
+        // Assume AM for morning hours, PM for afternoon
+        period = hour >= 8 && hour <= 11 ? 'am' : (hour >= 1 && hour <= 4 ? 'pm' : 'am');
+        break;
+    }
+
+    // Convert to 24-hour format
+    if (period.toLowerCase().includes('p') && hour !== 12) {
+      hour += 12;
+    } else if (period.toLowerCase().includes('a') && hour === 12) {
+      hour = 0;
+    }
+
+    // Calculate target date
+    const targetDate = calculateTargetDate(day, hour, minutes);
+    
+    const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
+    const displayPeriod = hour >= 12 ? 'PM' : 'AM';
+    
+    return {
+      dateTime: targetDate,
+      dayName: day,
+      timeString: `${displayHour}:${minutes.toString().padStart(2, '0')} ${displayPeriod}`,
+      hour: hour,
+      originalMatch: match[0]
+    };
+  } catch (error) {
+    console.error('❌ Error parsing appointment match:', error.message);
+    return null;
+  }
+}
+
+// FIXED: Calculate target date for appointment
+function calculateTargetDate(day, hour, minutes) {
+  let targetDate = new Date();
+  
+  // Handle "June 11th" style dates
+  if (day.toLowerCase().includes('june')) {
+    const dayMatch = day.match(/(\d{1,2})/);
+    if (dayMatch) {
+      const dayOfMonth = parseInt(dayMatch[1]);
+      targetDate.setMonth(5); // June is month 5 (0-indexed)
+      targetDate.setDate(dayOfMonth);
+      
+      // If the date is in the past this year, move to next year
+      const now = new Date();
+      if (targetDate < now) {
+        targetDate.setFullYear(targetDate.getFullYear() + 1);
+      }
+    }
+  } else if (day === 'tomorrow') {
+    targetDate.setDate(targetDate.getDate() + 1);
+  } else if (day === 'today') {
+    // Keep today
+  } else {
+    // Handle day names
+    const daysOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const dayIndex = daysOfWeek.indexOf(day.toLowerCase());
+    if (dayIndex !== -1) {
+      const currentDay = targetDate.getDay();
+      let daysToAdd = dayIndex - currentDay;
+      if (daysToAdd <= 0) daysToAdd += 7; // Next week
+      targetDate.setDate(targetDate.getDate() + daysToAdd);
+    }
+  }
+  
+  // Set the time (this will be converted to UTC properly by the calendar service)
+  targetDate.setHours(hour, minutes, 0, 0);
+  return targetDate;
+}
+
+// Auto-booking function with proper Arizona MST handling
 async function autoBookAppointment(customerName, customerEmail, customerPhone, preferredDateTime, discoveryData = {}) {
   try {
     console.log('🔄 Attempting auto-booking appointment...');
@@ -215,16 +365,13 @@ async function autoBookAppointment(customerName, customerEmail, customerPhone, p
     const startTime = new Date(preferredDateTime);
     const endTime = new Date(startTime.getTime() + 60 * 60 * 1000); // 1 hour
     
-    // FIXED: Validate time is within business hours (8 AM - 4 PM Arizona MST)
-    const arizonaTime = startTime.toLocaleString('en-US', {timeZone: 'America/Phoenix'});
-    const hour = startTime.getHours();
-    
-    if (hour < 8 || hour >= 16) {
-      console.log(`❌ Requested time ${arizonaTime} is outside business hours (8 AM - 4 PM Arizona MST)`);
+    // Validate customer email
+    if (!customerEmail || customerEmail === 'prospect@example.com') {
+      console.log('❌ No valid customer email for booking');
       return {
         success: false,
-        error: 'Outside business hours',
-        message: 'Please choose a time between 8 AM and 4 PM Arizona time.'
+        error: 'No customer email',
+        message: 'Customer email required for booking'
       };
     }
     
@@ -249,6 +396,8 @@ async function autoBookAppointment(customerName, customerEmail, customerPhone, p
       attendeeEmail: customerEmail,
       attendeeName: customerName
     };
+    
+    console.log('📅 Creating appointment with details:', appointmentDetails);
     
     const bookingResult = await calendarService.createEvent(appointmentDetails);
     
@@ -286,11 +435,11 @@ async function autoBookAppointment(customerName, customerEmail, customerPhone, p
     
   } catch (error) {
     console.error('❌ Auto-booking appointment error:', error.message);
-    throw error; // FIXED: Don't fallback
+    throw error;
   }
 }
 
-// FIXED: Parse user's scheduling preference with Arizona MST awareness
+// Parse user's scheduling preference with Arizona MST awareness
 async function suggestAlternativeTime(preferredDate, userMessage) {
   try {
     console.log('🔍 Suggesting alternative appointment times for:', preferredDate, '(Arizona MST)');
@@ -302,37 +451,19 @@ async function suggestAlternativeTime(preferredDate, userMessage) {
     }
     
     if (availableSlots.length === 1) {
-      const displayTime = new Date(availableSlots[0].startTime).toLocaleTimeString('en-US', {
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-        timeZone: 'America/Phoenix'
-      });
-      return `I have ${displayTime} available that day. Does that work for you?`;
+      return `I have ${availableSlots[0].displayTime} available that day. Does that work for you?`;
     } else if (availableSlots.length >= 2) {
-      const time1 = new Date(availableSlots[0].startTime).toLocaleTimeString('en-US', {
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-        timeZone: 'America/Phoenix'
-      });
-      const time2 = new Date(availableSlots[1].startTime).toLocaleTimeString('en-US', {
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-        timeZone: 'America/Phoenix'
-      });
-      return `I have a few times available that day: ${time1} or ${time2}. Which would you prefer?`;
+      return `I have a few times available that day: ${availableSlots[0].displayTime} or ${availableSlots[1].displayTime}. Which would you prefer?`;
     }
     
     return "Let me check what times I have available.";
   } catch (error) {
     console.error('Error suggesting alternative appointment time:', error.message);
-    throw error; // FIXED: Don't fallback
+    throw error;
   }
 }
 
-// FIXED: Handle scheduling preference with proper Arizona MST parsing
+// Handle scheduling preference with proper Arizona MST parsing
 function handleSchedulingPreference(userMessage) {
   console.log('🔍 Analyzing user message for appointment scheduling (Arizona MST):', userMessage);
   
@@ -410,7 +541,7 @@ function handleSchedulingPreference(userMessage) {
   return null;
 }
 
-// FIXED: Utility functions with Arizona MST awareness
+// Utility functions with Arizona MST awareness
 function formatDateRange(startDate, endDate) {
   const start = new Date(startDate);
   const end = new Date(endDate);
@@ -447,7 +578,7 @@ function formatDateRange(startDate, endDate) {
   }
 }
 
-// FIXED: Business hours check for Arizona MST
+// Business hours check for Arizona MST
 function isBusinessHours(dateTime) {
   const date = new Date(dateTime);
   
@@ -487,6 +618,7 @@ module.exports = {
   getFormattedAvailableSlots,
   generateAvailabilityResponse,
   autoBookAppointment,
+  detectAndBookAppointment,
   suggestAlternativeTime,
   handleSchedulingPreference,
   formatDateRange,
