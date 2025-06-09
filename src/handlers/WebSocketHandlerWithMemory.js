@@ -1,4 +1,4 @@
-// src/handlers/WebSocketHandlerWithMemory.js - COMPLETE WITH ENHANCED CALENDAR BOOKING
+// src/handlers/WebSocketHandlerWithMemory.js - COMPLETE WITH ANTI-LOOP CALENDAR BOOKING
 const axios = require('axios');
 const config = require('../config/environment');
 const globalDiscoveryManager = require('../services/discovery/GlobalDiscoveryManager');
@@ -48,6 +48,25 @@ class WebSocketHandlerWithMemory {
     
     console.log('🔗 NEW CONNECTION WITH MEMORY - Call ID:', this.callId);
     console.log('📅 Calendar Status:', isCalendarInitialized() ? 'ENABLED ✅' : 'DISABLED ⚠️');
+    
+    // CRITICAL: Anti-loop state management for calendar booking
+    this.appointmentBooked = false; // Prevents multiple booking attempts
+    this.bookingInProgress = false; // Prevents concurrent booking attempts
+    this.lastBookingAttempt = 0; // Track last booking attempt
+    this.bookingCooldown = 10000; // 10 second cooldown between booking attempts
+    
+    // Response tracking to prevent loops
+    this.responsesSent = [];
+    this.maxResponsesPerMinute = 10;
+    
+    // Calendar booking state tracking
+    this.calendarBookingState = {
+      hasDetectedBookingRequest: false,
+      bookingConfirmed: false,
+      lastBookingResponse: null,
+      bookingResponseSent: false,
+      lastAppointmentMatch: null
+    };
     
     // FIXED: Get REAL customer data aggressively from all sources
     this.connectionData = this.getRealCustomerDataAggressively();
@@ -113,7 +132,6 @@ KEEP IT SHORT AND FOCUSED.`
     this.minimumResponseDelay = 2000;
     this.conversationContext = '';
     this.customerProfile = null;
-    this.appointmentBooked = false; // CRITICAL: Track if appointment is already booked
     
     this.initialize();
   }
@@ -374,19 +392,35 @@ KEEP IT SHORT AND FOCUSED.`
     this.ws.on('error', this.handleError.bind(this));
   }
 
+  // NEW: Controlled response system with anti-loop protection
   async sendResponse(content, responseId = null) {
-    // Enforce minimum delay between responses to prevent rapid-fire
     const now = Date.now();
-    const timeSinceLastResponse = now - this.lastResponseTime;
     
+    // Anti-loop: Check response frequency
+    this.responsesSent = this.responsesSent.filter(time => now - time < 60000); // Keep last minute
+    
+    if (this.responsesSent.length >= this.maxResponsesPerMinute) {
+      console.log('🚫 Response rate limit reached - dropping response');
+      return;
+    }
+    
+    // Anti-loop: Enforce minimum delay
+    const timeSinceLastResponse = now - this.lastResponseTime;
     if (timeSinceLastResponse < this.minimumResponseDelay) {
       const waitTime = this.minimumResponseDelay - timeSinceLastResponse;
       console.log(`⏱️ WAITING ${waitTime}ms before responding to prevent rapid-fire...`);
       await new Promise(resolve => setTimeout(resolve, waitTime));
     }
     
+    // Check for duplicate responses
+    if (this.calendarBookingState.lastBookingResponse === content) {
+      console.log('🚫 Duplicate booking response detected - not sending');
+      return;
+    }
+    
     console.log('🤖 SENT:', content);
     this.lastResponseTime = Date.now();
+    this.responsesSent.push(this.lastResponseTime);
     
     this.ws.send(JSON.stringify({
       content: content,
@@ -394,6 +428,10 @@ KEEP IT SHORT AND FOCUSED.`
       actions: [],
       response_id: responseId || Date.now()
     }));
+    
+    if (content.includes('booking') || content.includes('appointment') || content.includes('confirmed')) {
+      this.calendarBookingState.lastBookingResponse = content;
+    }
   }
 
   async handleMessage(data) {
@@ -458,6 +496,19 @@ KEEP IT SHORT AND FOCUSED.`
       console.log('👤 USER SPOKE FIRST - Now we can start conversation');
     }
     
+    // CRITICAL FIX 1: Check if appointment already booked - EXIT EARLY
+    if (this.appointmentBooked) {
+      console.log('✅ Appointment already booked - ignoring further processing');
+      return;
+    }
+
+    // CRITICAL FIX 2: Anti-loop timing protection
+    const now = Date.now();
+    if (now - this.lastResponseTime < this.minimumResponseDelay) {
+      console.log('⏱️ Response too soon - enforcing delay');
+      return;
+    }
+    
     this.conversationHistory.push({ role: 'user', content: userMessage });
 
     // Handle first greeting when user speaks
@@ -469,11 +520,17 @@ KEEP IT SHORT AND FOCUSED.`
     const progress = globalDiscoveryManager.getProgress(this.callId);
     console.log(`📊 CURRENT PROGRESS: ${progress?.questionsCompleted || 0}/6 questions, Phase: ${progress?.conversationPhase || 'greeting'}`);
 
-    // CRITICAL FIX: Check for appointment booking FIRST, before anything else
-    if (progress?.questionsCompleted >= 6 && !this.appointmentBooked) {
+    // CRITICAL FIX 3: Check for appointment booking FIRST, before anything else
+    if (progress?.questionsCompleted >= 6 && !this.appointmentBooked && !this.bookingInProgress) {
       const appointmentMatch = this.detectSpecificAppointmentRequest(userMessage);
       if (appointmentMatch) {
         console.log('🎯 IMMEDIATE APPOINTMENT BOOKING DETECTED:', appointmentMatch);
+        
+        // Immediately set flags to prevent loops
+        this.bookingInProgress = true;
+        this.calendarBookingState.hasDetectedBookingRequest = true;
+        this.calendarBookingState.lastAppointmentMatch = appointmentMatch;
+        
         await this.handleImmediateAppointmentBooking(appointmentMatch, parsed.response_id);
         return; // Exit early - booking is done
       }
@@ -498,6 +555,12 @@ KEEP IT SHORT AND FOCUSED.`
   // NEW: Detect specific appointment booking requests
   detectSpecificAppointmentRequest(userMessage) {
     console.log('🎯 CHECKING FOR SPECIFIC APPOINTMENT REQUEST:', userMessage);
+    
+    // Skip if already processed
+    if (this.calendarBookingState.hasDetectedBookingRequest) {
+      console.log('🚫 Booking request already detected - ignoring');
+      return null;
+    }
     
     // More specific patterns for immediate booking
     const specificPatterns = [
@@ -603,9 +666,20 @@ KEEP IT SHORT AND FOCUSED.`
     return targetDate;
   }
 
-  // ENHANCED: Handle immediate appointment booking with calendar integration
+  // ENHANCED: Handle immediate appointment booking with calendar integration and memory
   async handleImmediateAppointmentBooking(appointmentRequest, responseId) {
     try {
+      const now = Date.now();
+      
+      // ANTI-LOOP: Check booking cooldown
+      if (now - this.lastBookingAttempt < this.bookingCooldown) {
+        console.log('🚫 Booking cooldown active - ignoring request');
+        this.bookingInProgress = false;
+        return;
+      }
+      
+      this.lastBookingAttempt = now;
+      
       console.log('🎯 PROCESSING IMMEDIATE APPOINTMENT BOOKING WITH MEMORY & CALENDAR');
       console.log('🕐 Requested time:', appointmentRequest.timeString);
       console.log('📅 Requested date:', appointmentRequest.dayName);
@@ -619,6 +693,7 @@ KEEP IT SHORT AND FOCUSED.`
       if (!appointmentRequest.isBusinessHours) {
         const response = `I'd love to schedule you for ${appointmentRequest.dayName} at ${appointmentRequest.timeString}, but our business hours are 8 AM to 4 PM Arizona time. Would you like to choose a time between 8 AM and 4 PM instead?`;
         await this.sendResponse(response, responseId);
+        this.bookingInProgress = false;
         return;
       }
 
@@ -627,6 +702,7 @@ KEEP IT SHORT AND FOCUSED.`
         console.log('❌ No valid customer email for booking');
         const response = `I'd love to book that appointment for you! Could you provide your email address so I can send you the calendar invitation?`;
         await this.sendResponse(response, responseId);
+        this.bookingInProgress = false;
         return;
       }
 
@@ -640,129 +716,57 @@ KEEP IT SHORT AND FOCUSED.`
 
       // Mark as booked to prevent loops
       this.appointmentBooked = true;
+      this.calendarBookingState.bookingConfirmed = true;
+      this.calendarBookingState.bookingResponseSent = true;
       globalDiscoveryManager.markSchedulingStarted(this.callId);
 
-      // Step 2: Attempt real appointment booking
-      console.log('📅 ATTEMPTING REAL CALENDAR BOOKING WITH MEMORY...');
-      try {
-        // Check if calendar is available
-        if (!isCalendarInitialized()) {
-          throw new Error('Google Calendar not initialized');
-        }
-
-        const bookingResult = await autoBookAppointment(
-          this.connectionData.customerName || 'Customer',
-          this.connectionData.customerEmail,
-          this.connectionData.customerPhone,
-          appointmentRequest.dateTime,
-          discoveryData
-        );
-
-        console.log('📅 Calendar booking result:', bookingResult);
-
-        if (bookingResult.success) {
-          console.log('✅ REAL CALENDAR BOOKING SUCCESSFUL WITH MEMORY!');
-          console.log('📧 Calendar invitation sent to:', this.connectionData.customerEmail);
-          console.log('🔗 Meeting link:', bookingResult.meetingLink);
-          console.log('📅 Event ID:', bookingResult.eventId);
-
-          // Store successful booking in memory
-          if (this.memoryService) {
-            await this.handleSuccessfulBooking(appointmentRequest, discoveryData);
-          }
-
-          // Send success webhook with calendar details
-          setTimeout(async () => {
-            try {
-              await sendSchedulingPreference(
-                this.connectionData.customerName || 'Customer',
-                this.connectionData.customerEmail,
-                this.connectionData.customerPhone,
-                `${appointmentRequest.dayName} at ${appointmentRequest.timeString}`,
-                this.callId,
-                {
-                  ...discoveryData,
-                  appointment_booked: true,
-                  booking_confirmed: true,
-                  requested_time: appointmentRequest.timeString,
-                  requested_day: appointmentRequest.dayName,
-                  meeting_link: bookingResult.meetingLink || '',
-                  event_id: bookingResult.eventId || '',
-                  event_link: bookingResult.eventLink || '',
-                  calendar_status: 'success',
-                  customer_email_confirmed: this.connectionData.customerEmail,
-                  memory_enhanced: true
-                }
-              );
-              console.log('✅ Success webhook sent with calendar details and memory context');
-            } catch (webhookError) {
-              console.error('❌ Error sending success webhook:', webhookError.message);
-            }
-          }, 1000);
-
-        } else {
-          // Booking failed - send webhook for manual processing
-          console.log('❌ CALENDAR BOOKING FAILED:', bookingResult.error);
+      // Step 2: Attempt real appointment booking (asynchronously)
+      setTimeout(async () => {
+        try {
+          console.log('📅 ATTEMPTING REAL CALENDAR BOOKING WITH MEMORY...');
           
-          setTimeout(async () => {
-            try {
-              await sendSchedulingPreference(
-                this.connectionData.customerName || 'Customer',
-                this.connectionData.customerEmail,
-                this.connectionData.customerPhone,
-                `${appointmentRequest.dayName} at ${appointmentRequest.timeString}`,
-                this.callId,
-                {
-                  ...discoveryData,
-                  appointment_requested: true,
-                  calendar_booking_failed: true,
-                  booking_error: bookingResult.error,
-                  requested_time: appointmentRequest.timeString,
-                  requested_day: appointmentRequest.dayName,
-                  booking_confirmed_to_user: true,
-                  calendar_status: 'failed',
-                  needs_manual_booking: true,
-                  memory_enhanced: true
-                }
-              );
-              console.log('✅ Fallback webhook sent - manual booking needed');
-            } catch (webhookError) {
-              console.error('❌ Error sending fallback webhook:', webhookError.message);
-            }
-          }, 1000);
-        }
-        
-      } catch (bookingError) {
-        console.error('❌ Calendar booking exception:', bookingError.message);
-        
-        // Send webhook for manual processing with error details
-        setTimeout(async () => {
-          try {
-            await sendSchedulingPreference(
-              this.connectionData.customerName || 'Customer',
-              this.connectionData.customerEmail,
-              this.connectionData.customerPhone,
-              `${appointmentRequest.dayName} at ${appointmentRequest.timeString}`,
-              this.callId,
-              {
-                ...discoveryData,
-                appointment_requested: true,
-                calendar_system_error: true,
-                error_details: bookingError.message,
-                requested_time: appointmentRequest.timeString,
-                requested_day: appointmentRequest.dayName,
-                booking_confirmed_to_user: true,
-                calendar_status: 'error',
-                needs_manual_booking: true,
-                memory_enhanced: true
-              }
-            );
-            console.log('✅ Error webhook sent - manual booking needed');
-          } catch (webhookError) {
-            console.error('❌ Error sending error webhook:', webhookError.message);
+          // Check if calendar is available
+          if (!isCalendarInitialized()) {
+            throw new Error('Google Calendar not initialized');
           }
-        }, 1000);
-      }
+
+          const bookingResult = await autoBookAppointment(
+            this.connectionData.customerName || 'Customer',
+            this.connectionData.customerEmail,
+            this.connectionData.customerPhone,
+            appointmentRequest.dateTime,
+            discoveryData
+          );
+
+          console.log('📅 Calendar booking result:', bookingResult);
+
+          if (bookingResult.success) {
+            console.log('✅ REAL CALENDAR BOOKING SUCCESSFUL WITH MEMORY!');
+            console.log('📧 Calendar invitation sent to:', this.connectionData.customerEmail);
+            console.log('🔗 Meeting link:', bookingResult.meetingLink);
+            console.log('📅 Event ID:', bookingResult.eventId);
+
+            // Store successful booking in memory
+            if (this.memoryService) {
+              await this.handleSuccessfulBooking(appointmentRequest, discoveryData);
+            }
+
+            // Send success webhook with calendar details
+            await this.sendBookingWebhook(appointmentRequest, discoveryData, bookingResult, 'success');
+
+          } else {
+            console.log('❌ CALENDAR BOOKING FAILED:', bookingResult.error);
+            await this.sendBookingWebhook(appointmentRequest, discoveryData, null, 'failed');
+          }
+          
+        } catch (bookingError) {
+          console.error('❌ Calendar booking exception:', bookingError.message);
+          await this.sendBookingWebhook(appointmentRequest, discoveryData, null, 'error');
+        } finally {
+          // Always reset booking in progress
+          this.bookingInProgress = false;
+        }
+      }, 1000);
       
     } catch (error) {
       console.error('❌ Error in immediate appointment booking:', error.message);
@@ -773,6 +777,46 @@ KEEP IT SHORT AND FOCUSED.`
       
       this.appointmentBooked = true;
       globalDiscoveryManager.markSchedulingStarted(this.callId);
+      this.bookingInProgress = false;
+    }
+  }
+
+  // Helper method to send booking webhook
+  async sendBookingWebhook(appointmentRequest, discoveryData, bookingResult, status) {
+    try {
+      const webhookData = {
+        ...discoveryData,
+        appointment_requested: true,
+        requested_time: appointmentRequest.timeString,
+        requested_day: appointmentRequest.dayName,
+        booking_status: status,
+        calendar_status: status,
+        booking_confirmed_to_user: true,
+        memory_enhanced: true
+      };
+      
+      if (bookingResult?.success) {
+        webhookData.appointment_booked = true;
+        webhookData.meeting_link = bookingResult.meetingLink || '';
+        webhookData.event_id = bookingResult.eventId || '';
+        webhookData.event_link = bookingResult.eventLink || '';
+      } else {
+        webhookData.needs_manual_booking = true;
+      }
+      
+      await sendSchedulingPreference(
+        this.connectionData.customerName || 'Customer',
+        this.connectionData.customerEmail,
+        this.connectionData.customerPhone,
+        `${appointmentRequest.dayName} at ${appointmentRequest.timeString}`,
+        this.callId,
+        webhookData
+      );
+      
+      console.log(`✅ ${status} webhook sent with memory context`);
+      
+    } catch (webhookError) {
+      console.error('❌ Webhook error:', webhookError.message);
     }
   }
 
