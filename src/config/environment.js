@@ -1,4 +1,4 @@
-// src/config/environment.js - Environment Configuration (UPDATED WITH MEMORY SYSTEM)
+// src/config/environment.js - COMPLETE UPDATED FILE
 require('dotenv').config();
 
 const config = {
@@ -16,11 +16,12 @@ const config = {
   GOOGLE_PROJECT_ID: process.env.GOOGLE_PROJECT_ID,
   GOOGLE_PRIVATE_KEY: process.env.GOOGLE_PRIVATE_KEY,
   GOOGLE_CLIENT_EMAIL: process.env.GOOGLE_CLIENT_EMAIL,
-  GOOGLE_CALENDAR_ID: process.env.GOOGLE_CALENDAR_ID || 'primary',
+  GOOGLE_CALENDAR_ID: process.env.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com',
   GOOGLE_PRIVATE_KEY_ID: process.env.GOOGLE_PRIVATE_KEY_ID,
   GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
   GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
   GOOGLE_REFRESH_TOKEN: process.env.GOOGLE_REFRESH_TOKEN,
+  GOOGLE_IMPERSONATE_EMAIL: process.env.GOOGLE_IMPERSONATE_EMAIL || 'jaden@nexellaai.com',
   
   // RAG Memory System Configuration
   PINECONE_API_KEY: process.env.PINECONE_API_KEY,
@@ -66,6 +67,12 @@ const config = {
     
     console.log('✅ All required environment variables present');
     
+    // Log calendar configuration
+    console.log('📅 Calendar Configuration:');
+    console.log('   Calendar ID:', this.GOOGLE_CALENDAR_ID);
+    console.log('   Service Account:', this.GOOGLE_CLIENT_EMAIL);
+    console.log('   Impersonate Email:', this.GOOGLE_IMPERSONATE_EMAIL);
+    
     // Log memory system status
     if (this.ENABLE_MEMORY) {
       console.log('🧠 Memory system: ENABLED');
@@ -84,7 +91,9 @@ const config = {
     
     return {
       isValid: true,
-      missing: []
+      missing: [],
+      hasGoogleCalendar: !!(this.GOOGLE_PROJECT_ID && this.GOOGLE_PRIVATE_KEY && this.GOOGLE_CLIENT_EMAIL),
+      calendarId: this.GOOGLE_CALENDAR_ID
     };
   }
 };
