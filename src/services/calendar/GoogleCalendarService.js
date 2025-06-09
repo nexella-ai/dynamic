@@ -348,15 +348,6 @@ class GoogleCalendarService {
         };
       }
 
-      // Generate a UUID-like string for conference request
-      const generateRequestId = () => {
-        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-          const r = Math.random() * 16 | 0;
-          const v = c === 'x' ? r : (r & 0x3 | 0x8);
-          return v.toString(16);
-        });
-      };
-
       // Create the event object WITHOUT attendees (Gmail limitation)
       const event = {
         summary: eventDetails.summary || 'Nexella AI Consultation Call',
@@ -375,14 +366,7 @@ class GoogleCalendarService {
           timeZone: this.timezone
         },
         // NO attendees field to avoid the error
-        conferenceData: {
-          createRequest: {
-            requestId: generateRequestId(),
-            conferenceSolutionKey: {
-              type: 'hangoutsMeet'
-            }
-          }
-        },
+        // NO conferenceData to avoid conference type error - Google will add meet link automatically
         reminders: {
           useDefault: false,
           overrides: [
@@ -394,11 +378,11 @@ class GoogleCalendarService {
 
       console.log('📅 Creating event without attendees (Gmail calendar limitation)');
       console.log('ℹ️ Customer information will be stored in event description');
+      console.log('🎥 Google Meet link will be generated automatically');
       
       const response = await this.calendar.events.insert({
         calendarId: this.calendarId,
         resource: event,
-        conferenceDataVersion: 1,
         sendUpdates: 'none' // No attendees to notify
       });
 
@@ -406,12 +390,16 @@ class GoogleCalendarService {
       console.log('✅ Event created successfully!');
       console.log('📅 Event ID:', createdEvent.id);
       console.log('🔗 Event Link:', createdEvent.htmlLink);
-      console.log('🎥 Meeting Link:', createdEvent.hangoutLink || createdEvent.conferenceData?.entryPoints?.[0]?.uri);
-
-      // Extract meeting link
-      const meetingLink = createdEvent.conferenceData?.entryPoints?.[0]?.uri || 
-                         createdEvent.hangoutLink || 
-                         '';
+      
+      // Check if Google automatically added a meeting link
+      let meetingLink = '';
+      if (createdEvent.hangoutLink) {
+        meetingLink = createdEvent.hangoutLink;
+        console.log('🎥 Google Meet Link (auto-generated):', meetingLink);
+      } else {
+        console.log('ℹ️ No meeting link generated automatically');
+        console.log('💡 You may need to add a video conferencing link manually');
+      }
 
       // Format display time
       const startDate = new Date(eventDetails.startTime);
