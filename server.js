@@ -1,4 +1,4 @@
-// server.js - Main Server Entry Point (Fixed URLs for Production)
+// server.js - Main Server Entry Point (UPDATED WITH MEMORY SYSTEM)
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const http = require('http');
@@ -10,6 +10,14 @@ const { initializeCalendarService } = require('./src/services/calendar/CalendarH
 // Routes and Handlers
 const apiRoutes = require('./src/routes/apiRoutes');
 const WebSocketHandler = require('./src/handlers/WebSocketHandler');
+
+// Memory System Handler (conditional import)
+let WebSocketHandlerWithMemory = null;
+try {
+  WebSocketHandlerWithMemory = require('./src/handlers/WebSocketHandlerWithMemory');
+} catch (error) {
+  console.log('📞 Memory handler not found - using regular handler only');
+}
 
 // Initialize Express app
 const app = express();
@@ -28,20 +36,160 @@ if (!validation.isValid) {
   console.warn('⚠️ Server may not function properly');
 }
 
+// Memory System Logic
+function shouldUseMemoryHandler(req) {
+  // Check if memory system is enabled
+  if (!config.ENABLE_MEMORY || !WebSocketHandlerWithMemory) {
+    return false;
+  }
+  
+  // Test mode - always use memory for testing
+  if (config.MEMORY_TEST_MODE) {
+    console.log('🧪 Test mode - using memory handler');
+    return true;
+  }
+  
+  // Extract customer email from URL params
+  const urlParams = new URLSearchParams(req.url.split('?')[1] || '');
+  const customerEmail = urlParams.get('customer_email') || urlParams.get('email');
+  
+  // Beta customers list
+  if (customerEmail && config.MEMORY_BETA_CUSTOMERS.includes(customerEmail)) {
+    console.log('🌟 Beta customer detected - using memory handler');
+    return true;
+  }
+  
+  // Percentage-based rollout
+  if (config.MEMORY_ROLLOUT_PERCENTAGE > 0) {
+    const hash = hashString(req.url || '');
+    const percentage = hash % 100;
+    
+    if (percentage < config.MEMORY_ROLLOUT_PERCENTAGE) {
+      console.log(`🎲 Percentage rollout (${percentage}%) - using memory handler`);
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+// Simple hash function for consistent percentage rollout
+function hashString(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  return Math.abs(hash);
+}
+
 // Initialize services
 let calendarInitialized = false;
 
 // API Routes
 app.use('/', apiRoutes);
 
-// WebSocket Connection Handler
+// Memory System Health Check Endpoint
+app.get('/health/memory', async (req, res) => {
+  try {
+    if (config.ENABLE_MEMORY && WebSocketHandlerWithMemory) {
+      // Test if memory system is working
+      try {
+        const RAGMemoryService = require('./src/services/memory/RAGMemoryService');
+        const memoryService = new RAGMemoryService();
+        
+        // Simple test - this will initialize the service
+        const stats = await memoryService.getMemoryStats();
+        
+        res.json({
+          memoryEnabled: true,
+          memoryHealthy: true,
+          testMode: config.MEMORY_TEST_MODE,
+          betaCustomers: config.MEMORY_BETA_CUSTOMERS.length,
+          rolloutPercentage: config.MEMORY_ROLLOUT_PERCENTAGE,
+          stats: stats
+        });
+      } catch (memoryError) {
+        res.status(500).json({
+          memoryEnabled: true,
+          memoryHealthy: false,
+          error: memoryError.message,
+          testMode: config.MEMORY_TEST_MODE
+        });
+      }
+    } else {
+      res.json({
+        memoryEnabled: false,
+        message: 'Memory system is disabled or not available',
+        reason: !config.ENABLE_MEMORY ? 'ENABLE_MEMORY is false' : 'Handler not found'
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      memoryEnabled: false,
+      error: error.message
+    });
+  }
+});
+
+// Admin endpoint to toggle memory system (optional)
+app.post('/admin/memory/toggle', (req, res) => {
+  const { enabled, percentage, betaCustomers } = req.body;
+  
+  try {
+    if (enabled !== undefined) {
+      process.env.ENABLE_MEMORY = enabled.toString();
+    }
+    
+    if (percentage !== undefined) {
+      process.env.MEMORY_ROLLOUT_PERCENTAGE = percentage.toString();
+    }
+    
+    if (betaCustomers !== undefined) {
+      process.env.MEMORY_BETA_CUSTOMERS = betaCustomers.join(',');
+    }
+    
+    res.json({
+      success: true,
+      currentSettings: {
+        enabled: process.env.ENABLE_MEMORY === 'true',
+        percentage: parseInt(process.env.MEMORY_ROLLOUT_PERCENTAGE) || 0,
+        betaCustomers: process.env.MEMORY_BETA_CUSTOMERS?.split(',') || []
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// WebSocket Connection Handler (UPDATED WITH MEMORY SYSTEM)
 wss.on('connection', async (ws, req) => {
   try {
-    // Create new WebSocket handler instance for each connection
-    new WebSocketHandler(ws, req);
+    // Decide which handler to use
+    const useMemory = shouldUseMemoryHandler(req);
+    
+    if (useMemory) {
+      console.log('🧠 Initializing MEMORY-ENABLED WebSocket handler');
+      new WebSocketHandlerWithMemory(ws, req);
+    } else {
+      console.log('📞 Initializing REGULAR WebSocket handler');
+      new WebSocketHandler(ws, req);
+    }
   } catch (error) {
     console.error('❌ Error creating WebSocket handler:', error.message);
-    ws.close();
+    
+    // Fallback to regular handler if memory handler fails
+    try {
+      console.log('🔄 Falling back to regular handler');
+      new WebSocketHandler(ws, req);
+    } catch (fallbackError) {
+      console.error('❌ Fallback handler also failed:', fallbackError.message);
+      ws.close();
+    }
   }
 });
 
@@ -94,6 +242,27 @@ server.listen(PORT, async () => {
     console.log(`🔗 Development WebSocket URL: ws://localhost:${PORT}`);
   }
   
+  // Memory System Status
+  if (config.ENABLE_MEMORY) {
+    if (WebSocketHandlerWithMemory) {
+      console.log('🧠 Memory System: ENABLED ✅');
+      if (config.MEMORY_TEST_MODE) {
+        console.log('🧪 Memory Test Mode: ACTIVE');
+      }
+      if (config.MEMORY_BETA_CUSTOMERS.length > 0) {
+        console.log(`🌟 Beta Customers: ${config.MEMORY_BETA_CUSTOMERS.length} customers`);
+      }
+      if (config.MEMORY_ROLLOUT_PERCENTAGE > 0) {
+        console.log(`🎲 Rollout: ${config.MEMORY_ROLLOUT_PERCENTAGE}% of traffic`);
+      }
+    } else {
+      console.log('🧠 Memory System: ENABLED but handler missing ⚠️');
+      console.log('💡 Add WebSocketHandlerWithMemory.js to enable memory features');
+    }
+  } else {
+    console.log('📞 Memory System: DISABLED');
+  }
+  
   // Initialize Google Calendar service after server starts
   try {
     console.log('🚀 Initializing Nexella WebSocket Server...');
@@ -113,6 +282,12 @@ server.listen(PORT, async () => {
     
     if (isProduction) {
       console.log('🎉 Production deployment successful! Server running 24/7.');
+      
+      // Show memory system status in production
+      if (config.ENABLE_MEMORY && WebSocketHandlerWithMemory) {
+        console.log('🧠 Memory-enhanced AI agent is LIVE!');
+        console.log(`🔗 Test memory health: ${host}/health/memory`);
+      }
     }
     
   } catch (error) {
