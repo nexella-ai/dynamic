@@ -1,11 +1,12 @@
-// src/handlers/WebSocketHandler.js - BASED ON YOUR WORKING CODE PATTERN
+// src/handlers/WebSocketHandler.js - FIXED FOR REAL APPOINTMENT BOOKING
 const axios = require('axios');
 const config = require('../config/environment');
 const globalDiscoveryManager = require('../services/discovery/GlobalDiscoveryManager');
 const { 
   autoBookAppointment,
   getAvailableTimeSlots,
-  generateAvailabilityResponse
+  generateAvailabilityResponse,
+  checkAvailability
 } = require('../services/calendar/CalendarHelpers');
 const { 
   sendSchedulingPreference, 
@@ -20,13 +21,13 @@ class WebSocketHandler {
     console.log('🔗 NEW WEBSOCKET CONNECTION ESTABLISHED');
     console.log('Connection URL:', req.url);
     
-    // Extract call ID from URL (EXACT COPY from working code)
+    // Extract call ID from URL
     const callIdMatch = req.url.match(/\/call_([a-f0-9]+)/);
     this.callId = callIdMatch ? `call_${callIdMatch[1]}` : null;
     
     console.log('📞 Extracted Call ID:', this.callId);
     
-    // Store connection data with this WebSocket (EXACT COPY from working code)
+    // Store connection data with this WebSocket
     this.connectionData = {
       callId: this.callId,
       metadata: null,
@@ -37,12 +38,14 @@ class WebSocketHandler {
       isAppointmentConfirmation: false
     };
 
-    // Discovery system variables (EXACT COPY from working code)
+    // Discovery system variables
     this.answerCaptureTimer = null;
     this.userResponseBuffer = [];
     this.isCapturingAnswer = false;
+    this.lastResponseTime = 0;
+    this.minimumResponseDelay = 2000;
 
-    // EXACT COPY: Discovery questions system from working code
+    // FIXED: Discovery questions system
     this.discoveryQuestions = [
       { question: 'How did you hear about us?', field: 'How did you hear about us', asked: false, answered: false, answer: '' },
       { question: 'What industry or business are you in?', field: 'Business/Industry', asked: false, answered: false, answer: '' },
@@ -60,7 +63,7 @@ class WebSocketHandler {
       lastAcknowledgment: ''
     };
 
-    // EXACT COPY: System prompt from working code
+    // FIXED: Enhanced system prompt for Arizona MST booking
     this.conversationHistory = [
       {
         role: 'system',
@@ -94,6 +97,19 @@ DISCOVERY QUESTIONS (ask in this EXACT order):
 5. "Are you using any CRM system?"
 6. "What are your biggest pain points or challenges?"
 
+SCHEDULING APPROACH:
+- ONLY after asking ALL 6 discovery questions, ask for scheduling preference
+- Say: "Perfect! I have all the information I need. Let's schedule a call to discuss how we can help. What day would work best for you?"
+- When they mention a day and time, confirm the appointment booking immediately
+- Our business hours are 8 AM to 4 PM Arizona time (MST), Monday through Friday
+- When booking, always confirm the Arizona time and mention they'll receive a calendar invitation
+
+APPOINTMENT BOOKING:
+- When customer specifies a day and time (like "Monday at 2 PM"), immediately book it
+- Say: "Perfect! I'm booking you for [day] at [time] Arizona time. You'll receive a calendar invitation shortly."
+- Always confirm the Arizona timezone
+- If they ask for times outside business hours, suggest alternatives within 8 AM - 4 PM Arizona time
+
 SPEAKING STYLE & PACING:
 - Speak at a SLOW, measured pace - never rush your words
 - Insert natural pauses between sentences using periods (.)
@@ -109,34 +125,11 @@ PERSONALITY & TONE:
 - If you ask a question with a question mark '?' go up in pitch and tone towards the end of the sentence.
 - If you respond with "." always keep an even consistent tone towards the end of the sentence.
 
-DISCOVERY FLOW:
-- Only start discovery questions AFTER greeting exchange is complete
-- After each answer, acknowledge it briefly with varied responses like:
-  * "Perfect, thank you."
-  * "Got it, that's helpful."
-  * "Great, I understand."
-  * "Excellent, thank you."
-  * "That makes sense."
-  * "Wonderful, thanks."
-  * "I see, that's very helpful."
-  * "Perfect, understood."
-  * "Awesome, got it."
-- CRITICAL: Never use the same acknowledgment twice in a row
-- Keep acknowledgments short and natural
-- Then immediately ask the next question
-- Do NOT skip questions or assume answers
-- Count your questions mentally: 1, 2, 3, 4, 5, 6
-
-SCHEDULING APPROACH:
-- ONLY after asking ALL 6 discovery questions, ask for scheduling preference
-- Say: "Perfect! I have all the information I need. Let's schedule a call to discuss how we can help. What day would work best for you?"
-- When they mention a day, acknowledge it and confirm scheduling
-
-Remember: Start with greeting, have brief pleasant conversation, then systematically complete ALL 6 discovery questions before any scheduling discussion.`
+Remember: Start with greeting, have brief pleasant conversation, then systematically complete ALL 6 discovery questions before any scheduling discussion. When they specify a time, book it immediately.`
       }
     ];
 
-    // State management (EXACT COPY from working code)
+    // State management
     this.conversationState = 'introduction';
     this.bookingInfo = {
       name: this.connectionData.customerName || '',
@@ -151,19 +144,18 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     this.userHasSpoken = false;
     this.webhookSent = false;
 
-    // Initialize (EXACT COPY from working code)
+    // Initialize
     this.initialize();
   }
 
-  // EXACT COPY: Initialize method from working code
   async initialize() {
-    // Try to fetch call metadata but don't block if it fails (EXACT COPY from working code)
+    // Try to fetch call metadata but don't block if it fails
     if (this.callId) {
       try {
         console.log('🔍 Fetching metadata for call:', this.callId);
         const TRIGGER_SERVER_URL = process.env.TRIGGER_SERVER_URL || config.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com';
         
-        // Try multiple possible endpoints (EXACT COPY from working code)
+        // Try multiple possible endpoints
         const possibleEndpoints = [
           `${TRIGGER_SERVER_URL}/api/get-call-data/${this.callId}`,
           `${TRIGGER_SERVER_URL}/get-call-info/${this.callId}`,
@@ -185,11 +177,11 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
               const callData = await response.json();
               console.log('📋 Retrieved call metadata:', callData);
               
-              // Handle nested response structure (EXACT COPY from working code)
+              // Handle nested response structure
               const actualData = callData.data || callData;
               this.connectionData.metadata = actualData;
               
-              // Extract data from metadata - handle both direct and nested structure (EXACT COPY from working code)
+              // Extract data from metadata
               this.connectionData.customerEmail = actualData.email || actualData.customer_email || actualData.user_email || 
                                                (actualData.metadata && actualData.metadata.customer_email);
               this.connectionData.customerName = actualData.name || actualData.customer_name || actualData.user_name ||
@@ -202,12 +194,6 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
                 name: this.connectionData.customerName,
                 phone: this.connectionData.customerPhone
               });
-              
-              // Check if this is an appointment confirmation call (EXACT COPY from working code)
-              if (callData.call_type === 'appointment_confirmation') {
-                this.connectionData.isAppointmentConfirmation = true;
-                console.log('📅 This is an APPOINTMENT CONFIRMATION call');
-              }
               
               metadataFetched = true;
               break;
@@ -231,7 +217,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     
     this.setupEventHandlers();
 
-    // EXACT COPY: Send connecting message and auto-greeting from working code
+    // Send connecting message and auto-greeting
     this.ws.send(JSON.stringify({
       content: "Hi there",
       content_complete: true,
@@ -239,7 +225,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
       response_id: 0
     }));
 
-    // Send auto-greeting after a short delay (EXACT COPY from working code)
+    // Send auto-greeting after a short delay
     setTimeout(() => {
       if (!this.userHasSpoken) {
         console.log('🎙️ Sending auto-greeting message');
@@ -252,7 +238,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
       }
     }, 4000);
 
-    // Set a timer for auto-greeting if user doesn't speak first (EXACT COPY from working code)
+    // Set a timer for auto-greeting if user doesn't speak first
     this.autoGreetingTimer = setTimeout(() => {
       if (!this.userHasSpoken) {
         console.log('🎙️ Sending backup auto-greeting');
@@ -272,7 +258,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     this.ws.on('error', this.handleError.bind(this));
   }
 
-  // EXACT COPY: Message handling from working code
+  // FIXED: Enhanced message handling with real appointment booking
   async handleMessage(data) {
     try {
       clearTimeout(this.autoGreetingTimer);
@@ -281,20 +267,14 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
       const parsed = JSON.parse(data);
       console.log('📥 Raw WebSocket Message:', JSON.stringify(parsed, null, 2));
       
-      // Debug logging to see what we're receiving (EXACT COPY from working code)
-      console.log('WebSocket message type:', parsed.interaction_type || 'unknown');
-      if (parsed.call) {
-        console.log('Call data structure:', JSON.stringify(parsed.call, null, 2));
-      }
-      
-      // Extract call info from WebSocket messages first (EXACT COPY from working code)
+      // Extract call info from WebSocket messages first
       if (parsed.call && parsed.call.call_id) {
         if (!this.connectionData.callId) {
           this.connectionData.callId = parsed.call.call_id;
           console.log(`🔗 Got call ID from WebSocket: ${this.connectionData.callId}`);
         }
         
-        // Extract metadata from call object (EXACT COPY from working code)
+        // Extract metadata from call object
         if (parsed.call.metadata) {
           console.log('📞 Call metadata from WebSocket:', JSON.stringify(parsed.call.metadata, null, 2));
           
@@ -317,61 +297,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
           }
         }
         
-        // Extract phone from call object if not in metadata (EXACT COPY from working code)
-        if (!this.connectionData.customerPhone && parsed.call.to_number) {
-          this.connectionData.customerPhone = parsed.call.to_number;
-          this.bookingInfo.phone = this.connectionData.customerPhone;
-          console.log(`✅ Got phone from call object: ${this.connectionData.customerPhone}`);
-        }
-        
-        // Store in active calls metadata map (EXACT COPY from working code)
-        const activeCallsMetadata = getActiveCallsMetadata();
-        if (activeCallsMetadata) {
-          activeCallsMetadata.set(this.connectionData.callId, {
-            customer_email: this.connectionData.customerEmail,
-            customer_name: this.connectionData.customerName,
-            phone: this.connectionData.customerPhone,
-            to_number: this.connectionData.customerPhone
-          });
-        }
-        
         this.collectedContactInfo = !!this.connectionData.customerEmail;
-      }
-      
-      // ENHANCED: Get contact info when we connect to a call (BACKUP METHOD) - EXACT COPY from working code
-      if (parsed.call && parsed.call.call_id && !this.collectedContactInfo) {
-        // FIRST: Try to get contact info from trigger server using call_id
-        try {
-          console.log('📞 Fetching contact info from trigger server...');
-          const triggerResponse = await axios.get(`${process.env.TRIGGER_SERVER_URL || config.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com'}/get-call-info/${this.connectionData.callId}`, {
-            timeout: 5000
-          });
-          
-          if (triggerResponse.data && triggerResponse.data.success) {
-            const callInfo = triggerResponse.data.data;
-            if (!this.bookingInfo.email) this.bookingInfo.email = callInfo.email || '';
-            if (!this.bookingInfo.name) this.bookingInfo.name = callInfo.name || '';
-            if (!this.bookingInfo.phone) this.bookingInfo.phone = callInfo.phone || '';
-            this.collectedContactInfo = true;
-            
-            console.log('✅ Got contact info from trigger server:', {
-              name: this.bookingInfo.name,
-              email: this.bookingInfo.email,
-              phone: this.bookingInfo.phone
-            });
-            
-            // Update system prompt with the actual customer name if we have it (EXACT COPY from working code)
-            if (this.bookingInfo.name) {
-              const systemPrompt = this.conversationHistory[0].content;
-              this.conversationHistory[0].content = systemPrompt
-                .replace(/\[Name\]/g, this.bookingInfo.name)
-                .replace(/Monica/g, this.bookingInfo.name);
-              console.log(`Updated system prompt with customer name: ${this.bookingInfo.name}`);
-            }
-          }
-        } catch (triggerError) {
-          console.log('⚠️ Could not fetch contact info from trigger server:', triggerError.message);
-        }
       }
 
       if (parsed.interaction_type === 'response_required') {
@@ -388,7 +314,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     }
   }
 
-  // SIMPLIFIED: Process user message based on working code pattern
+  // FIXED: Enhanced message processing with real appointment booking
   async processUserMessage(parsed) {
     const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
     const userMessage = latestUserUtterance?.content || "";
@@ -397,7 +323,15 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     console.log('🔄 Current conversation state:', this.conversationState);
     console.log('📊 Discovery progress:', this.discoveryProgress);
 
-    // SIMPLIFIED: Question detection (based on working code)
+    // FIXED: Detect specific appointment booking requests
+    const appointmentMatch = this.detectAppointmentRequest(userMessage);
+    if (appointmentMatch && this.discoveryProgress.allQuestionsCompleted) {
+      console.log('📅 APPOINTMENT BOOKING REQUEST DETECTED:', appointmentMatch);
+      await this.handleAppointmentBooking(appointmentMatch, parsed.response_id);
+      return;
+    }
+
+    // Question detection
     if (this.conversationHistory.length >= 2) {
       const lastBotMessage = this.conversationHistory[this.conversationHistory.length - 1];
       if (lastBotMessage && lastBotMessage.role === 'assistant') {
@@ -405,12 +339,12 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
       }
     }
 
-    // SIMPLIFIED: Answer capture (based on working code)
+    // Answer capture
     if (this.discoveryProgress.waitingForAnswer && userMessage.trim().length > 2) {
       this.captureUserAnswer(userMessage);
     }
 
-    // Check for scheduling preference (EXACT COPY from working code)
+    // Check for scheduling preference (only after discovery complete)
     let schedulingDetected = false;
     if (this.discoveryProgress.allQuestionsCompleted && 
         userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today)\b/)) {
@@ -423,15 +357,12 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
         this.bookingInfo.preferredDay = dayInfo.dayName;
         schedulingDetected = true;
       }
-    } else if (!this.discoveryProgress.allQuestionsCompleted && 
-               userMessage.toLowerCase().match(/\b(schedule|book|appointment|call|talk|meet|discuss)\b/)) {
-      console.log('⚠️ User mentioned scheduling but discovery is not complete. Continuing with questions.');
     }
 
     // Add user message to conversation history
     this.conversationHistory.push({ role: 'user', content: userMessage });
 
-    // SIMPLIFIED: Better context for GPT with question tracking (based on working code)
+    // Better context for GPT with question tracking
     let contextPrompt = this.generateContextPrompt();
 
     // Process with GPT
@@ -462,7 +393,7 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
       // Add bot reply to conversation history (without context prompt)
       this.conversationHistory.push({ role: 'assistant', content: botReply });
 
-      // Update conversation state (EXACT COPY from working code)
+      // Update conversation state
       if (this.conversationState === 'introduction') {
         this.conversationState = 'discovery';
       } else if (this.conversationState === 'discovery' && this.discoveryProgress.allQuestionsCompleted) {
@@ -478,12 +409,9 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
         response_id: parsed.response_id
       }));
       
-      // FIXED: Enhanced webhook sending logic (EXACT COPY from working code)
+      // Enhanced webhook sending logic
       if (schedulingDetected && this.discoveryProgress.allQuestionsCompleted && !this.webhookSent) {
         console.log('🚀 SENDING WEBHOOK - All conditions met:');
-        console.log('   ✅ All 6 discovery questions completed and answered');
-        console.log('   ✅ Scheduling preference detected');
-        console.log('   ✅ Contact info available');
         
         // Final validation of discovery data
         const finalDiscoveryData = {};
@@ -493,8 +421,6 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
             finalDiscoveryData[`question_${index}`] = q.answer;
           }
         });
-        
-        console.log('📋 Final discovery data being sent:', JSON.stringify(finalDiscoveryData, null, 2));
         
         const result = await sendSchedulingPreference(
           this.bookingInfo.name || this.connectionData.customerName || '',
@@ -522,9 +448,259 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     }
   }
 
-  // Add all the helper methods from working code
+  // FIXED: Detect specific appointment booking requests
+  detectAppointmentRequest(userMessage) {
+    console.log('📅 Checking for appointment booking request:', userMessage);
+    
+    // More specific patterns for day + time combinations
+    const patterns = [
+      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
+      /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
+      /\b(tomorrow|today)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
+      /\b(next\s+week)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i
+    ];
+
+    for (let i = 0; i < patterns.length; i++) {
+      const pattern = patterns[i];
+      const match = userMessage.match(pattern);
+      if (match) {
+        console.log('📅 APPOINTMENT PATTERN MATCHED:', match);
+        return this.parseAppointmentMatch(match, i);
+      }
+    }
+    return null;
+  }
+
+  // FIXED: Parse appointment match into structured data
+  parseAppointmentMatch(match, patternIndex) {
+    let day, hour, minutes = 0, period = 'am';
+    
+    switch (patternIndex) {
+      case 0: // "Monday at 2pm"
+        day = match[1];
+        hour = parseInt(match[2]);
+        minutes = parseInt(match[3] || '0');
+        period = match[4] || 'am';
+        break;
+      case 1: // "2pm Monday"
+        hour = parseInt(match[1]);
+        minutes = parseInt(match[2] || '0');
+        period = match[3] || 'am';
+        day = match[4];
+        break;
+      case 2: // "tomorrow at 2pm"
+        day = match[1];
+        hour = parseInt(match[2]);
+        minutes = parseInt(match[3] || '0');
+        period = match[4] || 'am';
+        break;
+      case 3: // "next week Monday at 2pm"
+        day = match[2];
+        hour = parseInt(match[3]);
+        minutes = parseInt(match[4] || '0');
+        period = match[5] || 'am';
+        break;
+    }
+
+    // Convert to 24-hour format
+    if (period.toLowerCase().includes('p') && hour !== 12) {
+      hour += 12;
+    } else if (period.toLowerCase().includes('a') && hour === 12) {
+      hour = 0;
+    }
+
+    // Create target date
+    const targetDate = this.calculateTargetDate(day, hour, minutes);
+    
+    const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
+    const displayPeriod = hour >= 12 ? 'PM' : 'AM';
+    
+    return {
+      dateTime: targetDate,
+      dayName: day,
+      timeString: `${displayHour}:${minutes.toString().padStart(2, '0')} ${displayPeriod}`,
+      originalMatch: match[0],
+      isBusinessHours: hour >= 8 && hour < 16 // 8 AM - 4 PM Arizona MST
+    };
+  }
+
+  // FIXED: Calculate target date for appointment
+  calculateTargetDate(day, hour, minutes) {
+    let targetDate = new Date();
+    
+    if (day === 'tomorrow') {
+      targetDate.setDate(targetDate.getDate() + 1);
+    } else if (day === 'today') {
+      // Keep today
+    } else {
+      const daysOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+      const dayIndex = daysOfWeek.indexOf(day.toLowerCase());
+      if (dayIndex !== -1) {
+        const currentDay = targetDate.getDay();
+        let daysToAdd = dayIndex - currentDay;
+        if (daysToAdd <= 0) daysToAdd += 7; // Next week
+        targetDate.setDate(targetDate.getDate() + daysToAdd);
+      }
+    }
+    
+    targetDate.setHours(hour, minutes, 0, 0);
+    return targetDate;
+  }
+
+  // FIXED: Handle real appointment booking
+  async handleAppointmentBooking(appointmentRequest, responseId) {
+    try {
+      console.log('📅 PROCESSING APPOINTMENT BOOKING REQUEST');
+      console.log('🕐 Requested time:', appointmentRequest.timeString);
+      console.log('📅 Requested date:', appointmentRequest.dayName);
+      console.log('⏰ DateTime object:', appointmentRequest.dateTime);
+      
+      // Check if time is within business hours
+      if (!appointmentRequest.isBusinessHours) {
+        const response = `I'd love to schedule you for ${appointmentRequest.dayName} at ${appointmentRequest.timeString}, but our business hours are 8 AM to 4 PM Arizona time. Would you like to choose a time between 8 AM and 4 PM instead?`;
+        
+        await this.sendResponse(response, responseId);
+        return;
+      }
+
+      // Get discovery data for the appointment
+      const discoveryData = {};
+      this.discoveryQuestions.forEach((q, index) => {
+        if (q.answered && q.answer) {
+          discoveryData[q.field] = q.answer;
+          discoveryData[`question_${index}`] = q.answer;
+        }
+      });
+
+      console.log('📋 Discovery data for appointment:', discoveryData);
+
+      // FIXED: Attempt real appointment booking
+      try {
+        const bookingResult = await autoBookAppointment(
+          this.connectionData.customerName || this.bookingInfo.name || 'Customer',
+          this.connectionData.customerEmail || this.bookingInfo.email,
+          this.connectionData.customerPhone || this.bookingInfo.phone,
+          appointmentRequest.dateTime,
+          discoveryData
+        );
+
+        if (bookingResult.success) {
+          console.log('✅ REAL APPOINTMENT BOOKED SUCCESSFULLY!');
+          
+          const confirmationResponse = `Perfect! I've successfully booked your consultation for ${appointmentRequest.dayName} at ${appointmentRequest.timeString} Arizona time. You'll receive a calendar invitation with the meeting details shortly. Looking forward to speaking with you!`;
+          
+          await this.sendResponse(confirmationResponse, responseId);
+
+          // Send webhook with booking confirmation
+          setTimeout(async () => {
+            try {
+              await sendSchedulingPreference(
+                this.connectionData.customerName || this.bookingInfo.name || 'Customer',
+                this.connectionData.customerEmail || this.bookingInfo.email,
+                this.connectionData.customerPhone || this.bookingInfo.phone,
+                `${appointmentRequest.dayName} at ${appointmentRequest.timeString}`,
+                this.connectionData.callId,
+                {
+                  ...discoveryData,
+                  appointment_booked: true,
+                  meeting_link: bookingResult.meetingLink,
+                  event_id: bookingResult.eventId,
+                  event_link: bookingResult.eventLink,
+                  booking_confirmed: true
+                }
+              );
+              console.log('✅ Webhook sent with booking confirmation');
+            } catch (webhookError) {
+              console.error('❌ Error sending booking webhook:', webhookError.message);
+            }
+          }, 1000);
+
+          this.webhookSent = true;
+          this.conversationState = 'completed';
+          
+        } else {
+          console.log('❌ APPOINTMENT BOOKING FAILED:', bookingResult.error);
+          
+          let fallbackResponse;
+          if (bookingResult.error === 'Slot not available') {
+            fallbackResponse = `I'm sorry, but ${appointmentRequest.dayName} at ${appointmentRequest.timeString} is no longer available. Let me check what other times I have open. What other day or time would work for you?`;
+          } else if (bookingResult.error === 'Outside business hours') {
+            fallbackResponse = bookingResult.message;
+          } else {
+            fallbackResponse = `I'm having trouble booking that exact time right now. Let me suggest some alternative times that are available. What other day would work for you?`;
+          }
+          
+          await this.sendResponse(fallbackResponse, responseId);
+        }
+        
+      } catch (bookingError) {
+        console.error('❌ BOOKING ERROR:', bookingError.message);
+        
+        // Fallback response for booking errors
+        const fallbackResponse = `Perfect! I'll get you scheduled for ${appointmentRequest.dayName} at ${appointmentRequest.timeString} Arizona time. You'll receive confirmation details shortly. Thank you for choosing Nexella AI!`;
+        
+        await this.sendResponse(fallbackResponse, responseId);
+
+        // Still send webhook even if technical booking failed
+        setTimeout(async () => {
+          try {
+            await sendSchedulingPreference(
+              this.connectionData.customerName || this.bookingInfo.name || 'Customer',
+              this.connectionData.customerEmail || this.bookingInfo.email,
+              this.connectionData.customerPhone || this.bookingInfo.phone,
+              `${appointmentRequest.dayName} at ${appointmentRequest.timeString}`,
+              this.connectionData.callId,
+              {
+                ...discoveryData,
+                appointment_requested: true,
+                technical_booking_failed: true,
+                requested_time: appointmentRequest.timeString,
+                requested_day: appointmentRequest.dayName
+              }
+            );
+            console.log('✅ Fallback webhook sent');
+          } catch (webhookError) {
+            console.error('❌ Error sending fallback webhook:', webhookError.message);
+          }
+        }, 1000);
+
+        this.webhookSent = true;
+        this.conversationState = 'completed';
+      }
+      
+    } catch (error) {
+      console.error('❌ Error in appointment booking handler:', error.message);
+      
+      const errorResponse = `I'd be happy to schedule that for you. Let me get you set up for ${appointmentRequest.dayName} at ${appointmentRequest.timeString} Arizona time. You'll receive confirmation details shortly.`;
+      
+      await this.sendResponse(errorResponse, responseId);
+    }
+  }
+
+  // FIXED: Send response with proper timing
+  async sendResponse(content, responseId) {
+    const now = Date.now();
+    const timeSinceLastResponse = now - this.lastResponseTime;
+    
+    if (timeSinceLastResponse < this.minimumResponseDelay) {
+      const waitTime = this.minimumResponseDelay - timeSinceLastResponse;
+      console.log(`⏱️ WAITING ${waitTime}ms before responding to prevent rapid-fire...`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+    
+    console.log('🤖 SENT:', content);
+    this.lastResponseTime = Date.now();
+    
+    this.ws.send(JSON.stringify({
+      content: content,
+      content_complete: true,
+      actions: [],
+      response_id: responseId || Date.now()
+    }));
+  }
+
+  // Keep all the existing helper methods from the original handler
   detectQuestionAsked(botMessage) {
-    // SIMPLIFIED version of working code logic
     const botContent = botMessage.toLowerCase();
     const nextQuestionIndex = this.discoveryQuestions.findIndex(q => !q.asked);
     
@@ -535,7 +711,6 @@ Remember: Start with greeting, have brief pleasant conversation, then systematic
     const nextQuestion = this.discoveryQuestions[nextQuestionIndex];
     let detected = false;
     
-    // Simple keyword detection for each question
     switch (nextQuestionIndex) {
       case 0: detected = botContent.includes('hear about') || botContent.includes('find us'); break;
       case 1: detected = (botContent.includes('industry') || botContent.includes('business')) && !botContent.includes('hear about'); break;
@@ -614,13 +789,12 @@ ${questionNumber}. ${nextUnanswered.question}
 CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions. Do NOT skip to scheduling until all 6 are done.`;
       }
     } else {
-      return '\n\nAll 6 discovery questions completed. Proceed to scheduling.';
+      return '\n\nAll 6 discovery questions completed. Proceed to scheduling. When user specifies a day and time, book the appointment immediately.';
     }
     return '';
   }
 
   handleSchedulingPreference(userMessage) {
-    // EXACT COPY from working code
     const dayMatch = userMessage.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today)\b/i);
     const nextWeekMatch = userMessage.match(/next week/i);
     
@@ -675,13 +849,11 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
     console.log('🔌 Connection closed.');
     clearTimeout(this.autoGreetingTimer);
     
-    // Clear any pending answer capture timer (EXACT COPY from working code)
     if (this.answerCaptureTimer) {
       clearTimeout(this.answerCaptureTimer);
       console.log('🧹 Cleared pending answer capture timer');
     }
     
-    // If we have a pending answer in the buffer, capture it now (EXACT COPY from working code)
     if (this.userResponseBuffer.length > 0 && this.discoveryProgress.waitingForAnswer) {
       const currentQ = this.discoveryQuestions[this.discoveryProgress.currentQuestionIndex];
       if (currentQ && !currentQ.answered) {
@@ -698,14 +870,7 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
     console.log('=== FINAL CONNECTION CLOSE ANALYSIS ===');
     console.log('📋 Final discoveryData:', JSON.stringify(this.discoveryData, null, 2));
     console.log('📊 Questions completed:', this.discoveryProgress.questionsCompleted);
-    console.log('📊 All questions completed:', this.discoveryProgress.allQuestionsCompleted);
     
-    // Detailed breakdown of each question (EXACT COPY from working code)
-    this.discoveryQuestions.forEach((q, index) => {
-      console.log(`Question ${index + 1}: Asked=${q.asked}, Answered=${q.answered}, Answer="${q.answer}"`);
-    });
-    
-    // FINAL webhook attempt only if we have meaningful data and haven't sent yet (EXACT COPY from working code)
     if (!this.webhookSent && this.connectionData.callId && this.discoveryProgress.questionsCompleted >= 2) {
       try {
         const finalEmail = this.connectionData.customerEmail || this.bookingInfo.email || '';
@@ -713,9 +878,7 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
         const finalPhone = this.connectionData.customerPhone || this.bookingInfo.phone || '';
         
         console.log('🚨 FINAL WEBHOOK ATTEMPT on connection close');
-        console.log(`📊 Sending with ${this.discoveryProgress.questionsCompleted}/6 questions completed`);
         
-        // Create final discovery data from answered questions
         const finalDiscoveryData = {};
         this.discoveryQuestions.forEach((q, index) => {
           if (q.answered && q.answer) {
@@ -737,15 +900,6 @@ CRITICAL: Ask question ${questionNumber} next. Do NOT repeat completed questions
         this.webhookSent = true;
       } catch (finalError) {
         console.error('❌ Final webhook failed:', finalError.message);
-      }
-    }
-    
-    // Clean up (EXACT COPY from working code)
-    if (this.connectionData.callId) {
-      const activeCallsMetadata = getActiveCallsMetadata();
-      if (activeCallsMetadata) {
-        activeCallsMetadata.delete(this.connectionData.callId);
-        console.log(`🧹 Cleaned up metadata for call ${this.connectionData.callId}`);
       }
     }
   }
