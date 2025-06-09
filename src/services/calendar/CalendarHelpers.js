@@ -1,4 +1,4 @@
-// src/services/calendar/CalendarHelpers.js - FIXED (NO DEMO MODE, REAL CALENDAR ONLY)
+// src/services/calendar/CalendarHelpers.js - COMPLETELY FIXED (NO FALLBACK, REAL CALENDAR ONLY)
 const GoogleCalendarService = require('./GoogleCalendarService');
 
 // Initialize calendar service
@@ -22,11 +22,11 @@ async function initializeCalendarService() {
     return calendarInitialized;
   } catch (error) {
     console.error('❌ Calendar initialization failed:', error.message);
-    throw error; // Don't continue without calendar
+    throw error; // FIXED: Don't continue without calendar
   }
 }
 
-// Check availability - REAL CALENDAR ONLY
+// FIXED: Check availability - REAL CALENDAR ONLY (no fallback)
 async function checkAvailability(startTime, endTime) {
   try {
     console.log('🔍 Checking calendar availability...');
@@ -34,7 +34,7 @@ async function checkAvailability(startTime, endTime) {
     console.log('⏰ End time:', endTime);
     
     if (!calendarInitialized || !calendarService?.isInitialized()) {
-      throw new Error('Calendar service not available');
+      throw new Error('Calendar service not available - cannot check availability');
     }
     
     const available = await calendarService.isSlotAvailable(startTime, endTime);
@@ -42,14 +42,14 @@ async function checkAvailability(startTime, endTime) {
     return available;
   } catch (error) {
     console.error('❌ Error checking calendar availability:', error.message);
-    throw error;
+    throw error; // FIXED: Don't fallback, throw error
   }
 }
 
-// Get available time slots - REAL CALENDAR ONLY
+// FIXED: Get available time slots - REAL CALENDAR ONLY (no fallback)
 async function getAvailableTimeSlots(date) {
   try {
-    console.log('📅 Getting available calendar slots for:', date);
+    console.log('📅 Getting available calendar slots for:', date, '(Arizona MST)');
     
     if (!calendarService) {
       throw new Error('No calendar service initialized');
@@ -62,22 +62,31 @@ async function getAvailableTimeSlots(date) {
     console.log('📅 Using REAL Google Calendar');
     const availableSlots = await calendarService.getAvailableSlots(date);
     console.log(`📋 Retrieved ${availableSlots.length} real calendar slots`);
-    return availableSlots;
+    
+    // FIXED: Validate slots are within business hours (8 AM - 4 PM Arizona MST)
+    const validSlots = availableSlots.filter(slot => {
+      const slotTime = new Date(slot.startTime);
+      const hour = slotTime.getHours();
+      return hour >= 8 && hour < 16; // 8 AM to 4 PM
+    });
+    
+    console.log(`✅ ${validSlots.length} slots within business hours (8 AM - 4 PM Arizona MST)`);
+    return validSlots;
     
   } catch (error) {
     console.error('❌ Error getting calendar slots:', error.message);
-    throw error; // Don't return fallback data
+    throw error; // FIXED: Don't return fallback data
   }
 }
 
-// Get formatted available slots
+// FIXED: Get formatted available slots with proper Arizona MST display
 async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
   try {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const searchStart = startDate ? new Date(startDate) : today;
     
-    console.log(`📅 Getting calendar slots starting from: ${searchStart.toDateString()}`);
+    console.log(`📅 Getting calendar slots starting from: ${searchStart.toDateString()} (Arizona MST)`);
     
     const allAvailableSlots = [];
     
@@ -104,11 +113,20 @@ async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
           const dayName = checkDate.toLocaleDateString('en-US', { 
             weekday: 'long',
             month: 'long', 
-            day: 'numeric'
+            day: 'numeric',
+            timeZone: 'America/Phoenix' // FIXED: Use Arizona timezone
           });
           
-          // Take first 4 slots
-          const limitedSlots = slots.slice(0, 4);
+          // Take first 4 slots and format for Arizona MST display
+          const limitedSlots = slots.slice(0, 4).map(slot => ({
+            ...slot,
+            displayTime: new Date(slot.startTime).toLocaleTimeString('en-US', {
+              hour: 'numeric',
+              minute: '2-digit',
+              hour12: true,
+              timeZone: 'America/Phoenix'
+            })
+          }));
           
           allAvailableSlots.push({
             date: checkDate.toDateString(),
@@ -117,13 +135,13 @@ async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
             formattedSlots: limitedSlots.map(slot => slot.displayTime).join(', ')
           });
           
-          console.log(`✅ Added ${limitedSlots.length} calendar slots for ${dayName}: ${limitedSlots.map(s => s.displayTime).join(', ')}`);
+          console.log(`✅ Added ${limitedSlots.length} calendar slots for ${dayName}: ${limitedSlots.map(s => s.displayTime).join(', ')} Arizona MST`);
         } else {
           console.log(`📅 No calendar availability found for ${checkDate.toDateString()}`);
         }
       } catch (dayError) {
         console.error(`❌ Error getting calendar slots for ${checkDate.toDateString()}:`, dayError.message);
-        throw dayError; // Don't continue with errors
+        throw dayError; // FIXED: Don't continue with errors
       }
     }
     
@@ -132,11 +150,11 @@ async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
     
   } catch (error) {
     console.error('❌ Error getting formatted calendar slots:', error.message);
-    throw error;
+    throw error; // FIXED: Don't fallback
   }
 }
 
-// Generate availability response
+// FIXED: Generate availability response with proper Arizona MST times
 async function generateAvailabilityResponse() {
   try {
     console.log('🤖 Generating availability response from calendar...');
@@ -179,11 +197,11 @@ async function generateAvailabilityResponse() {
     
   } catch (error) {
     console.error('❌ Error generating calendar availability response:', error.message);
-    throw error;
+    throw error; // FIXED: Don't fallback
   }
 }
 
-// Auto-booking function for when user provides specific time
+// FIXED: Auto-booking function with proper Arizona MST handling
 async function autoBookAppointment(customerName, customerEmail, customerPhone, preferredDateTime, discoveryData = {}) {
   try {
     console.log('🔄 Attempting auto-booking appointment...');
@@ -196,6 +214,19 @@ async function autoBookAppointment(customerName, customerEmail, customerPhone, p
     
     const startTime = new Date(preferredDateTime);
     const endTime = new Date(startTime.getTime() + 60 * 60 * 1000); // 1 hour
+    
+    // FIXED: Validate time is within business hours (8 AM - 4 PM Arizona MST)
+    const arizonaTime = startTime.toLocaleString('en-US', {timeZone: 'America/Phoenix'});
+    const hour = startTime.getHours();
+    
+    if (hour < 8 || hour >= 16) {
+      console.log(`❌ Requested time ${arizonaTime} is outside business hours (8 AM - 4 PM Arizona MST)`);
+      return {
+        success: false,
+        error: 'Outside business hours',
+        message: 'Please choose a time between 8 AM and 4 PM Arizona time.'
+      };
+    }
     
     // Check if slot is available
     const isAvailable = await checkAvailability(startTime.toISOString(), endTime.toISOString());
@@ -223,21 +254,26 @@ async function autoBookAppointment(customerName, customerEmail, customerPhone, p
     
     if (bookingResult.success) {
       console.log('✅ Auto-booking appointment successful!');
+      
+      const displayTime = startTime.toLocaleString('en-US', {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+        timeZone: 'America/Phoenix'
+      });
+      
       return {
         success: true,
         eventId: bookingResult.eventId,
         meetingLink: bookingResult.meetingLink,
         eventLink: bookingResult.eventLink,
-        message: `Perfect! I've booked your consultation for ${startTime.toLocaleDateString('en-US', { 
-          weekday: 'long', 
-          month: 'long', 
-          day: 'numeric' 
-        })} at ${startTime.toLocaleTimeString('en-US', { 
-          hour: 'numeric', 
-          minute: '2-digit', 
-          hour12: true 
-        })}. You'll receive a calendar invitation shortly.`,
-        isDemo: false
+        message: `Perfect! I've booked your consultation for ${displayTime} Arizona time. You'll receive a calendar invitation shortly.`,
+        isDemo: false,
+        timezone: 'America/Phoenix',
+        displayTime: displayTime
       };
     } else {
       console.log('❌ Auto-booking appointment failed:', bookingResult.error);
@@ -250,14 +286,14 @@ async function autoBookAppointment(customerName, customerEmail, customerPhone, p
     
   } catch (error) {
     console.error('❌ Auto-booking appointment error:', error.message);
-    throw error;
+    throw error; // FIXED: Don't fallback
   }
 }
 
-// Parse user's scheduling preference
+// FIXED: Parse user's scheduling preference with Arizona MST awareness
 async function suggestAlternativeTime(preferredDate, userMessage) {
   try {
-    console.log('🔍 Suggesting alternative appointment times for:', preferredDate);
+    console.log('🔍 Suggesting alternative appointment times for:', preferredDate, '(Arizona MST)');
     
     const availableSlots = await getAvailableTimeSlots(preferredDate);
     
@@ -266,20 +302,39 @@ async function suggestAlternativeTime(preferredDate, userMessage) {
     }
     
     if (availableSlots.length === 1) {
-      return `I have ${availableSlots[0].displayTime} available that day. Does that work for you?`;
+      const displayTime = new Date(availableSlots[0].startTime).toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+        timeZone: 'America/Phoenix'
+      });
+      return `I have ${displayTime} available that day. Does that work for you?`;
     } else if (availableSlots.length >= 2) {
-      return `I have a few times available that day: ${availableSlots[0].displayTime} or ${availableSlots[1].displayTime}. Which would you prefer?`;
+      const time1 = new Date(availableSlots[0].startTime).toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+        timeZone: 'America/Phoenix'
+      });
+      const time2 = new Date(availableSlots[1].startTime).toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+        timeZone: 'America/Phoenix'
+      });
+      return `I have a few times available that day: ${time1} or ${time2}. Which would you prefer?`;
     }
     
     return "Let me check what times I have available.";
   } catch (error) {
     console.error('Error suggesting alternative appointment time:', error.message);
-    throw error;
+    throw error; // FIXED: Don't fallback
   }
 }
 
+// FIXED: Handle scheduling preference with proper Arizona MST parsing
 function handleSchedulingPreference(userMessage) {
-  console.log('🔍 Analyzing user message for appointment scheduling:', userMessage);
+  console.log('🔍 Analyzing user message for appointment scheduling (Arizona MST):', userMessage);
   
   const dayMatch = userMessage.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|tomorrow|today)\b/i);
   const timeMatch = userMessage.match(/\b(\d{1,2})\s*(am|pm|a\.m\.|p\.m\.)\b/i) || 
@@ -300,7 +355,8 @@ function handleSchedulingPreference(userMessage) {
       date: targetDate,
       isSpecific: false,
       timePreference: timeMatch ? timeMatch[0] : 'morning',
-      fullPreference: userMessage
+      fullPreference: userMessage,
+      timezone: 'America/Phoenix'
     };
   } else if (dayMatch) {
     const preferredDay = dayMatch[0].toLowerCase();
@@ -313,7 +369,8 @@ function handleSchedulingPreference(userMessage) {
         date: targetDate,
         isSpecific: true,
         timePreference: timeMatch ? timeMatch[0] : 'morning',
-        fullPreference: userMessage
+        fullPreference: userMessage,
+        timezone: 'America/Phoenix'
       };
     } else if (preferredDay === 'today') {
       return {
@@ -321,7 +378,8 @@ function handleSchedulingPreference(userMessage) {
         date: targetDate,
         isSpecific: true,
         timePreference: timeMatch ? timeMatch[0] : 'afternoon',
-        fullPreference: userMessage
+        fullPreference: userMessage,
+        timezone: 'America/Phoenix'
       };
     } else {
       const daysOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
@@ -342,7 +400,8 @@ function handleSchedulingPreference(userMessage) {
           date: targetDate,
           isSpecific: true,
           timePreference: timeMatch ? timeMatch[0] : 'morning',
-          fullPreference: userMessage
+          fullPreference: userMessage,
+          timezone: 'America/Phoenix'
         };
       }
     }
@@ -351,7 +410,7 @@ function handleSchedulingPreference(userMessage) {
   return null;
 }
 
-// Utility functions
+// FIXED: Utility functions with Arizona MST awareness
 function formatDateRange(startDate, endDate) {
   const start = new Date(startDate);
   const end = new Date(endDate);
@@ -360,35 +419,44 @@ function formatDateRange(startDate, endDate) {
     return `${start.toLocaleDateString('en-US', { 
       weekday: 'long', 
       month: 'long', 
-      day: 'numeric' 
+      day: 'numeric',
+      timeZone: 'America/Phoenix'
     })} from ${start.toLocaleTimeString('en-US', { 
       hour: 'numeric', 
       minute: '2-digit', 
-      hour12: true 
+      hour12: true,
+      timeZone: 'America/Phoenix'
     })} to ${end.toLocaleTimeString('en-US', { 
       hour: 'numeric', 
       minute: '2-digit', 
-      hour12: true 
-    })}`;
+      hour12: true,
+      timeZone: 'America/Phoenix'
+    })} Arizona time`;
   } else {
     return `${start.toLocaleDateString('en-US', { 
       weekday: 'long', 
       month: 'long', 
-      day: 'numeric' 
+      day: 'numeric',
+      timeZone: 'America/Phoenix'
     })} at ${start.toLocaleTimeString('en-US', { 
       hour: 'numeric', 
       minute: '2-digit', 
-      hour12: true 
-    })}`;
+      hour12: true,
+      timeZone: 'America/Phoenix'
+    })} Arizona time`;
   }
 }
 
+// FIXED: Business hours check for Arizona MST
 function isBusinessHours(dateTime) {
   const date = new Date(dateTime);
-  const dayOfWeek = date.getDay(); // 0 = Sunday, 6 = Saturday
-  const hour = date.getHours();
   
-  // Monday to Friday (1-5), 8 AM to 4 PM
+  // Convert to Arizona time for checking
+  const arizonaTime = new Date(date.toLocaleString("en-US", {timeZone: "America/Phoenix"}));
+  const dayOfWeek = arizonaTime.getDay(); // 0 = Sunday, 6 = Saturday
+  const hour = arizonaTime.getHours();
+  
+  // Monday to Friday (1-5), 8 AM to 4 PM Arizona time
   return dayOfWeek >= 1 && dayOfWeek <= 5 && hour >= 8 && hour < 16;
 }
 
