@@ -1,8 +1,7 @@
-// src/handlers/WebSocketHandler_WithMemory.js - Enhanced with RAG Memory
+// src/handlers/WebSocketHandlerWithMemory.js - Enhanced with RAG Memory
 const axios = require('axios');
 const config = require('../config/environment');
 const globalDiscoveryManager = require('../services/discovery/GlobalDiscoveryManager');
-const RAGMemoryService = require('../services/memory/RAGMemoryService');
 const { 
   autoBookAppointment,
   getAvailableTimeSlots,
@@ -13,14 +12,30 @@ const {
   getActiveCallsMetadata
 } = require('../services/webhooks/WebhookService');
 
+// Import Memory Service
+let RAGMemoryService = null;
+try {
+  RAGMemoryService = require('../services/memory/RAGMemoryService');
+} catch (error) {
+  console.error('❌ RAGMemoryService not found - memory features disabled');
+}
+
 class WebSocketHandlerWithMemory {
   constructor(ws, req) {
     this.ws = ws;
     this.req = req;
     this.callId = this.extractCallId(req.url);
     
-    // Initialize RAG Memory Service
-    this.memoryService = new RAGMemoryService();
+    // Initialize RAG Memory Service if available
+    this.memoryService = null;
+    if (RAGMemoryService) {
+      try {
+        this.memoryService = new RAGMemoryService();
+        console.log('🧠 Memory service initialized for call:', this.callId);
+      } catch (error) {
+        console.error('❌ Memory service initialization failed:', error.message);
+      }
+    }
     
     console.log('🔗 NEW CONNECTION WITH MEMORY - Call ID:', this.callId);
     
@@ -63,6 +78,7 @@ CRITICAL RULES:
     this.lastResponseTime = 0;
     this.minimumResponseDelay = 2000;
     this.conversationContext = '';
+    this.customerProfile = null;
     
     this.initialize();
   }
@@ -85,6 +101,11 @@ CRITICAL RULES:
 
   async loadCustomerMemory() {
     try {
+      if (!this.memoryService) {
+        console.log('⚠️ Memory service not available');
+        return;
+      }
+
       if (!this.connectionData.customerEmail || this.connectionData.customerEmail === 'prospect@example.com') {
         console.log('⚠️ No valid customer email for memory lookup');
         return;
@@ -113,181 +134,6 @@ CRITICAL RULES:
     }
   }
 
-  async handleInitialGreeting(userMessage, responseId) {
-    console.log('👋 HANDLING INITIAL GREETING WITH MEMORY - USER SPOKE FIRST');
-    this.hasGreeted = true;
-    
-    // Check if this is a returning customer
-    const isReturningCustomer = this.customerProfile && this.customerProfile.totalInteractions > 0;
-    
-    let greeting;
-    if (isReturningCustomer) {
-      const customerName = this.connectionData.customerName !== 'Customer' && this.connectionData.customerName !== 'Prospect' 
-        ? ` ${this.connectionData.customerName}` 
-        : '';
-      
-      greeting = `Hi${customerName}! Great to hear from you again. This is Sarah from Nexella AI. How are things going?`;
-      console.log('🔄 RETURNING CUSTOMER DETECTED - Using personalized greeting');
-    } else {
-      const customerName = this.connectionData.customerName !== 'Customer' && this.connectionData.customerName !== 'Prospect' 
-        ? ` ${this.connectionData.customerName}` 
-        : '';
-      
-      greeting = `Hi${customerName}! This is Sarah from Nexella AI. How are you doing today?`;
-      console.log('✨ NEW CUSTOMER - Using standard greeting');
-    }
-    
-    await this.sendResponse(greeting, responseId);
-    
-    // Mark greeting as completed
-    globalDiscoveryManager.markGreetingCompleted(this.callId);
-  }
-
-  async handleDiscoveryPhaseWithMemory(userMessage, responseId) {
-    console.log('📝 HANDLING DISCOVERY PHASE WITH MEMORY');
-    
-    const progress = globalDiscoveryManager.getProgress(this.callId);
-    
-    // Check if we can skip questions based on memory
-    if (this.customerProfile && progress?.questionsCompleted === 0 && !progress?.waitingForAnswer) {
-      console.log('🧠 CHECKING MEMORY FOR PREVIOUS ANSWERS...');
-      await this.handleMemoryBasedDiscovery(userMessage, responseId);
-      return;
-    }
-    
-    // Continue with regular discovery flow
-    await this.handleDiscoveryPhaseFixed(userMessage, responseId);
-  }
-
-  async handleMemoryBasedDiscovery(userMessage, responseId) {
-    // Get previous business context from memory
-    const businessMemories = await this.memoryService.getMemoriesByType(
-      this.connectionData.customerEmail, 
-      'business_context', 
-      1
-    );
-    
-    if (businessMemories.length > 0 && businessMemories[0].relevance !== 'very_low') {
-      console.log('🎯 FOUND BUSINESS CONTEXT IN MEMORY - Acknowledging and starting with appropriate question');
-      
-      const acknowledgment = this.getGreetingAcknowledgment(userMessage);
-      
-      // Reference their business and ask a follow-up question
-      const businessInfo = businessMemories[0].content;
-      let response = `${acknowledgment} I remember we spoke about your ${businessInfo.includes('industry') ? 'business' : 'work'}. `;
-      
-      // Start with an appropriate question based on what we know
-      if (businessInfo.includes('industry') || businessInfo.includes('business')) {
-        // We know their industry, ask about current challenges
-        response += "What are the biggest challenges you're facing right now?";
-        
-        // Mark as if we've answered the first few questions
-        globalDiscoveryManager.markQuestionAsked(this.callId, 0, "How did you hear about us?");
-        globalDiscoveryManager.captureAnswer(this.callId, 0, "Previous conversation");
-        globalDiscoveryManager.markQuestionAsked(this.callId, 1, "What industry or business are you in?");
-        globalDiscoveryManager.captureAnswer(this.callId, 1, "From memory: " + businessInfo);
-        globalDiscoveryManager.markQuestionAsked(this.callId, 5, response);
-      } else {
-        // We have some info but not complete, start normally
-        response += "How did you hear about us?";
-        globalDiscoveryManager.markQuestionAsked(this.callId, 0, response);
-      }
-      
-      this.conversationHistory.push({ role: 'assistant', content: response });
-      await this.sendResponse(fallback, responseId);
-    }
-  }
-
-  // Override the main message processing to include memory
-  async processUserMessage(parsed) {
-    const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
-    const userMessage = latestUserUtterance?.content || "";
-
-    console.log(`🗣️ USER: "${userMessage}"`);
-    
-    // Mark that user has spoken
-    if (!this.userHasSpoken) {
-      this.userHasSpoken = true;
-      this.connectionStartTime = Date.now(); // Track call start time
-      console.log('👤 USER SPOKE FIRST - Now we can start conversation');
-    }
-    
-    this.conversationHistory.push({ role: 'user', content: userMessage });
-
-    // STEP 1: Handle first greeting when user speaks
-    if (!this.hasGreeted && this.userHasSpoken) {
-      await this.handleInitialGreeting(userMessage, parsed.response_id);
-      return;
-    }
-
-    const progress = globalDiscoveryManager.getProgress(this.callId);
-    console.log(`📊 CURRENT PROGRESS: ${progress?.questionsCompleted || 0}/6 questions, Phase: ${progress?.conversationPhase || 'greeting'}`);
-
-    // STEP 2: Handle discovery phase with memory enhancement
-    if (progress?.questionsCompleted < 6 && !progress?.schedulingStarted) {
-      await this.handleDiscoveryPhaseWithMemory(userMessage, parsed.response_id);
-      return;
-    }
-
-    // STEP 3: Check for specific time booking request (only if enough questions done)
-    const specificTimeMatch = this.detectSpecificTimeRequest(userMessage);
-    if (specificTimeMatch && progress?.questionsCompleted >= 5) {
-      console.log('🕐 BOOKING REQUEST DETECTED:', specificTimeMatch.timeString);
-      await this.handleBookingWithMemory(specificTimeMatch, parsed.response_id);
-      return;
-    }
-
-    // STEP 4: Handle scheduling phase
-    if (progress?.questionsCompleted >= 6 || progress?.schedulingStarted) {
-      await this.handleSchedulingPhase(userMessage, parsed.response_id);
-      return;
-    }
-
-    // FALLBACK - Use enhanced response with memory
-    await this.generateEnhancedResponse(userMessage, parsed.response_id);
-  }
-
-  async handleBookingWithMemory(timeRequest, responseId) {
-    try {
-      console.log('🔄 ATTEMPTING APPOINTMENT BOOKING WITH MEMORY:', timeRequest.timeString);
-      
-      const discoveryData = globalDiscoveryManager.getFinalDiscoveryData(this.callId);
-      console.log('📋 Discovery data for booking:', discoveryData);
-      
-      const bookingResult = await autoBookAppointment(
-        this.connectionData.customerName,
-        this.connectionData.customerEmail,
-        this.connectionData.customerPhone,
-        timeRequest.dateTime,
-        discoveryData
-      );
-      
-      let response;
-      if (bookingResult?.success) {
-        console.log('✅ BOOKING SUCCESSFUL!');
-        response = `Perfect! I've booked your consultation for ${timeRequest.dayName} at ${timeRequest.timeString}. You'll receive a calendar invitation shortly!`;
-        
-        // Store successful booking in memory
-        await this.handleSuccessfulBooking(timeRequest, discoveryData);
-      } else {
-        console.log('⚠️ BOOKING FAILED, but confirming anyway');
-        response = `Great! I'll get you scheduled for ${timeRequest.dayName} at ${timeRequest.timeString}. You'll receive confirmation details shortly!`;
-      }
-      
-      this.conversationHistory.push({ role: 'assistant', content: response });
-      await this.sendResponse(response, responseId);
-      
-      // Send webhook in background
-      setTimeout(() => this.sendWebhookData(timeRequest, discoveryData), 500);
-      
-    } catch (error) {
-      console.error('❌ Booking error:', error.message);
-      const fallbackResponse = `Perfect! I'll get you scheduled for ${timeRequest.dayName} at ${timeRequest.timeString}. You'll receive confirmation details shortly!`;
-      await this.sendResponse(fallbackResponse, responseId);
-    }
-  }
-
-  // Include all the original methods from WebSocketHandler
   extractCallId(url) {
     const callIdMatch = url.match(/\/call_([a-f0-9]+)/);
     return callIdMatch ? `call_${callIdMatch[1]}` : null;
@@ -338,9 +184,6 @@ CRITICAL RULES:
         source: 'url_params'
       };
     }
-    
-    // Method 4: Try to fetch from trigger server endpoints (your working method)
-    this.attemptTriggerServerFetch();
     
     // Fallback: Use minimal data but log comprehensive warning
     console.warn('⚠️ NO REAL CUSTOMER DATA FOUND - Using fallback data');
@@ -448,9 +291,159 @@ CRITICAL RULES:
     }
   }
 
-  // Include all other methods from the original WebSocketHandler
-  // (handleDiscoveryPhaseFixed, handleSchedulingPhase, detectSpecificTimeRequest, etc.)
-  // For brevity, I'll include the key ones:
+  async processUserMessage(parsed) {
+    const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
+    const userMessage = latestUserUtterance?.content || "";
+
+    console.log(`🗣️ USER: "${userMessage}"`);
+    
+    // Mark that user has spoken
+    if (!this.userHasSpoken) {
+      this.userHasSpoken = true;
+      this.connectionStartTime = Date.now(); // Track call start time
+      console.log('👤 USER SPOKE FIRST - Now we can start conversation');
+    }
+    
+    this.conversationHistory.push({ role: 'user', content: userMessage });
+
+    // STEP 1: Handle first greeting when user speaks
+    if (!this.hasGreeted && this.userHasSpoken) {
+      await this.handleInitialGreeting(userMessage, parsed.response_id);
+      return;
+    }
+
+    const progress = globalDiscoveryManager.getProgress(this.callId);
+    console.log(`📊 CURRENT PROGRESS: ${progress?.questionsCompleted || 0}/6 questions, Phase: ${progress?.conversationPhase || 'greeting'}`);
+
+    // STEP 2: Handle discovery phase with memory enhancement
+    if (progress?.questionsCompleted < 6 && !progress?.schedulingStarted) {
+      await this.handleDiscoveryPhaseWithMemory(userMessage, parsed.response_id);
+      return;
+    }
+
+    // STEP 3: Check for specific time booking request (only if enough questions done)
+    const specificTimeMatch = this.detectSpecificTimeRequest(userMessage);
+    if (specificTimeMatch && progress?.questionsCompleted >= 5) {
+      console.log('🕐 BOOKING REQUEST DETECTED:', specificTimeMatch.timeString);
+      await this.handleBookingWithMemory(specificTimeMatch, parsed.response_id);
+      return;
+    }
+
+    // STEP 4: Handle scheduling phase
+    if (progress?.questionsCompleted >= 6 || progress?.schedulingStarted) {
+      await this.handleSchedulingPhase(userMessage, parsed.response_id);
+      return;
+    }
+
+    // FALLBACK - Use enhanced response with memory
+    await this.generateEnhancedResponse(userMessage, parsed.response_id);
+  }
+
+  async handleInitialGreeting(userMessage, responseId) {
+    console.log('👋 HANDLING INITIAL GREETING WITH MEMORY - USER SPOKE FIRST');
+    this.hasGreeted = true;
+    
+    // Check if this is a returning customer
+    const isReturningCustomer = this.customerProfile && this.customerProfile.totalInteractions > 0;
+    
+    let greeting;
+    if (isReturningCustomer) {
+      const customerName = this.connectionData.customerName !== 'Customer' && this.connectionData.customerName !== 'Prospect' 
+        ? ` ${this.connectionData.customerName}` 
+        : '';
+      
+      greeting = `Hi${customerName}! Great to hear from you again. This is Sarah from Nexella AI. How are things going?`;
+      console.log('🔄 RETURNING CUSTOMER DETECTED - Using personalized greeting');
+    } else {
+      const customerName = this.connectionData.customerName !== 'Customer' && this.connectionData.customerName !== 'Prospect' 
+        ? ` ${this.connectionData.customerName}` 
+        : '';
+      
+      greeting = `Hi${customerName}! This is Sarah from Nexella AI. How are you doing today?`;
+      console.log('✨ NEW CUSTOMER - Using standard greeting');
+    }
+    
+    await this.sendResponse(greeting, responseId);
+    
+    // Mark greeting as completed
+    globalDiscoveryManager.markGreetingCompleted(this.callId);
+  }
+
+  async handleDiscoveryPhaseWithMemory(userMessage, responseId) {
+    console.log('📝 HANDLING DISCOVERY PHASE WITH MEMORY');
+    
+    const progress = globalDiscoveryManager.getProgress(this.callId);
+    
+    // Check if we can skip questions based on memory
+    if (this.customerProfile && progress?.questionsCompleted === 0 && !progress?.waitingForAnswer) {
+      console.log('🧠 CHECKING MEMORY FOR PREVIOUS ANSWERS...');
+      await this.handleMemoryBasedDiscovery(userMessage, responseId);
+      return;
+    }
+    
+    // Continue with regular discovery flow
+    await this.handleDiscoveryPhaseFixed(userMessage, responseId);
+  }
+
+  async handleMemoryBasedDiscovery(userMessage, responseId) {
+    if (!this.memoryService) {
+      await this.handleRegularDiscovery(userMessage, responseId);
+      return;
+    }
+
+    // Get previous business context from memory
+    const businessMemories = await this.memoryService.getMemoriesByType(
+      this.connectionData.customerEmail, 
+      'business_context', 
+      1
+    );
+    
+    if (businessMemories.length > 0 && businessMemories[0].relevance !== 'very_low') {
+      console.log('🎯 FOUND BUSINESS CONTEXT IN MEMORY - Acknowledging and starting with appropriate question');
+      
+      const acknowledgment = this.getGreetingAcknowledgment(userMessage);
+      
+      // Reference their business and ask a follow-up question
+      const businessInfo = businessMemories[0].content;
+      let response = `${acknowledgment} I remember we spoke about your ${businessInfo.includes('industry') ? 'business' : 'work'}. `;
+      
+      // Start with an appropriate question based on what we know
+      if (businessInfo.includes('industry') || businessInfo.includes('business')) {
+        // We know their industry, ask about current challenges
+        response += "What are the biggest challenges you're facing right now?";
+        
+        // Mark as if we've answered the first few questions
+        globalDiscoveryManager.markQuestionAsked(this.callId, 0, "How did you hear about us?");
+        globalDiscoveryManager.captureAnswer(this.callId, 0, "Previous conversation");
+        globalDiscoveryManager.markQuestionAsked(this.callId, 1, "What industry or business are you in?");
+        globalDiscoveryManager.captureAnswer(this.callId, 1, "From memory: " + businessInfo);
+        globalDiscoveryManager.markQuestionAsked(this.callId, 5, response);
+      } else {
+        // We have some info but not complete, start normally
+        response += "How did you hear about us?";
+        globalDiscoveryManager.markQuestionAsked(this.callId, 0, response);
+      }
+      
+      this.conversationHistory.push({ role: 'assistant', content: response });
+      await this.sendResponse(response, responseId);
+    } else {
+      // No useful memory, start normally
+      await this.handleRegularDiscovery(userMessage, responseId);
+    }
+  }
+
+  async handleRegularDiscovery(userMessage, responseId) {
+    console.log('📝 NO USEFUL MEMORY FOUND - Starting normal discovery');
+    const firstQuestion = "How did you hear about us?";
+    
+    const acknowledgment = this.getGreetingAcknowledgment(userMessage);
+    const response = `${acknowledgment} ${firstQuestion}`;
+    
+    globalDiscoveryManager.markQuestionAsked(this.callId, 0, firstQuestion);
+    
+    this.conversationHistory.push({ role: 'assistant', content: response });
+    await this.sendResponse(response, responseId);
+  }
 
   async handleDiscoveryPhaseFixed(userMessage, responseId) {
     console.log('📝 HANDLING DISCOVERY PHASE - FIXED VERSION');
@@ -578,7 +571,209 @@ CRITICAL RULES:
     }
   }
 
-  // Include utility methods
+  async handleBookingWithMemory(timeRequest, responseId) {
+    try {
+      console.log('🔄 ATTEMPTING APPOINTMENT BOOKING WITH MEMORY:', timeRequest.timeString);
+      
+      const discoveryData = globalDiscoveryManager.getFinalDiscoveryData(this.callId);
+      console.log('📋 Discovery data for booking:', discoveryData);
+      
+      const bookingResult = await autoBookAppointment(
+        this.connectionData.customerName,
+        this.connectionData.customerEmail,
+        this.connectionData.customerPhone,
+        timeRequest.dateTime,
+        discoveryData
+      );
+      
+      let response;
+      if (bookingResult?.success) {
+        console.log('✅ BOOKING SUCCESSFUL!');
+        response = `Perfect! I've booked your consultation for ${timeRequest.dayName} at ${timeRequest.timeString}. You'll receive a calendar invitation shortly!`;
+        
+        // Store successful booking in memory
+        if (this.memoryService) {
+          await this.handleSuccessfulBooking(timeRequest, discoveryData);
+        }
+      } else {
+        console.log('⚠️ BOOKING FAILED, but confirming anyway');
+        response = `Great! I'll get you scheduled for ${timeRequest.dayName} at ${timeRequest.timeString}. You'll receive confirmation details shortly!`;
+      }
+      
+      this.conversationHistory.push({ role: 'assistant', content: response });
+      await this.sendResponse(response, responseId);
+      
+      // Send webhook in background
+      setTimeout(() => this.sendWebhookData(timeRequest, discoveryData), 500);
+      
+    } catch (error) {
+      console.error('❌ Booking error:', error.message);
+      const fallbackResponse = `Perfect! I'll get you scheduled for ${timeRequest.dayName} at ${timeRequest.timeString}. You'll receive confirmation details shortly!`;
+      await this.sendResponse(fallbackResponse, responseId);
+    }
+  }
+
+  async handleSuccessfulBooking(timeRequest, discoveryData) {
+    if (!this.memoryService) return;
+
+    try {
+      console.log('✅ BOOKING SUCCESSFUL - STORING COMPLETE INTERACTION MEMORY');
+      
+      // Enhanced conversation data for successful bookings
+      const conversationData = {
+        duration: this.calculateCallDuration(),
+        questionsCompleted: 6,
+        schedulingCompleted: true,
+        appointmentScheduled: timeRequest.timeString,
+        userSentiment: 'positive',
+        callEndReason: 'successful_booking',
+        outcome: 'appointment_booked'
+      };
+      
+      // Store complete interaction in memory
+      await this.memoryService.storeConversationMemory(
+        this.callId,
+        this.connectionData,
+        conversationData,
+        discoveryData
+      );
+      
+    } catch (error) {
+      console.error('❌ Error storing successful booking memory:', error.message);
+    }
+  }
+
+  async generateEnhancedResponse(userMessage, responseId) {
+    console.log('🤖 GENERATING ENHANCED RESPONSE WITH MEMORY CONTEXT');
+    
+    try {
+      // Get relevant memories for context if memory service available
+      let relevantMemories = [];
+      if (this.memoryService) {
+        relevantMemories = await this.memoryService.retrieveRelevantMemories(
+          this.connectionData.customerEmail,
+          userMessage,
+          2
+        );
+      }
+      
+      // Add memory context to conversation history
+      let enhancedSystemMessage = this.conversationHistory[0].content;
+      
+      if (relevantMemories.length > 0) {
+        enhancedSystemMessage += '\n\nRELEVANT MEMORIES: ';
+        relevantMemories.forEach(memory => {
+          enhancedSystemMessage += `${memory.content}. `;
+        });
+      }
+      
+      // Create enhanced conversation history
+      const enhancedHistory = [
+        { role: 'system', content: enhancedSystemMessage },
+        ...this.conversationHistory.slice(1)
+      ];
+      
+      const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+        model: 'gpt-4o',
+        messages: enhancedHistory,
+        temperature: 0.7,
+        max_tokens: 150
+      }, {
+        headers: {
+          Authorization: `Bearer ${config.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 8000
+      });
+
+      const reply = response.data.choices[0].message.content;
+      this.conversationHistory.push({ role: 'assistant', content: reply });
+      await this.sendResponse(reply, responseId);
+      
+    } catch (error) {
+      console.log('⚡ Using fallback response due to AI error');
+      const fallback = "I understand. How can I help you further?";
+      this.conversationHistory.push({ role: 'assistant', content: fallback });
+      await this.sendResponse(fallback, responseId);
+    }
+  }
+
+  async handleClose() {
+    console.log('🔌 CONNECTION CLOSED WITH MEMORY SAVE');
+    
+    try {
+      // Get session info for memory storage
+      const sessionInfo = globalDiscoveryManager.getSessionInfo(this.callId);
+      
+      if (sessionInfo && sessionInfo.questionsCompleted > 0 && this.memoryService) {
+        console.log(`💾 Saving conversation to memory: ${sessionInfo.questionsCompleted}/6 questions`);
+        
+        // Prepare conversation data for memory storage
+        const conversationData = {
+          duration: this.calculateCallDuration(),
+          questionsCompleted: sessionInfo.questionsCompleted,
+          schedulingCompleted: sessionInfo.schedulingStarted || false,
+          userSentiment: this.detectUserSentiment(),
+          callEndReason: 'user_disconnect'
+        };
+        
+        // Get discovery data
+        const discoveryData = globalDiscoveryManager.getFinalDiscoveryData(this.callId);
+        
+        // Store in RAG memory system
+        await this.memoryService.storeConversationMemory(
+          this.callId,
+          this.connectionData,
+          conversationData,
+          discoveryData
+        );
+        
+        // Send final webhook
+        setTimeout(() => {
+          sendSchedulingPreference(
+            this.connectionData.customerName,
+            this.connectionData.customerEmail, 
+            this.connectionData.customerPhone,
+            'Call ended early',
+            this.callId,
+            discoveryData
+          ).catch(err => console.error('Final webhook error:', err));
+        }, 1000);
+      }
+    } catch (error) {
+      console.error('Error in memory-enabled connection close handler:', error.message);
+    }
+  }
+
+  // UTILITY METHODS FOR MEMORY
+
+  calculateCallDuration() {
+    // Calculate call duration in minutes
+    const now = Date.now();
+    const startTime = this.connectionStartTime || now;
+    return Math.round((now - startTime) / 60000); // Convert to minutes
+  }
+
+  detectUserSentiment() {
+    // Simple sentiment detection based on conversation
+    // In production, you might use a more sophisticated sentiment analysis
+    const lastUserMessages = this.conversationHistory
+      .filter(msg => msg.role === 'user')
+      .slice(-3)
+      .map(msg => msg.content.toLowerCase())
+      .join(' ');
+    
+    if (lastUserMessages.includes('great') || lastUserMessages.includes('perfect') || lastUserMessages.includes('thanks')) {
+      return 'positive';
+    } else if (lastUserMessages.includes('problem') || lastUserMessages.includes('difficult') || lastUserMessages.includes('frustrated')) {
+      return 'negative';
+    }
+    
+    return 'neutral';
+  }
+
+  // UTILITY METHODS FROM ORIGINAL HANDLER
+
   getGreetingAcknowledgment(userAnswer) {
     const answer = userAnswer.toLowerCase();
     
@@ -798,170 +993,4 @@ CRITICAL RULES:
   }
 }
 
-module.exports = WebSocketHandlerWithMemory;(response, responseId);
-    } else {
-      // No useful memory, start normally
-      console.log('📝 NO USEFUL MEMORY FOUND - Starting normal discovery');
-      const firstQuestion = "How did you hear about us?";
-      
-      const acknowledgment = this.getGreetingAcknowledgment(userMessage);
-      const response = `${acknowledgment} ${firstQuestion}`;
-      
-      globalDiscoveryManager.markQuestionAsked(this.callId, 0, firstQuestion);
-      
-      this.conversationHistory.push({ role: 'assistant', content: response });
-      await this.sendResponse(response, responseId);
-    }
-  }
-
-  async handleClose() {
-    console.log('🔌 CONNECTION CLOSED WITH MEMORY SAVE');
-    
-    try {
-      // Get session info for memory storage
-      const sessionInfo = globalDiscoveryManager.getSessionInfo(this.callId);
-      
-      if (sessionInfo && sessionInfo.questionsCompleted > 0) {
-        console.log(`💾 Saving conversation to memory: ${sessionInfo.questionsCompleted}/6 questions`);
-        
-        // Prepare conversation data for memory storage
-        const conversationData = {
-          duration: this.calculateCallDuration(),
-          questionsCompleted: sessionInfo.questionsCompleted,
-          schedulingCompleted: sessionInfo.schedulingStarted || false,
-          userSentiment: this.detectUserSentiment(),
-          callEndReason: 'user_disconnect'
-        };
-        
-        // Get discovery data
-        const discoveryData = globalDiscoveryManager.getFinalDiscoveryData(this.callId);
-        
-        // Store in RAG memory system
-        await this.memoryService.storeConversationMemory(
-          this.callId,
-          this.connectionData,
-          conversationData,
-          discoveryData
-        );
-        
-        // Send final webhook
-        setTimeout(() => {
-          sendSchedulingPreference(
-            this.connectionData.customerName,
-            this.connectionData.customerEmail, 
-            this.connectionData.customerPhone,
-            'Call ended early',
-            this.callId,
-            discoveryData
-          ).catch(err => console.error('Final webhook error:', err));
-        }, 1000);
-      }
-    } catch (error) {
-      console.error('Error in memory-enabled connection close handler:', error.message);
-    }
-  }
-
-  async handleSuccessfulBooking(timeRequest, discoveryData) {
-    try {
-      console.log('✅ BOOKING SUCCESSFUL - STORING COMPLETE INTERACTION MEMORY');
-      
-      // Enhanced conversation data for successful bookings
-      const conversationData = {
-        duration: this.calculateCallDuration(),
-        questionsCompleted: 6,
-        schedulingCompleted: true,
-        appointmentScheduled: timeRequest.timeString,
-        userSentiment: 'positive',
-        callEndReason: 'successful_booking',
-        outcome: 'appointment_booked'
-      };
-      
-      // Store complete interaction in memory
-      await this.memoryService.storeConversationMemory(
-        this.callId,
-        this.connectionData,
-        conversationData,
-        discoveryData
-      );
-      
-    } catch (error) {
-      console.error('❌ Error storing successful booking memory:', error.message);
-    }
-  }
-
-  // UTILITY METHODS FOR MEMORY
-
-  calculateCallDuration() {
-    // Calculate call duration in minutes
-    const now = Date.now();
-    const startTime = this.connectionStartTime || now;
-    return Math.round((now - startTime) / 60000); // Convert to minutes
-  }
-
-  detectUserSentiment() {
-    // Simple sentiment detection based on conversation
-    // In production, you might use a more sophisticated sentiment analysis
-    const lastUserMessages = this.conversationHistory
-      .filter(msg => msg.role === 'user')
-      .slice(-3)
-      .map(msg => msg.content.toLowerCase())
-      .join(' ');
-    
-    if (lastUserMessages.includes('great') || lastUserMessages.includes('perfect') || lastUserMessages.includes('thanks')) {
-      return 'positive';
-    } else if (lastUserMessages.includes('problem') || lastUserMessages.includes('difficult') || lastUserMessages.includes('frustrated')) {
-      return 'negative';
-    }
-    
-    return 'neutral';
-  }
-
-  async generateEnhancedResponse(userMessage, responseId) {
-    console.log('🤖 GENERATING ENHANCED RESPONSE WITH MEMORY CONTEXT');
-    
-    try {
-      // Get relevant memories for context
-      const relevantMemories = await this.memoryService.retrieveRelevantMemories(
-        this.connectionData.customerEmail,
-        userMessage,
-        2
-      );
-      
-      // Add memory context to conversation history
-      let enhancedSystemMessage = this.conversationHistory[0].content;
-      
-      if (relevantMemories.length > 0) {
-        enhancedSystemMessage += '\n\nRELEVANT MEMORIES: ';
-        relevantMemories.forEach(memory => {
-          enhancedSystemMessage += `${memory.content}. `;
-        });
-      }
-      
-      // Create enhanced conversation history
-      const enhancedHistory = [
-        { role: 'system', content: enhancedSystemMessage },
-        ...this.conversationHistory.slice(1)
-      ];
-      
-      const response = await axios.post('https://api.openai.com/v1/chat/completions', {
-        model: 'gpt-4o',
-        messages: enhancedHistory,
-        temperature: 0.7,
-        max_tokens: 150
-      }, {
-        headers: {
-          Authorization: `Bearer ${config.OPENAI_API_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 8000
-      });
-
-      const reply = response.data.choices[0].message.content;
-      this.conversationHistory.push({ role: 'assistant', content: reply });
-      await this.sendResponse(reply, responseId);
-      
-    } catch (error) {
-      console.log('⚡ Using fallback response due to AI error');
-      const fallback = "I understand. How can I help you further?";
-      this.conversationHistory.push({ role: 'assistant', content: fallback });
-      await this.sendResponse
+module.exports = WebSocketHandlerWithMemory;
