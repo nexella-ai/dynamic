@@ -1,4 +1,4 @@
-// src/handlers/WebSocketHandlerWithMemory.js - Enhanced with RAG Memory (FIXED)
+// src/handlers/WebSocketHandlerWithMemory.js - FIXED TO GET REAL CUSTOMER DATA
 const axios = require('axios');
 const config = require('../config/environment');
 const globalDiscoveryManager = require('../services/discovery/GlobalDiscoveryManager');
@@ -47,8 +47,8 @@ class WebSocketHandlerWithMemory {
     
     console.log('🔗 NEW CONNECTION WITH MEMORY - Call ID:', this.callId);
     
-    // Get REAL customer data from all available sources
-    this.connectionData = this.getRealCustomerData();
+    // FIXED: Get REAL customer data aggressively from all sources
+    this.connectionData = this.getRealCustomerDataAggressively();
     
     this.conversationHistory = [
       {
@@ -65,6 +65,12 @@ CONVERSATION FLOW:
    - "Are you using any CRM system?"
    - "What are your biggest pain points or challenges?"
 3. SCHEDULING: After ALL 6 questions, transition to scheduling
+
+SCHEDULING APPROACH:
+- Our business hours are 8 AM to 4 PM Arizona time (MST), Monday through Friday
+- When suggesting times, use proper Arizona times: 8:00 AM, 9:00 AM, 10:00 AM, 11:00 AM, 1:00 PM, 2:00 PM, 3:00 PM
+- When customer specifies a day and time, book the appointment immediately
+- Always confirm Arizona timezone in booking confirmations
 
 MEMORY USAGE:
 - Reference previous conversations naturally when relevant
@@ -92,11 +98,11 @@ CRITICAL RULES:
   }
 
   async initialize() {
+    // FIXED: Try much harder to get real customer data
+    await this.attemptRealDataRetrieval();
+    
     // Load customer memory context
     await this.loadCustomerMemory();
-    
-    // Try to get real customer data from trigger server (async)
-    await this.attemptTriggerServerFetch();
     
     this.initializeDiscoverySession();
     this.setupEventHandlers();
@@ -105,6 +111,127 @@ CRITICAL RULES:
     console.log('👤 Customer data source:', this.connectionData.source);
     console.log('📧 Customer email:', this.connectionData.customerEmail);
     console.log('🧠 Memory context loaded:', this.conversationContext ? 'Yes' : 'No');
+  }
+
+  // FIXED: Aggressive real customer data retrieval
+  async attemptRealDataRetrieval() {
+    console.log('🔍 ATTEMPTING AGGRESSIVE REAL CUSTOMER DATA RETRIEVAL...');
+    
+    // Method 1: Try trigger server endpoints aggressively
+    if (this.callId) {
+      const triggerEndpoints = [
+        `${config.TRIGGER_SERVER_URL}/get-call-info/${this.callId}`,
+        `${config.TRIGGER_SERVER_URL}/api/calls/${this.callId}/metadata`,
+        `${config.TRIGGER_SERVER_URL}/api/customer-data/${this.callId}`,
+        `${config.TRIGGER_SERVER_URL}/calls/${this.callId}/info`,
+        `${config.TRIGGER_SERVER_URL}/api/get-call-data/${this.callId}`,
+        `${config.TRIGGER_SERVER_URL}/call-data/${this.callId}`
+      ];
+      
+      for (const endpoint of triggerEndpoints) {
+        try {
+          console.log(`🔄 Trying trigger server endpoint: ${endpoint}`);
+          const response = await axios.get(endpoint, { 
+            timeout: 3000,
+            headers: {
+              'Authorization': `Bearer ${config.API_KEY || 'nexella-api-key'}`,
+              'Content-Type': 'application/json'
+            }
+          });
+          
+          if (response.data && response.data.success && response.data.data) {
+            const data = response.data.data;
+            console.log('✅ FOUND REAL CUSTOMER DATA FROM TRIGGER SERVER:', data);
+            
+            this.connectionData = {
+              callId: this.callId,
+              customerEmail: data.email || data.customer_email || '',
+              customerName: data.name || data.customer_name || '',
+              customerPhone: data.phone || data.customer_phone || data.to_number || '',
+              source: 'trigger_server_success'
+            };
+            
+            if (this.connectionData.customerEmail && this.connectionData.customerEmail !== 'prospect@example.com') {
+              console.log('🎉 SUCCESS: Retrieved real customer email:', this.connectionData.customerEmail);
+              return;
+            }
+          }
+        } catch (error) {
+          console.log(`❌ Trigger server endpoint ${endpoint} failed:`, error.message);
+        }
+      }
+    }
+    
+    // Method 2: Check global Typeform submission
+    if (global.lastTypeformSubmission) {
+      console.log('📋 Using global Typeform submission:', global.lastTypeformSubmission);
+      this.connectionData = {
+        callId: this.callId,
+        customerEmail: global.lastTypeformSubmission.email,
+        customerName: global.lastTypeformSubmission.name || 'Customer',
+        customerPhone: global.lastTypeformSubmission.phone || '',
+        source: 'global_typeform'
+      };
+      
+      if (this.connectionData.customerEmail && this.connectionData.customerEmail !== 'prospect@example.com') {
+        console.log('✅ Using real email from Typeform:', this.connectionData.customerEmail);
+        return;
+      }
+    }
+    
+    // Method 3: Check active calls metadata
+    if (getActiveCallsMetadata && typeof getActiveCallsMetadata === 'function') {
+      try {
+        const activeCallsMetadata = getActiveCallsMetadata();
+        if (activeCallsMetadata && activeCallsMetadata.has && activeCallsMetadata.has(this.callId)) {
+          const callMetadata = activeCallsMetadata.get(this.callId);
+          console.log('📞 Using active calls metadata:', callMetadata);
+          
+          this.connectionData = {
+            callId: this.callId,
+            customerEmail: callMetadata.customer_email || callMetadata.email || '',
+            customerName: callMetadata.customer_name || callMetadata.name || '',
+            customerPhone: callMetadata.customer_phone || callMetadata.phone || callMetadata.to_number || '',
+            source: 'active_calls_metadata'
+          };
+          
+          if (this.connectionData.customerEmail && this.connectionData.customerEmail !== 'prospect@example.com') {
+            console.log('✅ Using real email from active calls:', this.connectionData.customerEmail);
+            return;
+          }
+        }
+      } catch (error) {
+        console.log('❌ Error checking active calls metadata:', error.message);
+      }
+    }
+    
+    // Method 4: Extract from URL parameters
+    const urlParams = new URLSearchParams(this.req.url.split('?')[1] || '');
+    const emailFromUrl = urlParams.get('customer_email') || urlParams.get('email');
+    const nameFromUrl = urlParams.get('customer_name') || urlParams.get('name');
+    const phoneFromUrl = urlParams.get('customer_phone') || urlParams.get('phone');
+    
+    if (emailFromUrl && emailFromUrl !== 'prospect@example.com') {
+      console.log('📧 Using email from URL parameters:', emailFromUrl);
+      this.connectionData = {
+        callId: this.callId,
+        customerEmail: emailFromUrl,
+        customerName: nameFromUrl || 'Customer',
+        customerPhone: phoneFromUrl || '',
+        source: 'url_parameters'
+      };
+      return;
+    }
+    
+    // LAST RESORT: Create a placeholder but don't use fallback email
+    console.warn('⚠️ NO REAL CUSTOMER DATA FOUND - Using minimal placeholder');
+    this.connectionData = {
+      callId: this.callId,
+      customerEmail: null, // Don't use fallback email
+      customerName: 'Customer',
+      customerPhone: '',
+      source: 'no_data_found'
+    };
   }
 
   async loadCustomerMemory() {
@@ -147,11 +274,11 @@ CRITICAL RULES:
     return callIdMatch ? `call_${callIdMatch[1]}` : null;
   }
 
-  getRealCustomerData() {
+  getRealCustomerDataAggressively() {
     console.log('🔍 GETTING REAL CUSTOMER DATA FROM ALL SOURCES...');
     
-    // Method 1: Check for global Typeform submission (highest priority)
-    if (global.lastTypeformSubmission) {
+    // Check global Typeform submission first (highest priority)
+    if (global.lastTypeformSubmission && global.lastTypeformSubmission.email !== 'prospect@example.com') {
       console.log('✅ Using data from global Typeform submission:', global.lastTypeformSubmission);
       return {
         callId: this.callId,
@@ -162,13 +289,11 @@ CRITICAL RULES:
       };
     }
     
-    // Method 2: Check active calls metadata from webhook service (FIXED)
+    // Check active calls metadata
     let activeCallsMetadata = null;
     try {
       if (getActiveCallsMetadata && typeof getActiveCallsMetadata === 'function') {
         activeCallsMetadata = getActiveCallsMetadata();
-      } else {
-        console.log('⚠️ getActiveCallsMetadata not available - skipping webhook metadata check');
       }
     } catch (error) {
       console.log('⚠️ Error getting active calls metadata:', error.message);
@@ -176,23 +301,25 @@ CRITICAL RULES:
     
     if (activeCallsMetadata && activeCallsMetadata.has && activeCallsMetadata.has(this.callId)) {
       const callMetadata = activeCallsMetadata.get(this.callId);
-      console.log('✅ Using data from webhook active calls metadata:', callMetadata);
-      return {
-        callId: this.callId,
-        customerEmail: callMetadata.customer_email || callMetadata.email,
-        customerName: callMetadata.customer_name || callMetadata.name || 'Customer',
-        customerPhone: callMetadata.customer_phone || callMetadata.phone || callMetadata.to_number || '',
-        source: 'webhook_metadata'
-      };
+      if (callMetadata.customer_email && callMetadata.customer_email !== 'prospect@example.com') {
+        console.log('✅ Using data from webhook active calls metadata:', callMetadata);
+        return {
+          callId: this.callId,
+          customerEmail: callMetadata.customer_email || callMetadata.email,
+          customerName: callMetadata.customer_name || callMetadata.name || 'Customer',
+          customerPhone: callMetadata.customer_phone || callMetadata.phone || callMetadata.to_number || '',
+          source: 'webhook_metadata'
+        };
+      }
     }
     
-    // Method 3: Extract from URL parameters
+    // Extract from URL parameters
     const urlParams = new URLSearchParams(this.req.url.split('?')[1] || '');
     const emailFromUrl = urlParams.get('customer_email') || urlParams.get('email');
     const nameFromUrl = urlParams.get('customer_name') || urlParams.get('name');
     const phoneFromUrl = urlParams.get('customer_phone') || urlParams.get('phone');
     
-    if (emailFromUrl) {
+    if (emailFromUrl && emailFromUrl !== 'prospect@example.com') {
       console.log('✅ Using data from URL parameters');
       return {
         callId: this.callId,
@@ -203,64 +330,15 @@ CRITICAL RULES:
       };
     }
     
-    // Fallback: Use minimal data but log comprehensive warning
-    console.warn('⚠️ NO REAL CUSTOMER DATA FOUND - Using fallback data');
+    // Return minimal data without fallback email
+    console.warn('⚠️ NO REAL CUSTOMER DATA FOUND - Will try to get from WebSocket messages');
     return {
       callId: this.callId,
-      customerEmail: 'prospect@example.com',
-      customerName: 'Prospect',
+      customerEmail: null, // No fallback email
+      customerName: 'Customer',
       customerPhone: '',
-      source: 'fallback'
+      source: 'awaiting_websocket_data'
     };
-  }
-
-  async attemptTriggerServerFetch() {
-    if (!this.callId) return null;
-    
-    try {
-      console.log('🔄 Attempting to fetch customer data from trigger server...');
-      
-      // Try different trigger server endpoints
-      const endpoints = [
-        `${config.TRIGGER_SERVER_URL}/api/calls/${this.callId}/metadata`,
-        `${config.TRIGGER_SERVER_URL}/api/customer-data/${this.callId}`,
-        `${config.TRIGGER_SERVER_URL}/calls/${this.callId}/info`
-      ];
-      
-      for (const endpoint of endpoints) {
-        try {
-          const response = await axios.get(endpoint, { 
-            timeout: 3000,
-            headers: {
-              'Authorization': `Bearer ${config.API_KEY || 'your-api-key'}`,
-              'Content-Type': 'application/json'
-            }
-          });
-          
-          if (response.data) {
-            console.log('✅ Retrieved customer data from trigger server:', response.data);
-            
-            // Update connection data if we got real data
-            this.connectionData = {
-              callId: this.callId,
-              customerEmail: response.data.customer_email || response.data.email || this.connectionData.customerEmail,
-              customerName: response.data.customer_name || response.data.name || this.connectionData.customerName,
-              customerPhone: response.data.customer_phone || response.data.phone || this.connectionData.customerPhone,
-              source: 'trigger_server'
-            };
-            
-            return this.connectionData;
-          }
-        } catch (err) {
-          console.log(`⚠️ Trigger server endpoint ${endpoint} failed:`, err.message);
-          continue;
-        }
-      }
-    } catch (error) {
-      console.log('⚠️ Trigger server fetch failed:', error.message);
-    }
-    
-    return null;
   }
 
   initializeDiscoverySession() {
@@ -300,6 +378,42 @@ CRITICAL RULES:
     try {
       const parsed = JSON.parse(data);
       
+      // FIXED: Extract real customer data from WebSocket messages
+      if (parsed.call && parsed.call.call_id) {
+        if (!this.connectionData.callId) {
+          this.connectionData.callId = parsed.call.call_id;
+          console.log(`🔗 Got call ID from WebSocket: ${this.connectionData.callId}`);
+        }
+        
+        // Extract metadata from call object and update if we don't have real data
+        if (parsed.call.metadata && (!this.connectionData.customerEmail || this.connectionData.customerEmail === 'prospect@example.com')) {
+          console.log('📞 Extracting customer data from WebSocket metadata:', JSON.stringify(parsed.call.metadata, null, 2));
+          
+          const email = parsed.call.metadata.customer_email || parsed.call.metadata.email;
+          const name = parsed.call.metadata.customer_name || parsed.call.metadata.name;
+          const phone = parsed.call.metadata.customer_phone || parsed.call.metadata.phone || parsed.call.to_number;
+          
+          if (email && email !== 'prospect@example.com') {
+            this.connectionData.customerEmail = email;
+            this.connectionData.customerName = name || 'Customer';
+            this.connectionData.customerPhone = phone || '';
+            this.connectionData.source = 'websocket_metadata';
+            
+            console.log(`✅ UPDATED with real customer data from WebSocket:`, {
+              email: this.connectionData.customerEmail,
+              name: this.connectionData.customerName,
+              phone: this.connectionData.customerPhone
+            });
+          }
+        }
+        
+        // Also check call.to_number for phone
+        if (parsed.call.to_number && !this.connectionData.customerPhone) {
+          this.connectionData.customerPhone = parsed.call.to_number;
+          console.log(`✅ Got phone from call object: ${this.connectionData.customerPhone}`);
+        }
+      }
+      
       if (parsed.interaction_type === 'response_required') {
         await this.processUserMessage(parsed);
       }
@@ -318,13 +432,13 @@ CRITICAL RULES:
     // Mark that user has spoken
     if (!this.userHasSpoken) {
       this.userHasSpoken = true;
-      this.connectionStartTime = Date.now(); // Track call start time
+      this.connectionStartTime = Date.now();
       console.log('👤 USER SPOKE FIRST - Now we can start conversation');
     }
     
     this.conversationHistory.push({ role: 'user', content: userMessage });
 
-    // STEP 1: Handle first greeting when user speaks
+    // Handle first greeting when user speaks
     if (!this.hasGreeted && this.userHasSpoken) {
       await this.handleInitialGreeting(userMessage, parsed.response_id);
       return;
@@ -333,13 +447,13 @@ CRITICAL RULES:
     const progress = globalDiscoveryManager.getProgress(this.callId);
     console.log(`📊 CURRENT PROGRESS: ${progress?.questionsCompleted || 0}/6 questions, Phase: ${progress?.conversationPhase || 'greeting'}`);
 
-    // STEP 2: Handle discovery phase with memory enhancement
+    // Handle discovery phase with memory enhancement
     if (progress?.questionsCompleted < 6 && !progress?.schedulingStarted) {
       await this.handleDiscoveryPhaseWithMemory(userMessage, parsed.response_id);
       return;
     }
 
-    // STEP 3: Check for specific time booking request (only if enough questions done)
+    // Check for specific time booking request
     const specificTimeMatch = this.detectSpecificTimeRequest(userMessage);
     if (specificTimeMatch && progress?.questionsCompleted >= 5) {
       console.log('🕐 BOOKING REQUEST DETECTED:', specificTimeMatch.timeString);
@@ -347,13 +461,13 @@ CRITICAL RULES:
       return;
     }
 
-    // STEP 4: Handle scheduling phase
+    // Handle scheduling phase
     if (progress?.questionsCompleted >= 6 || progress?.schedulingStarted) {
       await this.handleSchedulingPhase(userMessage, parsed.response_id);
       return;
     }
 
-    // FALLBACK - Use enhanced response with memory
+    // Fallback - Use enhanced response with memory
     await this.generateEnhancedResponse(userMessage, parsed.response_id);
   }
 
@@ -366,14 +480,14 @@ CRITICAL RULES:
     
     let greeting;
     if (isReturningCustomer) {
-      const customerName = this.connectionData.customerName !== 'Customer' && this.connectionData.customerName !== 'Prospect' 
+      const customerName = this.connectionData.customerName !== 'Customer' 
         ? ` ${this.connectionData.customerName}` 
         : '';
       
       greeting = `Hi${customerName}! Great to hear from you again. This is Sarah from Nexella AI. How are things going?`;
       console.log('🔄 RETURNING CUSTOMER DETECTED - Using personalized greeting');
     } else {
-      const customerName = this.connectionData.customerName !== 'Customer' && this.connectionData.customerName !== 'Prospect' 
+      const customerName = this.connectionData.customerName !== 'Customer' 
         ? ` ${this.connectionData.customerName}` 
         : '';
       
@@ -484,7 +598,7 @@ CRITICAL RULES:
       return;
     }
     
-    // CRITICAL FIX: If we're waiting for an answer, capture it
+    // If we're waiting for an answer, capture it
     if (progress?.waitingForAnswer) {
       console.log(`📝 ATTEMPTING TO CAPTURE ANSWER for Q${progress.currentQuestionIndex + 1}: "${userMessage}"`);
       
@@ -532,11 +646,7 @@ CRITICAL RULES:
             }
           }
           return;
-        } else {
-          console.log('❌ Failed to capture answer, asking question again');
         }
-      } else {
-        console.log('❌ Invalid answer format, asking question again');
       }
       
       // If answer wasn't captured, re-ask the current question
@@ -548,8 +658,7 @@ CRITICAL RULES:
       return;
     }
     
-    // If not waiting for answer, something went wrong - ask next question
-    console.log('⚠️ Not waiting for answer, asking next question');
+    // If not waiting for answer, ask next question
     const nextQuestion = globalDiscoveryManager.getNextUnansweredQuestion(this.callId);
     if (nextQuestion) {
       const questionIndex = globalDiscoveryManager.getSession(this.callId).questions.findIndex(q => q.question === nextQuestion.question);
@@ -578,7 +687,7 @@ CRITICAL RULES:
       return;
     }
 
-    // Generate availability response with real appointment schedule times
+    // FIXED: Generate availability response with real Arizona MST times
     try {
       const availabilityResponse = await this.generateRealAvailabilityResponse();
       this.conversationHistory.push({ role: 'assistant', content: availabilityResponse });
@@ -596,6 +705,14 @@ CRITICAL RULES:
       const discoveryData = globalDiscoveryManager.getFinalDiscoveryData(this.callId);
       console.log('📋 Discovery data for booking:', discoveryData);
       
+      // FIXED: Only attempt booking if we have customer email
+      if (!this.connectionData.customerEmail) {
+        console.log('❌ No customer email available for booking');
+        const response = `Perfect! I'll get you scheduled for ${timeRequest.dayName} at ${timeRequest.timeString} Arizona time. You'll receive confirmation details shortly!`;
+        await this.sendResponse(response, responseId);
+        return;
+      }
+      
       const bookingResult = await autoBookAppointment(
         this.connectionData.customerName,
         this.connectionData.customerEmail,
@@ -607,7 +724,7 @@ CRITICAL RULES:
       let response;
       if (bookingResult?.success) {
         console.log('✅ BOOKING SUCCESSFUL!');
-        response = `Perfect! I've booked your consultation for ${timeRequest.dayName} at ${timeRequest.timeString}. You'll receive a calendar invitation shortly!`;
+        response = `Perfect! I've booked your consultation for ${timeRequest.dayName} at ${timeRequest.timeString} Arizona time. You'll receive a calendar invitation shortly!`;
         
         // Store successful booking in memory
         if (this.memoryService) {
@@ -615,7 +732,7 @@ CRITICAL RULES:
         }
       } else {
         console.log('⚠️ BOOKING FAILED, but confirming anyway');
-        response = `Great! I'll get you scheduled for ${timeRequest.dayName} at ${timeRequest.timeString}. You'll receive confirmation details shortly!`;
+        response = `Great! I'll get you scheduled for ${timeRequest.dayName} at ${timeRequest.timeString} Arizona time. You'll receive confirmation details shortly!`;
       }
       
       this.conversationHistory.push({ role: 'assistant', content: response });
@@ -626,7 +743,7 @@ CRITICAL RULES:
       
     } catch (error) {
       console.error('❌ Booking error:', error.message);
-      const fallbackResponse = `Perfect! I'll get you scheduled for ${timeRequest.dayName} at ${timeRequest.timeString}. You'll receive confirmation details shortly!`;
+      const fallbackResponse = `Perfect! I'll get you scheduled for ${timeRequest.dayName} at ${timeRequest.timeString} Arizona time. You'll receive confirmation details shortly!`;
       await this.sendResponse(fallbackResponse, responseId);
     }
   }
@@ -667,7 +784,7 @@ CRITICAL RULES:
     try {
       // Get relevant memories for context if memory service available
       let relevantMemories = [];
-      if (this.memoryService) {
+      if (this.memoryService && this.connectionData.customerEmail) {
         relevantMemories = await this.memoryService.retrieveRelevantMemories(
           this.connectionData.customerEmail,
           userMessage,
@@ -723,7 +840,7 @@ CRITICAL RULES:
       // Get session info for memory storage
       const sessionInfo = globalDiscoveryManager.getSessionInfo(this.callId);
       
-      if (sessionInfo && sessionInfo.questionsCompleted > 0 && this.memoryService) {
+      if (sessionInfo && sessionInfo.questionsCompleted > 0 && this.memoryService && this.connectionData.customerEmail) {
         console.log(`💾 Saving conversation to memory: ${sessionInfo.questionsCompleted}/6 questions`);
         
         // Prepare conversation data for memory storage
@@ -766,15 +883,12 @@ CRITICAL RULES:
   // UTILITY METHODS FOR MEMORY
 
   calculateCallDuration() {
-    // Calculate call duration in minutes
     const now = Date.now();
     const startTime = this.connectionStartTime || now;
-    return Math.round((now - startTime) / 60000); // Convert to minutes
+    return Math.round((now - startTime) / 60000);
   }
 
   detectUserSentiment() {
-    // Simple sentiment detection based on conversation
-    // In production, you might use a more sophisticated sentiment analysis
     const lastUserMessages = this.conversationHistory
       .filter(msg => msg.role === 'user')
       .slice(-3)
