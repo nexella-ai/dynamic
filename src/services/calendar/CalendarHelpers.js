@@ -1,9 +1,13 @@
-// src/services/calendar/CalendarHelpers.js - FINAL FIX: Multiple Times & Booking Detection
+// src/services/calendar/CalendarHelpers.js - FIXED WITH ANTI-LOOP BOOKING SYSTEM
 const GoogleCalendarService = require('./GoogleCalendarService');
 
 // Initialize calendar service
 let calendarService = null;
 let calendarInitialized = false;
+
+// CRITICAL: Track booking attempts to prevent duplicate bookings
+const bookingAttempts = new Map(); // appointmentKey -> timestamp
+const bookingLocks = new Set(); // Active booking processes
 
 async function initializeCalendarService() {
   try {
@@ -26,7 +30,7 @@ async function initializeCalendarService() {
   }
 }
 
-// Check availability - REAL CALENDAR ONLY
+// ENHANCED: Check availability with robust error handling
 async function checkAvailability(startTime, endTime) {
   try {
     console.log('🔍 Checking calendar availability...');
@@ -37,7 +41,13 @@ async function checkAvailability(startTime, endTime) {
       throw new Error('Calendar service not available - cannot check availability');
     }
     
-    const available = await calendarService.isSlotAvailable(startTime, endTime);
+    // Add timeout for availability check
+    const availabilityPromise = calendarService.isSlotAvailable(startTime, endTime);
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Availability check timeout')), 10000)
+    );
+    
+    const available = await Promise.race([availabilityPromise, timeoutPromise]);
     console.log('📊 Real calendar result:', available);
     return available;
   } catch (error) {
@@ -63,8 +73,6 @@ async function getAvailableTimeSlots(date) {
     const availableSlots = await calendarService.getAvailableSlots(date);
     console.log(`📋 Retrieved ${availableSlots.length} real calendar slots from service`);
     
-    // FIXED: Don't filter by hour here - the service already handles business hours correctly
-    // The issue was double-filtering causing only 1 slot to show
     console.log(`✅ ${availableSlots.length} slots available (business hours already filtered by service)`);
     return availableSlots;
     
@@ -112,10 +120,9 @@ async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
             timeZone: 'America/Phoenix'
           });
           
-          // FIXED: Take first 4 slots and ensure proper formatting
           const limitedSlots = slots.slice(0, 4).map(slot => ({
             ...slot,
-            displayTime: slot.displayTime // Use the displayTime from the service
+            displayTime: slot.displayTime
           }));
           
           allAvailableSlots.push({
@@ -191,7 +198,203 @@ async function generateAvailabilityResponse() {
   }
 }
 
-// FIXED: Enhanced appointment booking detection and execution
+// COMPLETELY REWRITTEN: Auto-booking function with COMPREHENSIVE anti-loop system
+async function autoBookAppointment(customerName, customerEmail, customerPhone, preferredDateTime, discoveryData = {}) {
+  try {
+    console.log('🔄 Starting ANTI-LOOP appointment booking process...');
+    console.log('👤 Customer:', customerName, customerEmail);
+    console.log('📅 Requested time:', preferredDateTime);
+    
+    // CRITICAL VALIDATION: Check inputs first
+    if (!customerEmail || customerEmail === 'prospect@example.com') {
+      console.log('❌ Invalid customer email for booking');
+      return {
+        success: false,
+        error: 'Invalid customer email',
+        message: 'Customer email required for booking'
+      };
+    }
+
+    if (!calendarInitialized || !calendarService?.isInitialized()) {
+      console.log('❌ Calendar service not available');
+      return {
+        success: false,
+        error: 'Calendar service unavailable',
+        message: 'Calendar system not properly initialized'
+      };
+    }
+
+    // ANTI-DUPLICATE: Create unique appointment key
+    const appointmentKey = `${customerEmail}_${preferredDateTime.toISOString()}`;
+    const now = Date.now();
+    
+    // Check for recent booking attempts (30 second cooldown)
+    const lastAttempt = bookingAttempts.get(appointmentKey);
+    if (lastAttempt && (now - lastAttempt) < 30000) {
+      console.log('🚫 DUPLICATE BOOKING ATTEMPT BLOCKED - Recent attempt detected');
+      return {
+        success: false,
+        error: 'Duplicate booking attempt',
+        message: 'Booking already in progress for this time slot'
+      };
+    }
+    
+    // Check if this booking is currently being processed
+    if (bookingLocks.has(appointmentKey)) {
+      console.log('🚫 CONCURRENT BOOKING ATTEMPT BLOCKED - Already processing');
+      return {
+        success: false,
+        error: 'Booking in progress',
+        message: 'This appointment is already being processed'
+      };
+    }
+    
+    // LOCK THIS BOOKING PROCESS
+    bookingLocks.add(appointmentKey);
+    bookingAttempts.set(appointmentKey, now);
+    
+    console.log('🔒 BOOKING LOCKED for:', appointmentKey);
+    
+    try {
+      // Clean up old attempts (older than 5 minutes)
+      for (const [key, timestamp] of bookingAttempts.entries()) {
+        if (now - timestamp > 300000) { // 5 minutes
+          bookingAttempts.delete(key);
+        }
+      }
+
+      const startTime = new Date(preferredDateTime);
+      const endTime = new Date(startTime.getTime() + 60 * 60 * 1000); // 1 hour
+
+      console.log('🔍 Checking slot availability with timeout...');
+      
+      // ROBUST: Check availability with timeout
+      let isAvailable;
+      try {
+        const availabilityCheck = await Promise.race([
+          checkAvailability(startTime.toISOString(), endTime.toISOString()),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Availability check timeout')), 10000))
+        ]);
+        isAvailable = availabilityCheck;
+      } catch (availabilityError) {
+        console.error('❌ Availability check failed:', availabilityError.message);
+        return {
+          success: false,
+          error: 'Availability check failed',
+          message: 'Unable to verify time slot availability'
+        };
+      }
+
+      if (!isAvailable) {
+        console.log('❌ Time slot not available');
+        return {
+          success: false,
+          error: 'Slot unavailable',
+          message: 'That time slot is no longer available'
+        };
+      }
+
+      // Create appointment details
+      const appointmentDetails = {
+        summary: 'Nexella AI Consultation Call',
+        description: `Discovery call with ${customerName}\n\nCustomer Information:\nEmail: ${customerEmail}\nPhone: ${customerPhone}\n\nDiscovery Notes:\n${Object.entries(discoveryData).map(([key, value]) => `${key}: ${value}`).join('\n')}`,
+        startTime: startTime.toISOString(),
+        endTime: endTime.toISOString(),
+        attendeeEmail: customerEmail,
+        attendeeName: customerName
+      };
+
+      console.log('📅 Creating calendar event with timeout...');
+      
+      // ROBUST: Create event with timeout and retry logic
+      let bookingResult;
+      try {
+        bookingResult = await Promise.race([
+          calendarService.createEvent(appointmentDetails),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Calendar booking timeout')), 15000))
+        ]);
+      } catch (bookingError) {
+        console.error('❌ Calendar booking failed:', bookingError.message);
+        
+        return {
+          success: false,
+          error: bookingError.message,
+          message: 'Failed to create calendar appointment'
+        };
+      }
+
+      if (bookingResult.success) {
+        console.log('✅ APPOINTMENT BOOKING SUCCESSFUL!');
+        
+        // Generate display time for confirmation
+        const displayTime = startTime.toLocaleString('en-US', {
+          weekday: 'long',
+          month: 'long',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true,
+          timeZone: 'America/Phoenix'
+        });
+        
+        // Keep the booking attempt marker for longer to prevent immediate duplicates
+        setTimeout(() => {
+          bookingAttempts.delete(appointmentKey);
+          console.log('🧹 Cleaned up booking attempt marker for:', appointmentKey);
+        }, 60000); // 1 minute
+        
+        return {
+          success: true,
+          eventId: bookingResult.eventId,
+          meetingLink: bookingResult.meetingLink,
+          eventLink: bookingResult.eventLink,
+          message: `Appointment successfully booked for ${displayTime} Arizona time`,
+          displayTime: displayTime,
+          timezone: 'America/Phoenix',
+          customerEmail: customerEmail,
+          customerName: customerName,
+          startTime: startTime.toISOString()
+        };
+      } else {
+        console.log('❌ Calendar service returned failure:', bookingResult.error);
+        
+        return {
+          success: false,
+          error: bookingResult.error || 'Unknown booking error',
+          message: bookingResult.message || 'Failed to create appointment'
+        };
+      }
+      
+    } catch (error) {
+      console.error('❌ Unexpected booking error:', error.message);
+      
+      return {
+        success: false,
+        error: error.message,
+        message: 'An unexpected error occurred during booking'
+      };
+    } finally {
+      // ALWAYS UNLOCK the booking process
+      bookingLocks.delete(appointmentKey);
+      console.log('🔓 BOOKING UNLOCKED for:', appointmentKey);
+    }
+    
+  } catch (outerError) {
+    console.error('❌ Outer booking error:', outerError.message);
+    
+    // Ensure cleanup on any error
+    const appointmentKey = `${customerEmail}_${preferredDateTime.toISOString()}`;
+    bookingLocks.delete(appointmentKey);
+    
+    return {
+      success: false,
+      error: outerError.message,
+      message: 'System error during booking process'
+    };
+  }
+}
+
+// ENHANCED: Appointment booking detection and execution
 async function detectAndBookAppointment(userMessage, customerData, discoveryData) {
   try {
     console.log('🕐 DETECTING APPOINTMENT BOOKING REQUEST:', userMessage);
@@ -260,7 +463,7 @@ async function detectAndBookAppointment(userMessage, customerData, discoveryData
   }
 }
 
-// FIXED: Parse appointment match into structured data
+// Parse appointment match into structured data
 function parseAppointmentMatch(match, patternIndex) {
   let day, hour, minutes = 0, period = 'am';
   
@@ -312,7 +515,7 @@ function parseAppointmentMatch(match, patternIndex) {
   }
 }
 
-// FIXED: Calculate target date for appointment
+// Calculate target date for appointment
 function calculateTargetDate(day, hour, minutes) {
   let targetDate = new Date();
   
@@ -349,94 +552,6 @@ function calculateTargetDate(day, hour, minutes) {
   // Set the time (this will be converted to UTC properly by the calendar service)
   targetDate.setHours(hour, minutes, 0, 0);
   return targetDate;
-}
-
-// Auto-booking function with proper Arizona MST handling
-async function autoBookAppointment(customerName, customerEmail, customerPhone, preferredDateTime, discoveryData = {}) {
-  try {
-    console.log('🔄 Attempting auto-booking appointment...');
-    console.log('👤 Customer:', customerName, customerEmail);
-    console.log('📅 Preferred time:', preferredDateTime);
-    
-    if (!calendarInitialized || !calendarService?.isInitialized()) {
-      throw new Error('Calendar service not available for booking');
-    }
-    
-    const startTime = new Date(preferredDateTime);
-    const endTime = new Date(startTime.getTime() + 60 * 60 * 1000); // 1 hour
-    
-    // Validate customer email
-    if (!customerEmail || customerEmail === 'prospect@example.com') {
-      console.log('❌ No valid customer email for booking');
-      return {
-        success: false,
-        error: 'No customer email',
-        message: 'Customer email required for booking'
-      };
-    }
-    
-    // Check if slot is available
-    const isAvailable = await checkAvailability(startTime.toISOString(), endTime.toISOString());
-    
-    if (!isAvailable) {
-      console.log('❌ Requested appointment slot not available');
-      return {
-        success: false,
-        error: 'Slot not available',
-        message: 'That time slot is no longer available. Let me suggest alternatives.'
-      };
-    }
-    
-    // Create the appointment
-    const appointmentDetails = {
-      summary: 'Nexella AI Consultation Call',
-      description: `Discovery call with ${customerName}\n\nDiscovery Information:\n${Object.entries(discoveryData).map(([key, value]) => `${key}: ${value}`).join('\n')}`,
-      startTime: startTime.toISOString(),
-      endTime: endTime.toISOString(),
-      attendeeEmail: customerEmail,
-      attendeeName: customerName
-    };
-    
-    console.log('📅 Creating appointment with details:', appointmentDetails);
-    
-    const bookingResult = await calendarService.createEvent(appointmentDetails);
-    
-    if (bookingResult.success) {
-      console.log('✅ Auto-booking appointment successful!');
-      
-      const displayTime = startTime.toLocaleString('en-US', {
-        weekday: 'long',
-        month: 'long',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-        timeZone: 'America/Phoenix'
-      });
-      
-      return {
-        success: true,
-        eventId: bookingResult.eventId,
-        meetingLink: bookingResult.meetingLink,
-        eventLink: bookingResult.eventLink,
-        message: `Perfect! I've booked your consultation for ${displayTime} Arizona time. You'll receive a calendar invitation shortly.`,
-        isDemo: false,
-        timezone: 'America/Phoenix',
-        displayTime: displayTime
-      };
-    } else {
-      console.log('❌ Auto-booking appointment failed:', bookingResult.error);
-      return {
-        success: false,
-        error: bookingResult.error,
-        message: 'Sorry, I had trouble booking that time. Let me suggest some alternatives.'
-      };
-    }
-    
-  } catch (error) {
-    console.error('❌ Auto-booking appointment error:', error.message);
-    throw error;
-  }
 }
 
 // Parse user's scheduling preference with Arizona MST awareness
@@ -611,6 +726,34 @@ function isCalendarInitialized() {
   return calendarInitialized;
 }
 
+// Clean up booking attempts and locks periodically
+setInterval(() => {
+  const now = Date.now();
+  let cleaned = 0;
+  
+  // Clean up old booking attempts (older than 5 minutes)
+  for (const [key, timestamp] of bookingAttempts.entries()) {
+    if (now - timestamp > 300000) { // 5 minutes
+      bookingAttempts.delete(key);
+      cleaned++;
+    }
+  }
+  
+  // Clean up any stale locks (older than 2 minutes - should never happen)
+  for (const key of bookingLocks) {
+    const timestamp = bookingAttempts.get(key);
+    if (!timestamp || now - timestamp > 120000) { // 2 minutes
+      bookingLocks.delete(key);
+      console.log('🧹 Cleaned up stale booking lock:', key);
+    }
+  }
+  
+  if (cleaned > 0) {
+    console.log(`🧹 Cleaned up ${cleaned} old booking attempts`);
+  }
+}, 60000); // Run every minute
+
+// Export functions and debug info
 module.exports = {
   initializeCalendarService,
   checkAvailability,
@@ -625,5 +768,13 @@ module.exports = {
   isBusinessHours,
   getNextBusinessDay,
   getCalendarService,
-  isCalendarInitialized
+  isCalendarInitialized,
+  
+  // Export for debugging/testing
+  bookingAttempts,
+  bookingLocks,
+  
+  // Helper functions
+  parseAppointmentMatch,
+  calculateTargetDate
 };
