@@ -50,7 +50,7 @@ router.get('/debug/calendar', async (req, res) => {
         GOOGLE_PROJECT_ID: config.GOOGLE_PROJECT_ID ? '✅ SET' : '❌ MISSING',
         GOOGLE_PRIVATE_KEY: config.GOOGLE_PRIVATE_KEY ? '✅ SET' : '❌ MISSING',
         GOOGLE_CLIENT_EMAIL: config.GOOGLE_CLIENT_EMAIL ? '✅ SET' : '❌ MISSING',
-        GOOGLE_CALENDAR_ID: config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com',
+        GOOGLE_CALENDAR_ID: config.GOOGLE_CALENDAR_ID || 'jaden@nexellaai.com',
         GOOGLE_IMPERSONATE_EMAIL: config.GOOGLE_IMPERSONATE_EMAIL || 'jaden@nexellaai.com'
       },
       calendar: {
@@ -125,7 +125,7 @@ router.get('/debug/calendar-access', async (req, res) => {
     const results = {
       serviceAccount: calendarService.auth.email || config.GOOGLE_CLIENT_EMAIL,
       impersonatedUser: calendarService.auth.subject || 'none',
-      targetCalendarId: config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com',
+      targetCalendarId: config.GOOGLE_CALENDAR_ID || 'jaden@nexellaai.com',
       tests: {}
     };
     
@@ -175,7 +175,7 @@ router.get('/debug/calendar-access', async (req, res) => {
     // Test 3: Try to access the specific calendar
     try {
       const specificCalendar = await calendar.calendars.get({
-        calendarId: config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com'
+        calendarId: config.GOOGLE_CALENDAR_ID || 'jaden@nexellaai.com'
       });
       
       results.tests.specificCalendar = {
@@ -196,7 +196,7 @@ router.get('/debug/calendar-access', async (req, res) => {
     // Test 4: List events from specific calendar
     try {
       const events = await calendar.events.list({
-        calendarId: config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com',
+        calendarId: config.GOOGLE_CALENDAR_ID || 'jaden@nexellaai.com',
         maxResults: 5,
         timeMin: new Date().toISOString()
       });
@@ -248,7 +248,7 @@ router.get('/debug/list-events', async (req, res) => {
     try {
       // List events from the calendar
       const response = await calendar.events.list({
-        calendarId: config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com',
+        calendarId: config.GOOGLE_CALENDAR_ID || 'jaden@nexellaai.com',
         timeMin: startDate.toISOString(),
         timeMax: endDate.toISOString(),
         maxResults: 50,
@@ -276,7 +276,7 @@ router.get('/debug/list-events', async (req, res) => {
       
       res.json({
         success: true,
-        calendarId: config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com',
+        calendarId: config.GOOGLE_CALENDAR_ID || 'jaden@nexellaai.com',
         totalEvents: events.length,
         dateRange: {
           from: startDate.toISOString(),
@@ -323,7 +323,7 @@ router.get('/debug/get-event/:eventId', async (req, res) => {
     
     try {
       const response = await calendar.events.get({
-        calendarId: config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com',
+        calendarId: config.GOOGLE_CALENDAR_ID || 'jaden@nexellaai.com',
         eventId: eventId
       });
       
@@ -393,7 +393,7 @@ router.get('/debug/test-calendar-access', async (req, res) => {
     
     const results = {
       serviceAccountEmail: authClient.email || config.GOOGLE_CLIENT_EMAIL,
-      targetCalendarId: config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com',
+      targetCalendarId: config.GOOGLE_CALENDAR_ID || 'jaden@nexellaai.com',
       tests: {}
     };
     
@@ -526,7 +526,7 @@ router.get('/test-calendar-booking', async (req, res) => {
       GOOGLE_PROJECT_ID: config.GOOGLE_PROJECT_ID ? '✅ SET' : '❌ MISSING',
       GOOGLE_PRIVATE_KEY: config.GOOGLE_PRIVATE_KEY ? `✅ SET (${config.GOOGLE_PRIVATE_KEY.length} chars)` : '❌ MISSING',
       GOOGLE_CLIENT_EMAIL: config.GOOGLE_CLIENT_EMAIL ? `✅ SET (${config.GOOGLE_CLIENT_EMAIL})` : '❌ MISSING',
-      GOOGLE_CALENDAR_ID: config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com',
+      GOOGLE_CALENDAR_ID: config.GOOGLE_CALENDAR_ID || 'jaden@nexellaai.com',
       GOOGLE_IMPERSONATE_EMAIL: config.GOOGLE_IMPERSONATE_EMAIL || 'jaden@nexellaai.com',
       privateKeyValid: config.GOOGLE_PRIVATE_KEY?.includes('-----BEGIN PRIVATE KEY-----') ? '✅ Valid format' : '❌ Invalid format'
     };
@@ -564,7 +564,7 @@ router.get('/test-calendar-booking', async (req, res) => {
         // Test specific calendar access
         try {
           const calendarInfo = await calendar.calendars.get({
-            calendarId: config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com'
+            calendarId: config.GOOGLE_CALENDAR_ID || 'jaden@nexellaai.com'
           });
           results.connection.targetCalendar = {
             id: calendarInfo.data.id,
@@ -583,7 +583,7 @@ router.get('/test-calendar-booking', async (req, res) => {
         // Test event creation permission
         try {
           const testList = await calendar.events.list({
-            calendarId: config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com',
+            calendarId: config.GOOGLE_CALENDAR_ID || 'jaden@nexellaai.com',
             maxResults: 1
           });
           results.connection.eventPermissions = '✅ Can read events';
@@ -675,7 +675,7 @@ router.get('/test-calendar-booking', async (req, res) => {
             const calendar = google.calendar({ version: 'v3', auth: calendarService.auth });
             
             await calendar.events.delete({
-              calendarId: config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com',
+              calendarId: config.GOOGLE_CALENDAR_ID || 'jaden@nexellaai.com',
               eventId: bookingResult.eventId
             });
             results.booking.cleanup = '✅ Test event deleted';
@@ -882,7 +882,7 @@ router.get('/calendar-status', (req, res) => {
       projectId: config.GOOGLE_PROJECT_ID ? 'SET' : 'MISSING',
       serviceAccount: config.GOOGLE_CLIENT_EMAIL ? 'SET' : 'MISSING',
       privateKey: config.GOOGLE_PRIVATE_KEY ? `SET (length: ${config.GOOGLE_PRIVATE_KEY.length})` : 'MISSING',
-      calendarId: config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com',
+      calendarId: config.GOOGLE_CALENDAR_ID || 'jaden@nexellaai.com',
       impersonateEmail: config.GOOGLE_IMPERSONATE_EMAIL || 'jaden@nexellaai.com'
     }
   });
