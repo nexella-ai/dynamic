@@ -6,7 +6,7 @@ class GoogleCalendarService {
   constructor() {
     this.calendar = null;
     this.auth = null;
-    this.calendarId = config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com';
+    this.calendarId = config.GOOGLE_CALENDAR_ID || 'jaden@nexellaai.com';
     
     // Arizona timezone - MST year-round (no DST)
     this.timezone = 'America/Phoenix';
