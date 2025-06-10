@@ -59,46 +59,7 @@ class GoogleCalendarService {
     }
   }
 
-  async setupAuthentication() {
-    try {
-      console.log('🔐 Setting up Google Calendar authentication with domain-wide delegation...');
-      
-      // Process the private key properly
-      let privateKey = config.GOOGLE_PRIVATE_KEY;
-      
-      // Handle different private key formats
-      if (privateKey.includes('\\n')) {
-        privateKey = privateKey.replace(/\\n/g, '\n');
-      }
-      
-      // Ensure proper formatting
-      if (!privateKey.includes('-----BEGIN PRIVATE KEY-----')) {
-        console.error('❌ Private key format invalid - missing BEGIN marker');
-        throw new Error('Invalid private key format');
-      }
-      
-      console.log('🔑 Private key format check:', 
-        privateKey.includes('-----BEGIN PRIVATE KEY-----') && 
-        privateKey.includes('-----END PRIVATE KEY-----') ? '✅ Valid' : '❌ Invalid'
-      );
-      
-      // Create JWT client with domain-wide delegation for Google Workspace
-      const jwtClient = new google.auth.JWT({
-        email: config.GOOGLE_CLIENT_EMAIL,
-        key: privateKey,
-        scopes: [
-          'https://www.googleapis.com/auth/calendar',
-          'https://www.googleapis.com/auth/calendar.events'
-        ],
-        // CRITICAL: This enables domain-wide delegation
-        subject: config.GOOGLE_SUBJECT_EMAIL || 'nexellaai@gmail.com'
-      });
-      
-      // Authorize the client
-      await jwtClient.authorize();
-      this.auth = jwtClient;
-      
-      this.calendarId = config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com';
+endarId = config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com';
       
       console.log('✅ Google Workspace authentication successful with domain-wide delegation');
       console.log('📧 Service account email:', config.GOOGLE_CLIENT_EMAIL);
