@@ -59,11 +59,95 @@ class GoogleCalendarService {
     }
   }
 
-endarId = config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com';
+  async setupAuthentication() {
+    try {
+      console.log('🔐 Setting up Google Calendar authentication...');
       
-      console.log('✅ Google Workspace authentication successful with domain-wide delegation');
-      console.log('📧 Service account email:', config.GOOGLE_CLIENT_EMAIL);
-      console.log('👤 Impersonating user:', config.GOOGLE_SUBJECT_EMAIL || 'nexellaai@gmail.com');
+      // Process the private key properly
+      let privateKey = config.GOOGLE_PRIVATE_KEY;
+      
+      // Handle different private key formats
+      if (privateKey.includes('\\n')) {
+        privateKey = privateKey.replace(/\\n/g, '\n');
+      }
+      
+      // Ensure proper formatting
+      if (!privateKey.includes('-----BEGIN PRIVATE KEY-----')) {
+        console.error('❌ Private key format invalid - missing BEGIN marker');
+        throw new Error('Invalid private key format');
+      }
+      
+      console.log('🔑 Private key format check:', 
+        privateKey.includes('-----BEGIN PRIVATE KEY-----') && 
+        privateKey.includes('-----END PRIVATE KEY-----') ? '✅ Valid' : '❌ Invalid'
+      );
+      
+      // Try domain-wide delegation first
+      try {
+        console.log('🔄 Attempting domain-wide delegation...');
+        
+        // Create service account credentials object
+        const serviceAccountCredentials = {
+          type: 'service_account',
+          project_id: config.GOOGLE_PROJECT_ID,
+          private_key_id: config.GOOGLE_PRIVATE_KEY_ID || 'private_key_id',
+          private_key: privateKey,
+          client_email: config.GOOGLE_CLIENT_EMAIL,
+          client_id: '117919119573919029172', // Your OAuth2 Client ID
+          auth_uri: 'https://accounts.google.com/o/oauth2/auth',
+          token_uri: 'https://oauth2.googleapis.com/token',
+          auth_provider_x509_cert_url: 'https://www.googleapis.com/oauth2/v1/certs',
+          client_x509_cert_url: `https://www.googleapis.com/oauth2/v1/certs/${encodeURIComponent(config.GOOGLE_CLIENT_EMAIL)}`
+        };
+        
+        // Create JWT client with impersonation
+        const jwtClient = new google.auth.JWT({
+          email: serviceAccountCredentials.client_email,
+          key: serviceAccountCredentials.private_key,
+          scopes: [
+            'https://www.googleapis.com/auth/calendar',
+            'https://www.googleapis.com/auth/calendar.events'
+          ],
+          subject: config.GOOGLE_SUBJECT_EMAIL || 'jaden@nexellaai.com' // The user to impersonate
+        });
+        
+        // Test authorization
+        await jwtClient.authorize();
+        this.auth = jwtClient;
+        
+        console.log('✅ Domain-wide delegation successful!');
+        console.log('📧 Service account:', config.GOOGLE_CLIENT_EMAIL);
+        console.log('👤 Impersonating:', config.GOOGLE_SUBJECT_EMAIL || 'jaden@nexellaai.com');
+        
+      } catch (delegationError) {
+        console.log('⚠️ Domain-wide delegation failed:', delegationError.message);
+        console.log('🔄 Falling back to regular service account access...');
+        
+        // Fallback to regular authentication
+        const authClient = new google.auth.GoogleAuth({
+          credentials: {
+            type: "service_account",
+            project_id: config.GOOGLE_PROJECT_ID,
+            private_key_id: config.GOOGLE_PRIVATE_KEY_ID || "key_id",
+            private_key: privateKey,
+            client_email: config.GOOGLE_CLIENT_EMAIL,
+            client_id: config.GOOGLE_CLIENT_ID || "client_id",
+            auth_uri: "https://accounts.google.com/o/oauth2/auth",
+            token_uri: "https://oauth2.googleapis.com/token",
+            auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+            client_x509_cert_url: `https://www.googleapis.com/oauth2/v1/certs/${encodeURIComponent(config.GOOGLE_CLIENT_EMAIL)}`
+          },
+          scopes: [
+            'https://www.googleapis.com/auth/calendar',
+            'https://www.googleapis.com/auth/calendar.events'
+          ]
+        });
+        
+        this.auth = await authClient.getClient();
+        console.log('✅ Using regular service account authentication');
+      }
+      
+      this.calendarId = config.GOOGLE_CALENDAR_ID || 'jaden@nexellaai.com';
       console.log('📅 Using calendar:', this.calendarId);
       
     } catch (error) {
