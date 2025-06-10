@@ -378,155 +378,167 @@ class GoogleCalendarService {
   }
 
   async createEvent(eventDetails) {
-    try {
-      console.log('📅 Creating calendar event:', eventDetails.summary);
-      console.log('📅 Using calendar ID:', this.calendarId);
-      console.log('🕐 Start time:', eventDetails.startTime);
-      console.log('🕐 End time:', eventDetails.endTime);
-      console.log('📧 Attendee:', eventDetails.attendeeEmail);
+  try {
+    console.log('📅 Creating calendar event:', eventDetails.summary);
+    console.log('📅 Using calendar ID:', this.calendarId);
+    console.log('🕐 Start time (UTC):', eventDetails.startTime);
+    console.log('🕐 End time (UTC):', eventDetails.endTime);
+    console.log('📧 Attendee:', eventDetails.attendeeEmail);
 
-      // Validate inputs
-      if (!eventDetails.attendeeEmail || eventDetails.attendeeEmail === 'prospect@example.com') {
-        throw new Error('Valid attendee email required');
-      }
+    // Validate inputs
+    if (!eventDetails.attendeeEmail || eventDetails.attendeeEmail === 'prospect@example.com') {
+      throw new Error('Valid attendee email required');
+    }
 
-      // First, check if the slot is still available
-      const isAvailable = await this.isSlotAvailable(eventDetails.startTime, eventDetails.endTime);
-      if (!isAvailable) {
-        console.log('❌ Slot no longer available');
-        return {
-          success: false,
-          error: 'Slot no longer available',
-          message: 'That time slot has been booked by someone else'
-        };
-      }
-
-      // CRITICAL FIX: Parse the UTC time and create proper timezone-aware event
-      const startDateTime = new Date(eventDetails.startTime);
-      const endDateTime = new Date(eventDetails.endTime);
-      
-      // Create the event object WITHOUT attendees (Gmail limitation)
-      const event = {
-        summary: eventDetails.summary || 'Nexella AI Consultation Call',
-        description: `${eventDetails.description || 'Discovery call scheduled via Nexella AI'}\n\n` +
-                     `Customer Information:\n` +
-                     `Name: ${eventDetails.attendeeName || 'Not provided'}\n` +
-                     `Email: ${eventDetails.attendeeEmail}\n` +
-                     `Phone: ${eventDetails.attendeePhone || 'Not provided'}\n\n` +
-                     `Note: Please manually send calendar invitation to the customer.`,
-        location: 'Phone Call / Video Conference',  // Add location
-        start: {
-          dateTime: eventDetails.startTime,
-          timeZone: this.timezone  // CRITICAL: Always specify Arizona timezone
-        },
-        end: {
-          dateTime: eventDetails.endTime,
-          timeZone: this.timezone  // CRITICAL: Always specify Arizona timezone
-        },
-        // Add organizer info
-        organizer: {
-          email: this.calendarId,
-          displayName: 'Nexella AI Team'
-        },
-        // NO attendees field to avoid the error
-        // NO conferenceData to avoid conference type error - Google will add meet link automatically
-        reminders: {
-          useDefault: false,
-          overrides: [
-            { method: 'email', minutes: 24 * 60 },
-            { method: 'email', minutes: 60 }
-          ]
-        },
-        colorId: '2'  // Add a color to make it look more legitimate
-      };
-
-      console.log('📅 Creating event with timezone:', this.timezone);
-      console.log('📅 Event start in Arizona:', startDateTime.toLocaleString('en-US', { timeZone: this.timezone }));
-      console.log('📅 Event end in Arizona:', endDateTime.toLocaleString('en-US', { timeZone: this.timezone }));
-      
-      const response = await this.calendar.events.insert({
-        calendarId: this.calendarId,
-        resource: event,
-        sendUpdates: 'none' // No attendees to notify
-      });
-
-      const createdEvent = response.data;
-      console.log('✅ Event created successfully!');
-      console.log('📅 Event ID:', createdEvent.id);
-      console.log('🔗 Event Link:', createdEvent.htmlLink);
-      
-      // Check if Google automatically added a meeting link
-      let meetingLink = '';
-      if (createdEvent.hangoutLink) {
-        meetingLink = createdEvent.hangoutLink;
-        console.log('🎥 Google Meet Link (auto-generated):', meetingLink);
-      } else {
-        console.log('ℹ️ No meeting link generated automatically');
-        console.log('💡 You may need to add a video conferencing link manually');
-      }
-
-      // Format display time IN ARIZONA TIMEZONE
-      const startDate = new Date(eventDetails.startTime);
-      const displayTime = startDate.toLocaleString('en-US', {
-        weekday: 'long',
-        month: 'long',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-        timeZone: this.timezone  // Use Arizona timezone for display
-      });
-
-      console.log('⚠️ IMPORTANT: Calendar invitation must be sent manually or through your notification system');
-      console.log('💡 You can share the meeting link with the customer:', meetingLink);
-
+    // First, check if the slot is still available
+    const isAvailable = await this.isSlotAvailable(eventDetails.startTime, eventDetails.endTime);
+    if (!isAvailable) {
+      console.log('❌ Slot no longer available');
       return {
-        success: true,
-        eventId: createdEvent.id,
-        meetingLink: meetingLink,
-        eventLink: createdEvent.htmlLink,
-        message: 'Appointment created successfully (without automatic invitation)',
-        customerEmail: eventDetails.attendeeEmail,
-        customerName: eventDetails.attendeeName,
-        startTime: eventDetails.startTime,
-        endTime: eventDetails.endTime,
-        displayTime: displayTime,
-        manualInvitationRequired: true,
-        note: 'Please send calendar invitation manually to the customer'
+        success: false,
+        error: 'Slot no longer available',
+        message: 'That time slot has been booked by someone else'
       };
+    }
 
-    } catch (error) {
-      console.error('❌ Error creating calendar event:', error.message);
-      console.error('Error details:', error.response?.data || error);
-      
-      // Provide specific error messages
-      if (error.response?.status === 401) {
-        return {
-          success: false,
-          error: 'Authentication failed',
-          message: 'Calendar authentication failed - check service account credentials'
-        };
-      } else if (error.response?.status === 403) {
-        return {
-          success: false,
-          error: 'Permission denied',
-          message: 'Calendar permissions insufficient - ensure calendar is shared with service account'
-        };
-      } else if (error.response?.status === 404) {
-        return {
-          success: false,
-          error: 'Calendar not found',
-          message: `Calendar '${this.calendarId}' not found or not accessible`
-        };
-      } else {
-        return {
-          success: false,
-          error: error.message,
-          message: 'Failed to create calendar event'
-        };
-      }
+    // CRITICAL FIX: Parse the UTC time and create proper timezone-aware event
+    const startDateTime = new Date(eventDetails.startTime);
+    const endDateTime = new Date(eventDetails.endTime);
+    
+    // Create the event object WITH attendees (for domain-wide delegation)
+    const event = {
+      summary: eventDetails.summary || 'Nexella AI Consultation Call',
+      description: `${eventDetails.description || 'Discovery call scheduled via Nexella AI'}\n\n` +
+                   `Customer Information:\n` +
+                   `Name: ${eventDetails.attendeeName || 'Not provided'}\n` +
+                   `Email: ${eventDetails.attendeeEmail}\n` +
+                   `Phone: ${eventDetails.attendeePhone || 'Not provided'}`,
+      location: 'Phone Call / Video Conference',
+      start: {
+        dateTime: eventDetails.startTime,
+        timeZone: this.timezone  // CRITICAL: Always specify Arizona timezone
+      },
+      end: {
+        dateTime: eventDetails.endTime,
+        timeZone: this.timezone  // CRITICAL: Always specify Arizona timezone
+      },
+      // IMPORTANT: Add attendees for domain-wide delegation
+      attendees: [
+        {
+          email: eventDetails.attendeeEmail,
+          displayName: eventDetails.attendeeName || 'Guest',
+          responseStatus: 'needsAction'
+        }
+      ],
+      // Request conference data
+      conferenceData: {
+        createRequest: {
+          requestId: `nexella_${Date.now()}`,
+          conferenceSolutionKey: {
+            type: 'hangoutsMeet'
+          }
+        }
+      },
+      reminders: {
+        useDefault: false,
+        overrides: [
+          { method: 'email', minutes: 24 * 60 }, // 24 hours before
+          { method: 'email', minutes: 60 },      // 1 hour before
+          { method: 'popup', minutes: 30 }       // 30 minutes before
+        ]
+      },
+      guestsCanModify: false,
+      guestsCanInviteOthers: false,
+      guestsCanSeeOtherGuests: false,
+      colorId: '2'  // Green color for consultation calls
+    };
+
+    console.log('📅 Creating event with timezone:', this.timezone);
+    console.log('📅 Event start in Arizona:', startDateTime.toLocaleString('en-US', { timeZone: this.timezone }));
+    console.log('📅 Event end in Arizona:', endDateTime.toLocaleString('en-US', { timeZone: this.timezone }));
+    console.log('📧 Sending invitation to:', eventDetails.attendeeEmail);
+    
+    const response = await this.calendar.events.insert({
+      calendarId: this.calendarId,
+      resource: event,
+      conferenceDataVersion: 1,
+      sendUpdates: 'all' // CRITICAL: Send invitations to all attendees
+    });
+
+    const createdEvent = response.data;
+    console.log('✅ Event created successfully!');
+    console.log('📅 Event ID:', createdEvent.id);
+    console.log('🔗 Event Link:', createdEvent.htmlLink);
+    console.log('📧 Invitation sent to:', eventDetails.attendeeEmail);
+    
+    // Check if Google automatically added a meeting link
+    let meetingLink = '';
+    if (createdEvent.hangoutLink) {
+      meetingLink = createdEvent.hangoutLink;
+      console.log('🎥 Google Meet Link:', meetingLink);
+    } else if (createdEvent.conferenceData?.entryPoints?.[0]?.uri) {
+      meetingLink = createdEvent.conferenceData.entryPoints[0].uri;
+      console.log('🎥 Conference Link:', meetingLink);
+    }
+
+    // Format display time IN ARIZONA TIMEZONE
+    const startDate = new Date(eventDetails.startTime);
+    const displayTime = startDate.toLocaleString('en-US', {
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: this.timezone  // Use Arizona timezone for display
+    });
+
+    return {
+      success: true,
+      eventId: createdEvent.id,
+      meetingLink: meetingLink,
+      eventLink: createdEvent.htmlLink,
+      message: 'Appointment created successfully with calendar invitation',
+      customerEmail: eventDetails.attendeeEmail,
+      customerName: eventDetails.attendeeName,
+      startTime: eventDetails.startTime,
+      endTime: eventDetails.endTime,
+      displayTime: displayTime,
+      invitationSent: true
+    };
+
+  } catch (error) {
+    console.error('❌ Error creating calendar event:', error.message);
+    console.error('Error details:', error.response?.data || error);
+    
+    // Provide specific error messages
+    if (error.response?.status === 401) {
+      return {
+        success: false,
+        error: 'Authentication failed',
+        message: 'Calendar authentication failed - check service account credentials'
+      };
+    } else if (error.response?.status === 403) {
+      return {
+        success: false,
+        error: 'Permission denied',
+        message: 'Calendar permissions insufficient - ensure calendar is shared with service account'
+      };
+    } else if (error.response?.status === 404) {
+      return {
+        success: false,
+        error: 'Calendar not found',
+        message: `Calendar '${this.calendarId}' not found or not accessible`
+      };
+    } else {
+      return {
+        success: false,
+        error: error.message,
+        message: 'Failed to create calendar event'
+      };
     }
   }
+}
 
   isInitialized() {
     return !!(this.calendar && this.auth);
