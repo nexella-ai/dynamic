@@ -1,9 +1,17 @@
-// src/routes/apiRoutes.js - COMPLETE FILE WITH ALL DEBUG ENDPOINTS
+// src/routes/apiRoutes.js - COMPLETE FILE WITH ALL DEBUG ENDPOINTS AND BOOKING MEMORY
 const express = require('express');
 const axios = require('axios');
 const config = require('../config/environment');
 const { storeContactInfoGlobally } = require('../services/webhooks/WebhookService');
 const { isCalendarInitialized, autoBookAppointment, getAvailableTimeSlots } = require('../services/calendar/CalendarHelpers');
+
+// Import booking memory service
+let AppointmentBookingMemory = null;
+try {
+  AppointmentBookingMemory = require('../services/memory/AppointmentBookingMemory');
+} catch (error) {
+  console.log('⚠️ AppointmentBookingMemory not available');
+}
 
 const router = express.Router();
 
@@ -912,6 +920,152 @@ router.get('/test-calendar', async (req, res) => {
       success: false,
       error: error.message,
       calendarStatus: isCalendarInitialized() ? 'INITIALIZED_BUT_ERROR' : 'NOT_INITIALIZED'
+    });
+  }
+});
+
+// NEW: Appointment Booking Memory Endpoints
+router.post('/admin/ingest/booking-patterns', async (req, res) => {
+  try {
+    if (!AppointmentBookingMemory) {
+      return res.status(500).json({
+        success: false,
+        error: 'AppointmentBookingMemory service not available'
+      });
+    }
+    
+    console.log('📅 Ingesting appointment booking patterns...');
+    
+    const bookingMemory = new AppointmentBookingMemory();
+    await bookingMemory.ingestCommonBookingPhrases();
+    
+    // Add more specific patterns for your use case
+    const additionalPatterns = [
+      { phrase: "what about thursday at nine", day: "thursday", time: "9:00 AM" },
+      { phrase: "thursday at nine am", day: "thursday", time: "9:00 AM" },
+      { phrase: "can we meet thursday at 9", day: "thursday", time: "9:00 AM" },
+      { phrase: "thursday morning at nine", day: "thursday", time: "9:00 AM" },
+      { phrase: "9am on thursday", day: "thursday", time: "9:00 AM" },
+      { phrase: "thursday 9 o'clock", day: "thursday", time: "9:00 AM" },
+      { phrase: "is 9am thursday available", day: "thursday", time: "9:00 AM" },
+      { phrase: "book thursday at nine", day: "thursday", time: "9:00 AM" },
+      { phrase: "how about thursday at 9", day: "thursday", time: "9:00 AM" },
+      { phrase: "thursday nine am works", day: "thursday", time: "9:00 AM" },
+      { phrase: "lets do thursday at 9", day: "thursday", time: "9:00 AM" },
+      { phrase: "thursday morning 9", day: "thursday", time: "9:00 AM" },
+      { phrase: "9 oclock thursday", day: "thursday", time: "9:00 AM" },
+      { phrase: "thursday at 9 is good", day: "thursday", time: "9:00 AM" },
+      { phrase: "thursday at 9 please", day: "thursday", time: "9:00 AM" }
+    ];
+    
+    for (const pattern of additionalPatterns) {
+      const content = `Booking phrase: "${pattern.phrase}" means ${pattern.day} at ${pattern.time}`;
+      const embedding = await bookingMemory.memoryService.createEmbedding(content);
+      
+      await bookingMemory.memoryService.storeMemories([{
+        id: `custom_booking_${pattern.phrase.replace(/\s+/g, '_')}`,
+        values: embedding,
+        metadata: {
+          memory_type: 'booking_phrase',
+          phrase: pattern.phrase,
+          day: pattern.day,
+          time: pattern.time,
+          source: 'custom_patterns'
+        }
+      }]);
+    }
+    
+    res.json({
+      success: true,
+      message: 'Booking patterns ingested successfully',
+      patternsIngested: additionalPatterns.length + 10 // 10 from common phrases
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Search booking pattern endpoint
+router.get('/admin/search/booking-pattern', async (req, res) => {
+  try {
+    if (!AppointmentBookingMemory) {
+      return res.status(500).json({
+        success: false,
+        error: 'AppointmentBookingMemory service not available'
+      });
+    }
+    
+    const { q: query } = req.query;
+    
+    if (!query) {
+      return res.status(400).json({
+        success: false,
+        error: 'Query parameter "q" is required'
+      });
+    }
+    
+    const bookingMemory = new AppointmentBookingMemory();
+    const intelligence = await bookingMemory.getBookingIntelligence(query);
+    
+    res.json({
+      success: true,
+      query,
+      intelligence,
+      interpretation: intelligence.confident ? 
+        `${intelligence.suggestedDay} at ${intelligence.suggestedTime}` : 
+        'No confident match found'
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Memory System Health Check Endpoint
+app.get('/health/memory', async (req, res) => {
+  try {
+    if (config.ENABLE_MEMORY && WebSocketHandlerWithMemory) {
+      try {
+        const RAGMemoryService = require('./src/services/memory/RAGMemoryService');
+        const memoryService = new RAGMemoryService();
+        
+        const stats = await memoryService.getMemoryStats();
+        
+        res.json({
+          memoryEnabled: true,
+          memoryHealthy: true,
+          testMode: config.MEMORY_TEST_MODE,
+          betaCustomers: config.MEMORY_BETA_CUSTOMERS.length,
+          rolloutPercentage: config.MEMORY_ROLLOUT_PERCENTAGE,
+          knowledgeSystemAvailable: !!ingestionService,
+          stats: stats
+        });
+      } catch (memoryError) {
+        res.status(500).json({
+          memoryEnabled: true,
+          memoryHealthy: false,
+          error: memoryError.message,
+          testMode: config.MEMORY_TEST_MODE
+        });
+      }
+    } else {
+      res.json({
+        memoryEnabled: false,
+        message: 'Memory system is disabled or not available',
+        reason: !config.ENABLE_MEMORY ? 'ENABLE_MEMORY is false' : 'Handler not found'
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      memoryEnabled: false,
+      error: error.message
     });
   }
 });
