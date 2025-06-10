@@ -1,4 +1,4 @@
-// src/routes/apiRoutes.js - COMPLETE FILE WITH CALENDAR DEBUGGING
+// src/routes/apiRoutes.js - COMPLETE FILE WITH CALENDAR DEBUGGING AND TIMEZONE FIX
 const express = require('express');
 const axios = require('axios');
 const config = require('../config/environment');
@@ -336,15 +336,26 @@ router.get('/test-calendar-booking', async (req, res) => {
       }
     }
     
-    // 5. Test actual booking
+    // 5. Test actual booking (UPDATED WITH TIMEZONE FIX)
     if (results.authentication.initialized && req.query.testBooking === 'true') {
       try {
         const { autoBookAppointment } = require('../services/calendar/CalendarHelpers');
         
-        // Book for tomorrow at 10 AM
+        // Book for tomorrow at 10 AM ARIZONA TIME (not UTC)
         const bookingDate = new Date();
         bookingDate.setDate(bookingDate.getDate() + 1);
+        
+        // Set to 10 AM in the server's local time, then adjust for Arizona
         bookingDate.setHours(10, 0, 0, 0);
+        
+        // If your server is in UTC, you need to add 7 hours to get 10 AM Arizona time
+        // Arizona is UTC-7 (no daylight saving)
+        // So 10 AM Arizona = 5 PM UTC (17:00 UTC)
+        const arizonaOffset = 7; // hours
+        bookingDate.setHours(10 + arizonaOffset, 0, 0, 0);
+        
+        console.log('📅 Test booking time (UTC):', bookingDate.toISOString());
+        console.log('📅 Test booking time (Arizona):', bookingDate.toLocaleString('en-US', { timeZone: 'America/Phoenix' }));
         
         const bookingResult = await autoBookAppointment(
           'Test Customer',
@@ -358,7 +369,18 @@ router.get('/test-calendar-booking', async (req, res) => {
         
         if (bookingResult.success) {
           results.booking.status = '✅ BOOKING SUCCESSFUL!';
+          results.booking.arizonaTime = bookingDate.toLocaleString('en-US', { 
+            timeZone: 'America/Phoenix',
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true
+          });
           console.log('🎉 TEST BOOKING CREATED:', bookingResult.eventId);
+          console.log('📅 Booked for:', results.booking.arizonaTime);
           
           // Try to delete the test event
           try {
@@ -373,7 +395,7 @@ router.get('/test-calendar-booking', async (req, res) => {
             });
             results.booking.cleanup = '✅ Test event deleted';
           } catch (deleteError) {
-            results.booking.cleanup = '⚠️ Could not delete test event';
+            results.booking.cleanup = '⚠️ Could not delete test event - please delete manually';
           }
         }
       } catch (bookingError) {
