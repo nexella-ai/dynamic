@@ -1,4 +1,4 @@
-// src/services/calendar/GoogleCalendarService.js - COMPLETE FILE FOR GMAIL CALENDAR
+// src/services/calendar/GoogleCalendarService.js - COMPLETE FILE WITH FIXES
 const { google } = require('googleapis');
 const config = require('../../config/environment');
 
@@ -122,21 +122,34 @@ class GoogleCalendarService {
       console.log('🧪 Testing Google Calendar connection...');
       console.log('📅 Target calendar ID:', this.calendarId);
       
-      // First try to list calendars to verify basic access
+      // CRITICAL: List all calendars the service account can see
       try {
+        console.log('📋 Listing all accessible calendars...');
         const calendarList = await this.calendar.calendarList.list({
-          maxResults: 10,
-          showHidden: true
+          maxResults: 50,
+          showHidden: true,
+          minAccessRole: 'writer' // Only show calendars we can write to
         });
         
-        console.log(`✅ Can access calendar API - found ${calendarList.data.items?.length || 0} calendars`);
+        console.log(`✅ Service account has access to ${calendarList.data.items?.length || 0} calendars:`);
         
-        // Log all accessible calendars
         if (calendarList.data.items) {
-          console.log('📋 Accessible calendars:');
           calendarList.data.items.forEach(cal => {
-            console.log(`   - ${cal.id} (${cal.summary}) - Role: ${cal.accessRole}`);
+            console.log(`   📅 ${cal.id} (${cal.summary || 'No name'}) - Role: ${cal.accessRole}`);
+            if (cal.id === this.calendarId) {
+              console.log('      ✅ TARGET CALENDAR FOUND WITH WRITE ACCESS');
+            }
           });
+          
+          // Check if our target calendar is in the list
+          const hasTargetCalendar = calendarList.data.items.some(cal => cal.id === this.calendarId);
+          if (!hasTargetCalendar) {
+            console.error('❌ TARGET CALENDAR NOT FOUND IN SERVICE ACCOUNT\'S CALENDAR LIST');
+            console.error(`❌ The service account cannot see calendar: ${this.calendarId}`);
+            console.error('🔧 SOLUTION: Share the calendar with the service account email');
+            console.error(`🔧 Share with: ${config.GOOGLE_CLIENT_EMAIL}`);
+            console.error('🔧 Permission needed: "Make changes to events"');
+          }
         }
       } catch (listError) {
         console.error('⚠️ Cannot list calendars:', listError.message);
@@ -190,7 +203,7 @@ class GoogleCalendarService {
         if (calendarError.response?.status === 404) {
           console.log('💡 Calendar not found. Possible issues:');
           console.log('   1. Calendar ID is incorrect');
-          console.log('   2. Calendar is not shared with:', this.auth.email || 'the service account');
+          console.log('   2. Calendar is not shared with:', config.GOOGLE_CLIENT_EMAIL);
           console.log('   3. Using wrong authentication method');
         }
         
@@ -348,6 +361,10 @@ class GoogleCalendarService {
         };
       }
 
+      // CRITICAL FIX: Parse the UTC time and create proper timezone-aware event
+      const startDateTime = new Date(eventDetails.startTime);
+      const endDateTime = new Date(eventDetails.endTime);
+      
       // Create the event object WITHOUT attendees (Gmail limitation)
       const event = {
         summary: eventDetails.summary || 'Nexella AI Consultation Call',
@@ -359,11 +376,11 @@ class GoogleCalendarService {
                      `Note: Please manually send calendar invitation to the customer.`,
         start: {
           dateTime: eventDetails.startTime,
-          timeZone: this.timezone
+          timeZone: this.timezone  // CRITICAL: Always specify Arizona timezone
         },
         end: {
           dateTime: eventDetails.endTime,
-          timeZone: this.timezone
+          timeZone: this.timezone  // CRITICAL: Always specify Arizona timezone
         },
         // NO attendees field to avoid the error
         // NO conferenceData to avoid conference type error - Google will add meet link automatically
@@ -376,9 +393,9 @@ class GoogleCalendarService {
         }
       };
 
-      console.log('📅 Creating event without attendees (Gmail calendar limitation)');
-      console.log('ℹ️ Customer information will be stored in event description');
-      console.log('🎥 Google Meet link will be generated automatically');
+      console.log('📅 Creating event with timezone:', this.timezone);
+      console.log('📅 Event start in Arizona:', startDateTime.toLocaleString('en-US', { timeZone: this.timezone }));
+      console.log('📅 Event end in Arizona:', endDateTime.toLocaleString('en-US', { timeZone: this.timezone }));
       
       const response = await this.calendar.events.insert({
         calendarId: this.calendarId,
@@ -401,7 +418,7 @@ class GoogleCalendarService {
         console.log('💡 You may need to add a video conferencing link manually');
       }
 
-      // Format display time
+      // Format display time IN ARIZONA TIMEZONE
       const startDate = new Date(eventDetails.startTime);
       const displayTime = startDate.toLocaleString('en-US', {
         weekday: 'long',
@@ -410,7 +427,7 @@ class GoogleCalendarService {
         hour: 'numeric',
         minute: '2-digit',
         hour12: true,
-        timeZone: this.timezone
+        timeZone: this.timezone  // Use Arizona timezone for display
       });
 
       console.log('⚠️ IMPORTANT: Calendar invitation must be sent manually or through your notification system');
