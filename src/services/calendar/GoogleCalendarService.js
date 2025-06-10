@@ -414,6 +414,7 @@ class GoogleCalendarService {
                      `Email: ${eventDetails.attendeeEmail}\n` +
                      `Phone: ${eventDetails.attendeePhone || 'Not provided'}\n\n` +
                      `Note: Please manually send calendar invitation to the customer.`,
+        location: 'Phone Call / Video Conference',  // Add location
         start: {
           dateTime: eventDetails.startTime,
           timeZone: this.timezone  // CRITICAL: Always specify Arizona timezone
@@ -421,6 +422,11 @@ class GoogleCalendarService {
         end: {
           dateTime: eventDetails.endTime,
           timeZone: this.timezone  // CRITICAL: Always specify Arizona timezone
+        },
+        // Add organizer info
+        organizer: {
+          email: this.calendarId,
+          displayName: 'Nexella AI Team'
         },
         // NO attendees field to avoid the error
         // NO conferenceData to avoid conference type error - Google will add meet link automatically
@@ -430,7 +436,8 @@ class GoogleCalendarService {
             { method: 'email', minutes: 24 * 60 },
             { method: 'email', minutes: 60 }
           ]
-        }
+        },
+        colorId: '2'  // Add a color to make it look more legitimate
       };
 
       console.log('📅 Creating event with timezone:', this.timezone);
