@@ -1,3 +1,45 @@
+// Memory System Health Check Endpoint
+router.get('/health/memory', async (req, res) => {
+  try {
+    if (config.ENABLE_MEMORY && WebSocketHandlerWithMemory) {
+      try {
+        const RAGMemoryService = require('../services/memory/RAGMemoryService');
+        const memoryService = new RAGMemoryService();
+        
+        const stats = await memoryService.getMemoryStats();
+        
+        res.json({
+          memoryEnabled: true,
+          memoryHealthy: true,
+          testMode: config.MEMORY_TEST_MODE,
+          betaCustomers: config.MEMORY_BETA_CUSTOMERS.length,
+          rolloutPercentage: config.MEMORY_ROLLOUT_PERCENTAGE,
+          knowledgeSystemAvailable: !!ingestionService,
+          stats: stats
+        });
+      } catch (memoryError) {
+        res.status(500).json({
+          memoryEnabled: true,
+          memoryHealthy: false,
+          error: memoryError.message,
+          testMode: config.MEMORY_TEST_MODE
+        });
+      }
+    } else {
+      res.json({
+        memoryEnabled: false,
+        message: 'Memory system is disabled or not available',
+        reason: !config.ENABLE_MEMORY ? 'ENABLE_MEMORY is false' : 'Handler not found'
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      memoryEnabled: false,
+      error: error.message
+    });
+  }
+});
+
 // server.js - BASED ON YOUR WORKING CODE PATTERN
 require('dotenv').config();
 const express = require('express');
