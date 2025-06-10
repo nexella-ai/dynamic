@@ -22,6 +22,7 @@ const config = {
   GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
   GOOGLE_REFRESH_TOKEN: process.env.GOOGLE_REFRESH_TOKEN,
   GOOGLE_IMPERSONATE_EMAIL: process.env.GOOGLE_IMPERSONATE_EMAIL || 'jaden@nexellaai.com',
+  GOOGLE_SUBJECT_EMAIL: process.env.GOOGLE_SUBJECT_EMAIL,
   
   // RAG Memory System Configuration
   PINECONE_API_KEY: process.env.PINECONE_API_KEY,
