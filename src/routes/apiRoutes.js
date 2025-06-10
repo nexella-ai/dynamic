@@ -1,4 +1,4 @@
-// src/routes/apiRoutes.js - COMPLETE FILE WITH CALENDAR DEBUGGING AND TIMEZONE FIX
+// src/routes/apiRoutes.js - COMPLETE FILE WITH ALL DEBUG ENDPOINTS
 const express = require('express');
 const axios = require('axios');
 const config = require('../config/environment');
@@ -39,7 +39,7 @@ router.get('/health', (req, res) => {
   });
 });
 
-// NEW: Calendar debug endpoint
+// Calendar debug endpoint
 router.get('/debug/calendar', async (req, res) => {
   try {
     console.log('🔍 DEBUGGING CALENDAR SETUP');
@@ -109,7 +109,7 @@ router.get('/debug/calendar', async (req, res) => {
   }
 });
 
-// NEW: Debug calendar access endpoint
+// Debug calendar access endpoint
 router.get('/debug/calendar-access', async (req, res) => {
   try {
     const { google } = require('googleapis');
@@ -222,7 +222,292 @@ router.get('/debug/calendar-access', async (req, res) => {
   }
 });
 
-// NEW: COMPREHENSIVE Calendar test endpoint
+// Debug endpoint to list calendar events
+router.get('/debug/list-events', async (req, res) => {
+  try {
+    const { google } = require('googleapis');
+    const { getCalendarService, isCalendarInitialized } = require('../services/calendar/CalendarHelpers');
+    
+    if (!isCalendarInitialized()) {
+      return res.status(500).json({ error: 'Calendar not initialized' });
+    }
+    
+    const calendarService = getCalendarService();
+    const calendar = google.calendar({ version: 'v3', auth: calendarService.auth });
+    
+    // Get date range (default to +/- 7 days from now)
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - 7);
+    
+    const endDate = new Date();
+    endDate.setDate(endDate.getDate() + 30); // Look 30 days ahead
+    
+    console.log('🔍 Listing events from:', startDate.toISOString());
+    console.log('🔍 To:', endDate.toISOString());
+    
+    try {
+      // List events from the calendar
+      const response = await calendar.events.list({
+        calendarId: config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com',
+        timeMin: startDate.toISOString(),
+        timeMax: endDate.toISOString(),
+        maxResults: 50,
+        singleEvents: true,
+        orderBy: 'startTime'
+      });
+      
+      const events = response.data.items || [];
+      
+      console.log(`📅 Found ${events.length} events`);
+      
+      const formattedEvents = events.map(event => ({
+        id: event.id,
+        summary: event.summary,
+        start: event.start?.dateTime || event.start?.date,
+        end: event.end?.dateTime || event.end?.date,
+        startArizona: event.start?.dateTime ? 
+          new Date(event.start.dateTime).toLocaleString('en-US', { timeZone: 'America/Phoenix' }) : 
+          event.start?.date,
+        created: event.created,
+        creator: event.creator?.email,
+        status: event.status,
+        htmlLink: event.htmlLink
+      }));
+      
+      res.json({
+        success: true,
+        calendarId: config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com',
+        totalEvents: events.length,
+        dateRange: {
+          from: startDate.toISOString(),
+          to: endDate.toISOString()
+        },
+        events: formattedEvents,
+        // Look specifically for the test event
+        testEventFound: events.some(e => e.summary === 'Nexella AI Consultation Call')
+      });
+      
+    } catch (listError) {
+      console.error('❌ Error listing events:', listError);
+      res.status(500).json({
+        success: false,
+        error: listError.message,
+        details: listError.response?.data
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ Debug endpoint error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Debug endpoint to get a specific event by ID
+router.get('/debug/get-event/:eventId', async (req, res) => {
+  try {
+    const { google } = require('googleapis');
+    const { getCalendarService, isCalendarInitialized } = require('../services/calendar/CalendarHelpers');
+    
+    if (!isCalendarInitialized()) {
+      return res.status(500).json({ error: 'Calendar not initialized' });
+    }
+    
+    const calendarService = getCalendarService();
+    const calendar = google.calendar({ version: 'v3', auth: calendarService.auth });
+    
+    const eventId = req.params.eventId;
+    console.log('🔍 Looking for event:', eventId);
+    
+    try {
+      const response = await calendar.events.get({
+        calendarId: config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com',
+        eventId: eventId
+      });
+      
+      const event = response.data;
+      
+      res.json({
+        success: true,
+        found: true,
+        event: {
+          id: event.id,
+          summary: event.summary,
+          description: event.description,
+          start: event.start,
+          end: event.end,
+          created: event.created,
+          updated: event.updated,
+          creator: event.creator,
+          organizer: event.organizer,
+          status: event.status,
+          htmlLink: event.htmlLink,
+          startArizona: event.start?.dateTime ? 
+            new Date(event.start.dateTime).toLocaleString('en-US', { timeZone: 'America/Phoenix' }) : 
+            'N/A'
+        }
+      });
+      
+    } catch (getError) {
+      if (getError.response?.status === 404) {
+        res.json({
+          success: true,
+          found: false,
+          message: 'Event not found in calendar'
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          error: getError.message,
+          details: getError.response?.data
+        });
+      }
+    }
+    
+  } catch (error) {
+    console.error('❌ Debug endpoint error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Debug endpoint to test calendar access
+router.get('/debug/test-calendar-access', async (req, res) => {
+  try {
+    const { google } = require('googleapis');
+    const { getCalendarService, isCalendarInitialized } = require('../services/calendar/CalendarHelpers');
+    
+    if (!isCalendarInitialized()) {
+      return res.status(500).json({ error: 'Calendar not initialized' });
+    }
+    
+    const calendarService = getCalendarService();
+    const calendar = google.calendar({ version: 'v3', auth: calendarService.auth });
+    
+    // Get the auth client details
+    const authClient = calendarService.auth;
+    
+    const results = {
+      serviceAccountEmail: authClient.email || config.GOOGLE_CLIENT_EMAIL,
+      targetCalendarId: config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com',
+      tests: {}
+    };
+    
+    // Test 1: List all calendars
+    try {
+      const calendarList = await calendar.calendarList.list({
+        maxResults: 50,
+        showHidden: true
+      });
+      
+      results.tests.calendarList = {
+        success: true,
+        totalCalendars: calendarList.data.items?.length || 0,
+        calendars: calendarList.data.items?.map(cal => ({
+          id: cal.id,
+          summary: cal.summary,
+          accessRole: cal.accessRole,
+          primary: cal.primary,
+          isTargetCalendar: cal.id === results.targetCalendarId
+        })) || []
+      };
+      
+      // Check if target calendar is accessible
+      const targetCalendarFound = calendarList.data.items?.some(cal => cal.id === results.targetCalendarId);
+      results.tests.targetCalendarAccessible = targetCalendarFound;
+      
+      if (!targetCalendarFound) {
+        results.solution = `Calendar ${results.targetCalendarId} is NOT accessible by service account ${results.serviceAccountEmail}. Please share the calendar with this email address with "Make changes to events" permission.`;
+      }
+      
+    } catch (error) {
+      results.tests.calendarList = {
+        success: false,
+        error: error.message
+      };
+    }
+    
+    // Test 2: Try to access the target calendar directly
+    try {
+      const cal = await calendar.calendars.get({
+        calendarId: results.targetCalendarId
+      });
+      
+      results.tests.directCalendarAccess = {
+        success: true,
+        calendarSummary: cal.data.summary,
+        timeZone: cal.data.timeZone
+      };
+    } catch (error) {
+      results.tests.directCalendarAccess = {
+        success: false,
+        error: error.message,
+        hint: 'Calendar not accessible - needs to be shared with service account'
+      };
+    }
+    
+    // Test 3: Try to create a test event
+    if (req.query.createTest === 'true' && results.tests.targetCalendarAccessible) {
+      try {
+        const testEvent = {
+          summary: 'TEST EVENT - DELETE ME',
+          description: 'This is a test event created to verify calendar access',
+          start: {
+            dateTime: new Date(Date.now() + 86400000).toISOString(), // Tomorrow
+            timeZone: 'America/Phoenix'
+          },
+          end: {
+            dateTime: new Date(Date.now() + 90000000).toISOString(), // Tomorrow + 1 hour
+            timeZone: 'America/Phoenix'
+          }
+        };
+        
+        const created = await calendar.events.insert({
+          calendarId: results.targetCalendarId,
+          resource: testEvent
+        });
+        
+        results.tests.createEvent = {
+          success: true,
+          eventId: created.data.id,
+          htmlLink: created.data.htmlLink,
+          message: 'Test event created successfully - check your calendar!'
+        };
+        
+        // Try to delete it immediately
+        try {
+          await calendar.events.delete({
+            calendarId: results.targetCalendarId,
+            eventId: created.data.id
+          });
+          results.tests.createEvent.deleted = true;
+        } catch (delError) {
+          results.tests.createEvent.deleted = false;
+          results.tests.createEvent.deleteError = delError.message;
+        }
+        
+      } catch (error) {
+        results.tests.createEvent = {
+          success: false,
+          error: error.message
+        };
+      }
+    }
+    
+    res.json(results);
+    
+  } catch (error) {
+    res.status(500).json({
+      error: error.message
+    });
+  }
+});
+
+// COMPREHENSIVE Calendar test endpoint
 router.get('/test-calendar-booking', async (req, res) => {
   try {
     console.log('🧪 COMPREHENSIVE CALENDAR BOOKING TEST');
@@ -445,7 +730,7 @@ router.get('/test-calendar-booking', async (req, res) => {
   }
 });
 
-// NEW: Test booking endpoint
+// Test booking endpoint
 router.post('/test-booking', express.json(), async (req, res) => {
   try {
     console.log('🧪 Testing calendar booking...');
@@ -554,9 +839,7 @@ router.post('/test-booking', express.json(), async (req, res) => {
   }
 });
 
-// Continue with the rest of your existing endpoints...
-
-// NEW: Set customer data endpoint - for N8N to send Typeform data
+// Set customer data endpoint - for N8N to send Typeform data
 router.post('/set-customer-data', express.json(), async (req, res) => {
   try {
     const { name, email, phone } = req.body;
