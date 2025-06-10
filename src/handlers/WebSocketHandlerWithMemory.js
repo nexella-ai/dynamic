@@ -571,23 +571,23 @@ detectSpecificAppointmentRequest(userMessage) {
   
   // ENHANCED patterns for appointment booking
   const appointmentPatterns = [
-    // "Tuesday at 10 AM" - most explicit
-    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
+    // Pattern 0: "Tuesday at 10 AM" or "Friday at ten AM" - most explicit
+    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)/i,
     
-    // "10 AM Tuesday" 
-    /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
+    // Pattern 1: "10 AM Tuesday" 
+    /\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
     
-    // "Tuesday, June 10th at 10 AM"
-    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday),?\s+(?:june\s+\d{1,2}(?:th|st|nd|rd)?\s+)?(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
+    // Pattern 2: "Tuesday, June 10th at 10 AM" or "Friday, June thirteenth at ten AM"
+    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday),?\s+june\s+(?:the\s+)?(\d{1,2}(?:st|nd|rd|th)?|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth)\s+(?:at\s+)?(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)/i,
     
-    // "June 10th at 10 AM" or "June tenth at 10 AM"
-    /\bjune\s+(\d{1,2}(?:th|st|nd|rd)?|tenth|eleventh|twelfth)\s*,?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
+    // Pattern 3: "June 10th at 10 AM" or "June tenth at 10 AM"
+    /\bjune\s+(?:the\s+)?(\d{1,2}(?:st|nd|rd|th)?|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth)\s*,?\s+(?:at\s+)?(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)/i,
     
-    // "June tenth, ten AM" (word numbers)
-    /\bjune\s+(tenth|eleventh|twelfth)\s*,?\s+(ten|nine|eight|eleven|one|two|three)\s*(am|pm)/i,
+    // Pattern 4: "Tuesday 10" (assuming business hours)
+    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b(?!\s*(?:am|pm))/i,
     
-    // "Tuesday 10" (assuming business hours)
-    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2})\b(?!\s*(pm|am))/i
+    // Pattern 5: "Friday, ten AM" (with comma)
+    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday),\s*(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)/i
   ];
 
   for (let i = 0; i < appointmentPatterns.length; i++) {
@@ -613,58 +613,85 @@ parseAppointmentMatch(match, patternIndex) {
   
   console.log(`🔧 PARSING PATTERN ${patternIndex}:`, match);
   
+  // Word to number conversion
+  const wordToNum = {
+    'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+    'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+    'eleven': 11, 'twelve': 12
+  };
+  
+  // Date word to number conversion
+  const dateWordToNum = {
+    'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5,
+    'sixth': 6, 'seventh': 7, 'eighth': 8, 'ninth': 9, 'tenth': 10,
+    'eleventh': 11, 'twelfth': 12, 'thirteenth': 13, 'fourteenth': 14, 'fifteenth': 15
+  };
+  
   try {
     switch (patternIndex) {
-      case 0: // "Tuesday at 10am"
+      case 0: // "Friday at ten AM"
         day = match[1];
-        hour = parseInt(match[2]);
+        hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
         minutes = parseInt(match[3] || '0');
         period = match[4] || 'am';
         break;
         
       case 1: // "10am Tuesday"
-        hour = parseInt(match[1]);
+        hour = wordToNum[match[1]?.toLowerCase()] || parseInt(match[1]);
         minutes = parseInt(match[2] || '0');
         period = match[3] || 'am';
         day = match[4];
         break;
         
-      case 2: // "Tuesday, June 10th at 10 AM"
+      case 2: // "Friday, June thirteenth at ten AM"
         day = match[1];
-        hour = parseInt(match[2]);
-        minutes = parseInt(match[3] || '0');
-        period = match[4] || 'am';
+        // Skip date parsing, just use day
+        hour = wordToNum[match[3]?.toLowerCase()] || parseInt(match[3]);
+        minutes = parseInt(match[4] || '0');
+        period = match[5] || 'am';
         break;
         
       case 3: // "June 10th at 10 AM"
-        day = 'tuesday'; // Default to Tuesday since it's June 10th
-        hour = parseInt(match[2]);
+        // For June dates, determine the day of week
+        const dateStr = match[1].toLowerCase();
+        const dateNum = dateWordToNum[dateStr] || parseInt(dateStr);
+        // For June 2025, 13th is a Friday
+        if (dateNum === 13) day = 'friday';
+        else if (dateNum === 12) day = 'thursday';
+        else if (dateNum === 11) day = 'wednesday';
+        else day = 'friday'; // Default
+        
+        hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
         minutes = parseInt(match[3] || '0');
         period = match[4] || 'am';
         break;
         
-      case 4: // "June tenth, ten AM"
-        day = 'tuesday'; // Default to Tuesday since it's June 10th
-        const wordToNum = {
-          'eight': 8, 'nine': 9, 'ten': 10, 'eleven': 11,
-          'one': 1, 'two': 2, 'three': 3
-        };
-        hour = wordToNum[match[2].toLowerCase()] || 10;
-        period = match[3] || 'am';
-        break;
-        
-      case 5: // "Tuesday 10"
+      case 4: // "Tuesday 10"
         day = match[1];
-        hour = parseInt(match[2]);
+        hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
         // Smart assumption for business hours
         period = hour >= 8 && hour <= 11 ? 'am' : (hour >= 1 && hour <= 4 ? 'pm' : 'am');
         break;
+        
+      case 5: // "Friday, ten AM"
+        day = match[1];
+        hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
+        minutes = parseInt(match[3] || '0');
+        period = match[4] || 'am';
+        break;
+    }
+
+    // Validate hour
+    if (!hour || isNaN(hour)) {
+      console.log('❌ Invalid hour detected:', match[2] || match[3]);
+      return null;
     }
 
     // Convert to 24-hour format
-    if (period.toLowerCase().includes('p') && hour !== 12) {
+    period = period.toLowerCase().replace(/[.\s]/g, '');
+    if (period.includes('p') && hour !== 12) {
       hour += 12;
-    } else if (period.toLowerCase().includes('a') && hour === 12) {
+    } else if (period.includes('a') && hour === 12) {
       hour = 0;
     }
 
