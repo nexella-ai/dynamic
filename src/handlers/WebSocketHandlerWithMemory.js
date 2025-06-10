@@ -1,4 +1,4 @@
-// src/handlers/WebSocketHandlerWithMemory.js - COMPLETE WITH ANTI-LOOP CALENDAR BOOKING
+// src/handlers/WebSocketHandlerWithMemory.js - COMPLETE WITH ANTI-LOOP CALENDAR BOOKING AND INTELLIGENT MEMORY
 const axios = require('axios');
 const config = require('../config/environment');
 const globalDiscoveryManager = require('../services/discovery/GlobalDiscoveryManager');
@@ -29,6 +29,14 @@ try {
   console.error('❌ RAGMemoryService not found - memory features disabled');
 }
 
+// Import Appointment Booking Memory
+let AppointmentBookingMemory = null;
+try {
+  AppointmentBookingMemory = require('../services/memory/AppointmentBookingMemory');
+} catch (error) {
+  console.log('⚠️ AppointmentBookingMemory not found - intelligent booking disabled');
+}
+
 class WebSocketHandlerWithMemory {
   constructor(ws, req) {
     this.ws = ws;
@@ -43,6 +51,17 @@ class WebSocketHandlerWithMemory {
         console.log('🧠 Memory service initialized for call:', this.callId);
       } catch (error) {
         console.error('❌ Memory service initialization failed:', error.message);
+      }
+    }
+    
+    // Initialize Appointment Booking Memory
+    this.bookingMemory = null;
+    if (this.memoryService && AppointmentBookingMemory) {
+      try {
+        this.bookingMemory = new AppointmentBookingMemory();
+        console.log('📅 Booking memory initialized for intelligent appointment detection');
+      } catch (error) {
+        console.error('❌ Booking memory initialization failed:', error.message);
       }
     }
     
@@ -484,240 +503,305 @@ KEEP IT SHORT AND FOCUSED.`
   }
 
   // CRITICAL FIX for WebSocketHandlerWithMemory.js - processUserMessage method
+  async processUserMessage(parsed) {
+    const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
+    const userMessage = latestUserUtterance?.content || "";
 
-async processUserMessage(parsed) {
-  const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
-  const userMessage = latestUserUtterance?.content || "";
-
-  console.log(`🗣️ USER: "${userMessage}"`);
-  
-  // Mark that user has spoken
-  if (!this.userHasSpoken) {
-    this.userHasSpoken = true;
-    this.connectionStartTime = Date.now();
-    console.log('👤 USER SPOKE FIRST - Now we can start conversation');
-  }
-  
-  // CRITICAL FIX 1: Check if appointment already booked - EXIT EARLY
-  if (this.appointmentBooked) {
-    console.log('✅ Appointment already booked - ignoring further processing');
-    return;
-  }
-
-  // CRITICAL FIX 2: Anti-loop timing protection
-  const now = Date.now();
-  if (now - this.lastResponseTime < this.minimumResponseDelay) {
-    console.log('⏱️ Response too soon - enforcing delay');
-    return;
-  }
-  
-  this.conversationHistory.push({ role: 'user', content: userMessage });
-
-  // Handle first greeting when user speaks
-  if (!this.hasGreeted && this.userHasSpoken) {
-    await this.handleInitialGreeting(userMessage, parsed.response_id);
-    return;
-  }
-
-  const progress = globalDiscoveryManager.getProgress(this.callId);
-  console.log(`📊 CURRENT PROGRESS: ${progress?.questionsCompleted || 0}/6 questions, Phase: ${progress?.conversationPhase || 'greeting'}`);
-
-  // CRITICAL FIX 3: Check for appointment booking FIRST AND EXECUTE IT
-  if (progress?.questionsCompleted >= 6 && !this.appointmentBooked && !this.bookingInProgress) {
-    console.log('🎯 CHECKING FOR APPOINTMENT REQUEST IN SCHEDULING PHASE');
-    const appointmentMatch = this.detectSpecificAppointmentRequest(userMessage);
-    if (appointmentMatch) {
-      console.log('🚀 APPOINTMENT REQUEST DETECTED - EXECUTING IMMEDIATE BOOKING');
-      console.log('📋 Appointment details:', appointmentMatch);
-      
-      // Immediately set flags to prevent loops
-      this.bookingInProgress = true;
-      this.calendarBookingState.hasDetectedBookingRequest = true;
-      this.calendarBookingState.lastAppointmentMatch = appointmentMatch;
-      
-      await this.handleImmediateAppointmentBooking(appointmentMatch, parsed.response_id);
-      return; // EXIT IMMEDIATELY after booking attempt
-    } else {
-      console.log('❌ NO APPOINTMENT MATCH FOUND for:', userMessage);
-      console.log('🔍 Falling back to availability response');
+    console.log(`🗣️ USER: "${userMessage}"`);
+    
+    // Mark that user has spoken
+    if (!this.userHasSpoken) {
+      this.userHasSpoken = true;
+      this.connectionStartTime = Date.now();
+      console.log('👤 USER SPOKE FIRST - Now we can start conversation');
     }
-  }
-
-  // Handle discovery phase with memory enhancement
-  if (progress?.questionsCompleted < 6 && !progress?.schedulingStarted) {
-    await this.handleDiscoveryPhaseWithMemory(userMessage, parsed.response_id);
-    return;
-  }
-
-  // Handle scheduling phase (ONLY if no appointment detected above)
-  if (progress?.questionsCompleted >= 6 || progress?.schedulingStarted) {
-    await this.handleSchedulingPhase(userMessage, parsed.response_id);
-    return;
-  }
-
-  // Fallback - Use enhanced response with memory
-  await this.generateEnhancedResponse(userMessage, parsed.response_id);
-}
-
-// FIXED: Enhanced appointment detection with better patterns
-detectSpecificAppointmentRequest(userMessage) {
-  console.log('🎯 ENHANCED APPOINTMENT DETECTION:', userMessage);
-  
-  // Skip if already processed
-  if (this.calendarBookingState.hasDetectedBookingRequest) {
-    console.log('🚫 Booking request already detected - ignoring');
-    return null;
-  }
-  
-  // ENHANCED patterns for appointment booking
-  const appointmentPatterns = [
-    // Pattern 0: "Tuesday at 10 AM" or "Friday at ten AM" - most explicit
-    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)/i,
     
-    // Pattern 1: "10 AM Tuesday" 
-    /\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
-    
-    // Pattern 2: "Tuesday, June 10th at 10 AM" or "Friday, June thirteenth at ten AM"
-    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday),?\s+june\s+(?:the\s+)?(\d{1,2}(?:st|nd|rd|th)?|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth)\s+(?:at\s+)?(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)/i,
-    
-    // Pattern 3: "June 10th at 10 AM" or "June tenth at 10 AM"
-    /\bjune\s+(?:the\s+)?(\d{1,2}(?:st|nd|rd|th)?|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth)\s*,?\s+(?:at\s+)?(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)/i,
-    
-    // Pattern 4: "Tuesday 10" (assuming business hours)
-    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b(?!\s*(?:am|pm))/i,
-    
-    // Pattern 5: "Friday, ten AM" (with comma)
-    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday),\s*(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)/i
-  ];
+    // CRITICAL FIX 1: Check if appointment already booked - EXIT EARLY
+    if (this.appointmentBooked) {
+      console.log('✅ Appointment already booked - ignoring further processing');
+      return;
+    }
 
-  for (let i = 0; i < appointmentPatterns.length; i++) {
-    const pattern = appointmentPatterns[i];
-    const match = userMessage.match(pattern);
-    if (match) {
-      console.log(`✅ APPOINTMENT PATTERN ${i} MATCHED:`, match);
-      const appointmentDetails = this.parseAppointmentMatch(match, i);
-      if (appointmentDetails) {
-        console.log('🎯 PARSED APPOINTMENT SUCCESSFULLY:', appointmentDetails);
-        return appointmentDetails;
+    // CRITICAL FIX 2: Anti-loop timing protection
+    const now = Date.now();
+    if (now - this.lastResponseTime < this.minimumResponseDelay) {
+      console.log('⏱️ Response too soon - enforcing delay');
+      return;
+    }
+    
+    this.conversationHistory.push({ role: 'user', content: userMessage });
+
+    // Handle first greeting when user speaks
+    if (!this.hasGreeted && this.userHasSpoken) {
+      await this.handleInitialGreeting(userMessage, parsed.response_id);
+      return;
+    }
+
+    const progress = globalDiscoveryManager.getProgress(this.callId);
+    console.log(`📊 CURRENT PROGRESS: ${progress?.questionsCompleted || 0}/6 questions, Phase: ${progress?.conversationPhase || 'greeting'}`);
+
+    // CRITICAL FIX 3: Check for appointment booking FIRST AND EXECUTE IT
+    if (progress?.questionsCompleted >= 6 && !this.appointmentBooked && !this.bookingInProgress) {
+      console.log('🎯 CHECKING FOR APPOINTMENT REQUEST IN SCHEDULING PHASE');
+      const appointmentMatch = await this.detectSpecificAppointmentRequest(userMessage);
+      if (appointmentMatch) {
+        console.log('🚀 APPOINTMENT REQUEST DETECTED - EXECUTING IMMEDIATE BOOKING');
+        console.log('📋 Appointment details:', appointmentMatch);
+        
+        // Immediately set flags to prevent loops
+        this.bookingInProgress = true;
+        this.calendarBookingState.hasDetectedBookingRequest = true;
+        this.calendarBookingState.lastAppointmentMatch = appointmentMatch;
+        
+        await this.handleImmediateAppointmentBooking(appointmentMatch, parsed.response_id);
+        return; // EXIT IMMEDIATELY after booking attempt
+      } else {
+        console.log('❌ NO APPOINTMENT MATCH FOUND for:', userMessage);
+        console.log('🔍 Falling back to availability response');
       }
     }
-  }
-  
-  console.log('❌ NO APPOINTMENT PATTERN MATCHED');
-  return null;
-}
 
-// ENHANCED: Parse appointment match with better handling
-parseAppointmentMatch(match, patternIndex) {
-  let day, hour, minutes = 0, period = 'am';
-  
-  console.log(`🔧 PARSING PATTERN ${patternIndex}:`, match);
-  
-  // Word to number conversion
-  const wordToNum = {
-    'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
-    'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
-    'eleven': 11, 'twelve': 12
-  };
-  
-  // Date word to number conversion
-  const dateWordToNum = {
-    'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5,
-    'sixth': 6, 'seventh': 7, 'eighth': 8, 'ninth': 9, 'tenth': 10,
-    'eleventh': 11, 'twelfth': 12, 'thirteenth': 13, 'fourteenth': 14, 'fifteenth': 15
-  };
-  
-  try {
-    switch (patternIndex) {
-      case 0: // "Friday at ten AM"
-        day = match[1];
-        hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
-        minutes = parseInt(match[3] || '0');
-        period = match[4] || 'am';
-        break;
-        
-      case 1: // "10am Tuesday"
-        hour = wordToNum[match[1]?.toLowerCase()] || parseInt(match[1]);
-        minutes = parseInt(match[2] || '0');
-        period = match[3] || 'am';
-        day = match[4];
-        break;
-        
-      case 2: // "Friday, June thirteenth at ten AM"
-        day = match[1];
-        // Skip date parsing, just use day
-        hour = wordToNum[match[3]?.toLowerCase()] || parseInt(match[3]);
-        minutes = parseInt(match[4] || '0');
-        period = match[5] || 'am';
-        break;
-        
-      case 3: // "June 10th at 10 AM"
-        // For June dates, determine the day of week
-        const dateStr = match[1].toLowerCase();
-        const dateNum = dateWordToNum[dateStr] || parseInt(dateStr);
-        // For June 2025, 13th is a Friday
-        if (dateNum === 13) day = 'friday';
-        else if (dateNum === 12) day = 'thursday';
-        else if (dateNum === 11) day = 'wednesday';
-        else day = 'friday'; // Default
-        
-        hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
-        minutes = parseInt(match[3] || '0');
-        period = match[4] || 'am';
-        break;
-        
-      case 4: // "Tuesday 10"
-        day = match[1];
-        hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
-        // Smart assumption for business hours
-        period = hour >= 8 && hour <= 11 ? 'am' : (hour >= 1 && hour <= 4 ? 'pm' : 'am');
-        break;
-        
-      case 5: // "Friday, ten AM"
-        day = match[1];
-        hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
-        minutes = parseInt(match[3] || '0');
-        period = match[4] || 'am';
-        break;
+    // Handle discovery phase with memory enhancement
+    if (progress?.questionsCompleted < 6 && !progress?.schedulingStarted) {
+      await this.handleDiscoveryPhaseWithMemory(userMessage, parsed.response_id);
+      return;
     }
 
-    // Validate hour
-    if (!hour || isNaN(hour)) {
-      console.log('❌ Invalid hour detected:', match[2] || match[3]);
+    // Handle scheduling phase (ONLY if no appointment detected above)
+    if (progress?.questionsCompleted >= 6 || progress?.schedulingStarted) {
+      await this.handleSchedulingPhase(userMessage, parsed.response_id);
+      return;
+    }
+
+    // Fallback - Use enhanced response with memory
+    await this.generateEnhancedResponse(userMessage, parsed.response_id);
+  }
+
+  // ENHANCED: Appointment detection with intelligent memory
+  async detectSpecificAppointmentRequest(userMessage) {
+    console.log('🎯 ENHANCED APPOINTMENT DETECTION:', userMessage);
+    
+    // Skip if already processed
+    if (this.calendarBookingState.hasDetectedBookingRequest) {
+      console.log('🚫 Booking request already detected - ignoring');
       return null;
     }
-
-    // Convert to 24-hour format
-    period = period.toLowerCase().replace(/[.\s]/g, '');
-    if (period.includes('p') && hour !== 12) {
-      hour += 12;
-    } else if (period.includes('a') && hour === 12) {
-      hour = 0;
+    
+    // NEW: Check booking memory first for intelligent detection
+    if (this.bookingMemory) {
+      try {
+        console.log('🧠 Checking booking memory for intelligence...');
+        const bookingIntelligence = await this.bookingMemory.getBookingIntelligence(userMessage);
+        
+        if (bookingIntelligence.confident) {
+          console.log('✅ MEMORY MATCH! Suggested interpretation:', bookingIntelligence);
+          
+          // Create appointment details from memory suggestion
+          const suggestedDay = bookingIntelligence.suggestedDay;
+          const suggestedTime = bookingIntelligence.suggestedTime;
+          
+          // Parse the suggested time
+          let hour = 9; // Default
+          let period = 'am';
+          
+          if (suggestedTime && suggestedTime !== 'any' && suggestedTime !== 'morning' && suggestedTime !== 'afternoon') {
+            const timeMatch = suggestedTime.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+            if (timeMatch) {
+              hour = parseInt(timeMatch[1]);
+              period = timeMatch[3].toLowerCase();
+            }
+          } else if (suggestedTime === 'morning') {
+            hour = 9; // Default morning time
+            period = 'am';
+          } else if (suggestedTime === 'afternoon') {
+            hour = 2; // Default afternoon time
+            period = 'pm';
+          }
+          
+          // Convert to 24-hour if needed
+          if (period === 'pm' && hour !== 12) hour += 12;
+          if (period === 'am' && hour === 12) hour = 0;
+          
+          const targetDate = this.calculateTargetDate(suggestedDay, hour, 0);
+          
+          return {
+            dateTime: targetDate,
+            dayName: suggestedDay,
+            timeString: suggestedTime,
+            originalMatch: userMessage,
+            isBusinessHours: hour >= 8 && hour < 16,
+            hour: hour,
+            fromMemory: true
+          };
+        } else if (bookingIntelligence.suggestions?.length > 0) {
+          console.log('💡 Memory suggestions:', bookingIntelligence.suggestions);
+        }
+      } catch (error) {
+        console.error('❌ Booking memory error:', error.message);
+      }
     }
+    
+    // ENHANCED patterns for appointment booking - INCLUDING QUESTIONS
+    const appointmentPatterns = [
+      // Pattern 0: "Thursday at 9" or "Thursday at nine" (with or without AM/PM)
+      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?/i,
+      
+      // Pattern 1: Questions like "What about Thursday at nine?" or "How about Thursday at 9?"
+      /(?:what\s+about|how\s+about|can\s+we\s+do|let\'s\s+do)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?/i,
+      
+      // Pattern 2: "Thursday 9" or "Thursday nine" (no "at")
+      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(am|pm|a\.m\.|p\.m\.)?\b/i,
+      
+      // Pattern 3: "9 AM Thursday" or "nine AM Thursday"
+      /\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
+      
+      // Pattern 4: "Thursday, 9 AM" (with comma)
+      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday),\s*(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?/i,
+      
+      // Pattern 5: Questions about specific times "Is Thursday at 9 available?" "Does Thursday at 9 work?"
+      /(?:is|does|would)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?\s*(?:available|work|good|ok|okay)?/i,
+      
+      // Pattern 6: "Friday, June thirteenth at ten AM"
+      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday),?\s+june\s+(?:the\s+)?(\d{1,2}(?:st|nd|rd|th)?|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth)\s+(?:at\s+)?(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)/i
+    ];
 
-    // Create target date
-    const targetDate = this.calculateTargetDate(day, hour, minutes);
+    for (let i = 0; i < appointmentPatterns.length; i++) {
+      const pattern = appointmentPatterns[i];
+      const match = userMessage.match(pattern);
+      if (match) {
+        console.log(`✅ APPOINTMENT PATTERN ${i} MATCHED:`, match);
+        const appointmentDetails = this.parseAppointmentMatch(match, i);
+        if (appointmentDetails) {
+          console.log('🎯 PARSED APPOINTMENT SUCCESSFULLY:', appointmentDetails);
+          return appointmentDetails;
+        }
+      }
+    }
     
-    const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
-    const displayPeriod = hour >= 12 ? 'PM' : 'AM';
-    
-    const result = {
-      dateTime: targetDate,
-      dayName: day,
-      timeString: `${displayHour}:${minutes.toString().padStart(2, '0')} ${displayPeriod}`,
-      originalMatch: match[0],
-      isBusinessHours: hour >= 8 && hour < 16, // 8 AM - 4 PM Arizona MST
-      hour: hour
-    };
-    
-    console.log('✅ APPOINTMENT PARSING SUCCESSFUL:', result);
-    return result;
-    
-  } catch (error) {
-    console.error('❌ Error parsing appointment:', error.message);
+    console.log('❌ NO APPOINTMENT PATTERN MATCHED');
     return null;
   }
-}
+
+  // ENHANCED parseAppointmentMatch to handle the new patterns
+  parseAppointmentMatch(match, patternIndex) {
+    let day, hour, minutes = 0, period = null;
+    
+    console.log(`🔧 PARSING PATTERN ${patternIndex}:`, match);
+    
+    // Word to number conversion
+    const wordToNum = {
+      'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+      'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+      'eleven': 11, 'twelve': 12
+    };
+    
+    // Date word to number conversion
+    const dateWordToNum = {
+      'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5,
+      'sixth': 6, 'seventh': 7, 'eighth': 8, 'ninth': 9, 'tenth': 10,
+      'eleventh': 11, 'twelfth': 12, 'thirteenth': 13, 'fourteenth': 14, 'fifteenth': 15
+    };
+    
+    try {
+      switch (patternIndex) {
+        case 0: // "Thursday at 9" or "Thursday at nine"
+        case 1: // "What about Thursday at nine?"
+          day = match[1];
+          hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
+          minutes = parseInt(match[3] || '0');
+          period = match[4] || null;
+          break;
+          
+        case 2: // "Thursday 9" or "Thursday nine"
+          day = match[1];
+          hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
+          period = match[3] || null;
+          break;
+          
+        case 3: // "9 AM Thursday"
+          hour = wordToNum[match[1]?.toLowerCase()] || parseInt(match[1]);
+          minutes = parseInt(match[2] || '0');
+          period = match[3] || null;
+          day = match[4];
+          break;
+          
+        case 4: // "Thursday, 9 AM"
+          day = match[1];
+          hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
+          minutes = parseInt(match[3] || '0');
+          period = match[4] || null;
+          break;
+          
+        case 5: // "Is Thursday at 9 available?"
+          day = match[1];
+          hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
+          minutes = parseInt(match[3] || '0');
+          period = match[4] || null;
+          break;
+          
+        case 6: // "Friday, June thirteenth at ten AM"
+          day = match[1];
+          // Skip date parsing, just use day
+          hour = wordToNum[match[3]?.toLowerCase()] || parseInt(match[3]);
+          minutes = parseInt(match[4] || '0');
+          period = match[5] || null;
+          break;
+      }
+
+      // Validate hour
+      if (!hour || isNaN(hour)) {
+        console.log('❌ Invalid hour detected:', match[2] || match[3]);
+        return null;
+      }
+
+      // SMART PERIOD DETECTION: If no AM/PM specified, use context
+      if (!period) {
+        // If hour is 8-11, assume AM (business hours)
+        // If hour is 1-4, assume PM (business hours)
+        // Otherwise default to AM
+        if (hour >= 8 && hour <= 11) {
+          period = 'am';
+          console.log(`📊 Smart detection: ${hour} → ${hour} AM (morning business hours)`);
+        } else if (hour >= 1 && hour <= 4) {
+          period = 'pm';
+          console.log(`📊 Smart detection: ${hour} → ${hour} PM (afternoon business hours)`);
+        } else {
+          period = 'am'; // Default
+          console.log(`📊 Defaulting ${hour} to AM`);
+        }
+      }
+
+      // Convert to 24-hour format
+      period = period.toLowerCase().replace(/[.\s]/g, '');
+      if (period.includes('p') && hour !== 12) {
+        hour += 12;
+      } else if (period.includes('a') && hour === 12) {
+        hour = 0;
+      }
+
+      // Create target date
+      const targetDate = this.calculateTargetDate(day, hour, minutes);
+      
+      const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
+      const displayPeriod = hour >= 12 ? 'PM' : 'AM';
+      
+      const result = {
+        dateTime: targetDate,
+        dayName: day,
+        timeString: `${displayHour}:${minutes.toString().padStart(2, '0')} ${displayPeriod}`,
+        originalMatch: match[0],
+        isBusinessHours: hour >= 8 && hour < 16, // 8 AM - 4 PM Arizona MST
+        hour: hour
+      };
+      
+      console.log('✅ APPOINTMENT PARSING SUCCESSFUL:', result);
+      return result;
+      
+    } catch (error) {
+      console.error('❌ Error parsing appointment:', error.message);
+      return null;
+    }
+  }
 
   // FIXED: Calculate target date for appointment
   calculateTargetDate(day, hour, minutes) {
@@ -826,17 +910,44 @@ parseAppointmentMatch(match, patternIndex) {
             if (this.memoryService) {
               await this.handleSuccessfulBooking(appointmentRequest, discoveryData);
             }
+            
+            // Store successful pattern in booking memory for learning
+            if (this.bookingMemory && !appointmentRequest.fromMemory) {
+              await this.bookingMemory.storeSuccessfulBookingPattern(
+                appointmentRequest.originalMatch,
+                appointmentRequest,
+                this.connectionData.customerEmail
+              );
+            }
 
             // Send success webhook with calendar details
             await this.sendBookingWebhook(appointmentRequest, discoveryData, bookingResult, 'success');
 
           } else {
             console.log('❌ CALENDAR BOOKING FAILED:', bookingResult.error);
+            
+            // Store failed attempt for learning
+            if (this.bookingMemory) {
+              await this.bookingMemory.storeFailedBookingAttempt(
+                appointmentRequest.originalMatch,
+                bookingResult.error
+              );
+            }
+            
             await this.sendBookingWebhook(appointmentRequest, discoveryData, null, 'failed');
           }
           
         } catch (bookingError) {
           console.error('❌ Calendar booking exception:', bookingError.message);
+          
+          // Store failed attempt for learning
+          if (this.bookingMemory) {
+            await this.bookingMemory.storeFailedBookingAttempt(
+              appointmentRequest.originalMatch,
+              bookingError.message
+            );
+          }
+          
           await this.sendBookingWebhook(appointmentRequest, discoveryData, null, 'error');
         } finally {
           // Always reset booking in progress
