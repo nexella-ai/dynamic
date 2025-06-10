@@ -680,66 +680,106 @@ Remember: When they say a specific day and time, book it IMMEDIATELY with automa
   }
 
   // NEW: Enhanced appointment request detection with better patterns
-  detectSpecificAppointmentRequest(userMessage) {
-    console.log('🎯 CHECKING FOR SPECIFIC APPOINTMENT REQUEST:', userMessage);
-    
-    // Skip if already processed
-    if (this.calendarBookingState.hasDetectedBookingRequest) {
-      console.log('🚫 Booking request already detected - ignoring');
-      return null;
-    }
-    
-    // More specific patterns for immediate booking
-    const specificPatterns = [
-      // "Wednesday at 9 AM" or "Wednesday 9 AM"
-      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
-      // "9 AM Wednesday" or "9 AM on Wednesday"
-      /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
-      // "Wednesday 9" (assuming business hours)
-      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2})\b/i
-    ];
-
-    for (let i = 0; i < specificPatterns.length; i++) {
-      const pattern = specificPatterns[i];
-      const match = userMessage.match(pattern);
-      if (match) {
-        console.log('🎯 SPECIFIC APPOINTMENT PATTERN MATCHED:', match);
-        return this.parseAppointmentMatch(match, i);
-      }
-    }
-    
+detectSpecificAppointmentRequest(userMessage) {
+  console.log('🎯 CHECKING FOR SPECIFIC APPOINTMENT REQUEST:', userMessage);
+  
+  // Skip if already processed
+  if (this.calendarBookingState.hasDetectedBookingRequest) {
+    console.log('🚫 Booking request already detected - ignoring');
     return null;
   }
-
-  // FIXED: Parse appointment match into structured data
-  parseAppointmentMatch(match, patternIndex) {
-    let day, hour, minutes = 0, period = 'am';
+  
+  // ENHANCED patterns for appointment booking - MORE FLEXIBLE
+  const specificPatterns = [
+    // "Thursday at 10 AM" or "Thursday at ten AM"
+    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:at\s+)?(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)/i,
     
+    // "10 AM Thursday" or "ten AM Thursday"
+    /\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
+    
+    // "Thursday 10" or "Thursday ten" (assuming business hours)
+    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/i,
+    
+    // "Can we do Thursday at 10 AM" or similar
+    /(?:can we do|let's do|book|schedule)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:at\s+)?(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)/i,
+    
+    // "Thursday, 10 AM" (with comma)
+    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday),?\s+(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)/i
+  ];
+
+  for (let i = 0; i < specificPatterns.length; i++) {
+    const pattern = specificPatterns[i];
+    const match = userMessage.match(pattern);
+    if (match) {
+      console.log('🎯 SPECIFIC APPOINTMENT PATTERN MATCHED:', match);
+      return this.parseAppointmentMatch(match, i);
+    }
+  }
+  
+  console.log('❌ NO APPOINTMENT PATTERN MATCHED');
+  return null;
+}
+
+// FIXED: Parse appointment match into structured data
+parseAppointmentMatch(match, patternIndex) {
+  let day, hour, minutes = 0, period = 'am';
+  
+  // Word to number conversion
+  const wordToNum = {
+    'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+    'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+    'eleven': 11, 'twelve': 12
+  };
+  
+  try {
     switch (patternIndex) {
-      case 0: // "Wednesday at 9am"
+      case 0: // "Thursday at 10am" or "Thursday at ten AM"
         day = match[1];
-        hour = parseInt(match[2]);
+        hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
         minutes = parseInt(match[3] || '0');
         period = match[4] || 'am';
         break;
-      case 1: // "9am Wednesday"
-        hour = parseInt(match[1]);
+        
+      case 1: // "10am Thursday" or "ten AM Thursday"
+        hour = wordToNum[match[1]?.toLowerCase()] || parseInt(match[1]);
         minutes = parseInt(match[2] || '0');
         period = match[3] || 'am';
         day = match[4];
         break;
-      case 2: // "Wednesday 9"
+        
+      case 2: // "Thursday 10" or "Thursday ten"
         day = match[1];
-        hour = parseInt(match[2]);
+        hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
         // Smart assumption for business hours
         period = hour >= 8 && hour <= 11 ? 'am' : (hour >= 1 && hour <= 4 ? 'pm' : 'am');
         break;
+        
+      case 3: // "Can we do Thursday at 10 AM"
+        day = match[1];
+        hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
+        minutes = parseInt(match[3] || '0');
+        period = match[4] || 'am';
+        break;
+        
+      case 4: // "Thursday, 10 AM"
+        day = match[1];
+        hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
+        minutes = parseInt(match[3] || '0');
+        period = match[4] || 'am';
+        break;
+    }
+
+    // Validate hour
+    if (!hour || isNaN(hour)) {
+      console.log('❌ Invalid hour detected:', match[2]);
+      return null;
     }
 
     // Convert to 24-hour format
-    if (period.toLowerCase().includes('p') && hour !== 12) {
+    period = period.toLowerCase().replace(/[.\s]/g, '');
+    if (period.includes('p') && hour !== 12) {
       hour += 12;
-    } else if (period.toLowerCase().includes('a') && hour === 12) {
+    } else if (period.includes('a') && hour === 12) {
       hour = 0;
     }
 
@@ -749,7 +789,7 @@ Remember: When they say a specific day and time, book it IMMEDIATELY with automa
     const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
     const displayPeriod = hour >= 12 ? 'PM' : 'AM';
     
-    return {
+    const result = {
       dateTime: targetDate,
       dayName: day,
       timeString: `${displayHour}:${minutes.toString().padStart(2, '0')} ${displayPeriod}`,
@@ -757,7 +797,15 @@ Remember: When they say a specific day and time, book it IMMEDIATELY with automa
       isBusinessHours: hour >= 8 && hour < 16, // 8 AM - 4 PM Arizona MST
       hour: hour
     };
+    
+    console.log('✅ PARSED APPOINTMENT:', result);
+    return result;
+    
+  } catch (error) {
+    console.error('❌ Error parsing appointment:', error.message);
+    return null;
   }
+}
 
   // FIXED: Calculate target date for appointment
   calculateTargetDate(day, hour, minutes) {
