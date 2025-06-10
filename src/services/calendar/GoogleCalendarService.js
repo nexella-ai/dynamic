@@ -61,7 +61,7 @@ class GoogleCalendarService {
 
   async setupAuthentication() {
     try {
-      console.log('🔐 Setting up Google Calendar authentication for Gmail calendar...');
+      console.log('🔐 Setting up Google Calendar authentication with domain-wide delegation...');
       
       // Process the private key properly
       let privateKey = config.GOOGLE_PRIVATE_KEY;
@@ -82,33 +82,28 @@ class GoogleCalendarService {
         privateKey.includes('-----END PRIVATE KEY-----') ? '✅ Valid' : '❌ Invalid'
       );
       
-      // Use direct service account access for Gmail calendar
-      const authClient = new google.auth.GoogleAuth({
-        credentials: {
-          type: "service_account",
-          project_id: config.GOOGLE_PROJECT_ID,
-          private_key_id: config.GOOGLE_PRIVATE_KEY_ID || "key_id",
-          private_key: privateKey,
-          client_email: config.GOOGLE_CLIENT_EMAIL,
-          client_id: config.GOOGLE_CLIENT_ID || "client_id",
-          auth_uri: "https://accounts.google.com/o/oauth2/auth",
-          token_uri: "https://oauth2.googleapis.com/token",
-          auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-          client_x509_cert_url: `https://www.googleapis.com/oauth2/v1/certs/${encodeURIComponent(config.GOOGLE_CLIENT_EMAIL)}`
-        },
+      // Create JWT client with domain-wide delegation for Google Workspace
+      const jwtClient = new google.auth.JWT({
+        email: config.GOOGLE_CLIENT_EMAIL,
+        key: privateKey,
         scopes: [
           'https://www.googleapis.com/auth/calendar',
           'https://www.googleapis.com/auth/calendar.events'
-        ]
+        ],
+        // CRITICAL: This enables domain-wide delegation
+        subject: config.GOOGLE_SUBJECT_EMAIL || 'nexellaai@gmail.com'
       });
       
-      this.auth = await authClient.getClient();
+      // Authorize the client
+      await jwtClient.authorize();
+      this.auth = jwtClient;
+      
       this.calendarId = config.GOOGLE_CALENDAR_ID || 'nexellaai@gmail.com';
       
-      console.log('✅ Service account authentication successful');
+      console.log('✅ Google Workspace authentication successful with domain-wide delegation');
       console.log('📧 Service account email:', config.GOOGLE_CLIENT_EMAIL);
-      console.log('📅 Using Gmail calendar:', this.calendarId);
-      console.log('ℹ️ Note: Calendar invitations will not be sent automatically (Gmail limitation)');
+      console.log('👤 Impersonating user:', config.GOOGLE_SUBJECT_EMAIL || 'nexellaai@gmail.com');
+      console.log('📅 Using calendar:', this.calendarId);
       
     } catch (error) {
       console.error('❌ Authentication setup failed:', error.message);
