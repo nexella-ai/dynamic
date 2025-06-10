@@ -13,6 +13,14 @@ try {
   console.log('⚠️ AppointmentBookingMemory not available');
 }
 
+// Import WebSocketHandlerWithMemory for health check
+let WebSocketHandlerWithMemory = null;
+try {
+  WebSocketHandlerWithMemory = require('../handlers/WebSocketHandlerWithMemory');
+} catch (error) {
+  console.log('⚠️ WebSocketHandlerWithMemory not available');
+}
+
 const router = express.Router();
 
 // Root endpoint
