@@ -643,11 +643,15 @@ router.get('/test-calendar-booking', async (req, res) => {
         console.log('📅 Test booking time (Arizona):', bookingDate.toLocaleString('en-US', { timeZone: 'America/Phoenix' }));
         
         const bookingResult = await autoBookAppointment(
-          'Test Customer',
-          'test@example.com',
-          '+1234567890',
+          'John Smith',  // More realistic name
+          'john.smith@example.com',  // More realistic email
+          '+14805551234',  // Arizona phone number
           bookingDate,
-          { test: 'This is a test booking' }
+          { 
+            source: 'Website contact form',
+            businessType: 'Solar Installation Company',
+            notes: 'Interested in AI appointment scheduling'
+          }
         );
         
         results.booking = bookingResult;
