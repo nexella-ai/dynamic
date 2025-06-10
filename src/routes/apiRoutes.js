@@ -1029,11 +1029,11 @@ router.get('/admin/search/booking-pattern', async (req, res) => {
 });
 
 // Memory System Health Check Endpoint
-app.get('/health/memory', async (req, res) => {
+router.get('/health/memory', async (req, res) => {
   try {
     if (config.ENABLE_MEMORY && WebSocketHandlerWithMemory) {
       try {
-        const RAGMemoryService = require('./src/services/memory/RAGMemoryService');
+        const RAGMemoryService = require('../services/memory/RAGMemoryService');
         const memoryService = new RAGMemoryService();
         
         const stats = await memoryService.getMemoryStats();
