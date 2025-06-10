@@ -517,23 +517,15 @@ function parseAppointmentMatch(match, patternIndex) {
 
 // Calculate target date for appointment
 function calculateTargetDate(day, hour, minutes) {
-  let targetDate = new Date();
+  // CRITICAL: Create date in Arizona timezone context
+  const now = new Date();
   
-  // Handle "June 11th" style dates
-  if (day.toLowerCase().includes('june')) {
-    const dayMatch = day.match(/(\d{1,2})/);
-    if (dayMatch) {
-      const dayOfMonth = parseInt(dayMatch[1]);
-      targetDate.setMonth(5); // June is month 5 (0-indexed)
-      targetDate.setDate(dayOfMonth);
-      
-      // If the date is in the past this year, move to next year
-      const now = new Date();
-      if (targetDate < now) {
-        targetDate.setFullYear(targetDate.getFullYear() + 1);
-      }
-    }
-  } else if (day === 'tomorrow') {
+  // Get current time in Arizona
+  const arizonaNow = new Date(now.toLocaleString("en-US", {timeZone: "America/Phoenix"}));
+  
+  let targetDate = new Date(arizonaNow);
+  
+  if (day === 'tomorrow') {
     targetDate.setDate(targetDate.getDate() + 1);
   } else if (day === 'today') {
     // Keep today
@@ -549,8 +541,15 @@ function calculateTargetDate(day, hour, minutes) {
     }
   }
   
-  // Set the time (this will be converted to UTC properly by the calendar service)
+  // Set the time
   targetDate.setHours(hour, minutes, 0, 0);
+  
+  console.log('📅 Target date calculation:');
+  console.log('   Day requested:', day);
+  console.log('   Time requested:', `${hour}:${minutes.toString().padStart(2, '0')}`);
+  console.log('   Arizona time:', targetDate.toLocaleString('en-US', { timeZone: 'America/Phoenix' }));
+  console.log('   UTC time:', targetDate.toISOString());
+  
   return targetDate;
 }
 
