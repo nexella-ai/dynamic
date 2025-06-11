@@ -257,7 +257,8 @@ class RAGMemoryService {
       content: match.metadata.content,
       timestamp: match.metadata.timestamp,
       callId: match.metadata.call_id,
-      relevance: this.calculateRelevance(match.score)
+      relevance: this.calculateRelevance(match.score),
+      metadata: match.metadata
     })) || [];
   }
 
@@ -392,6 +393,144 @@ class RAGMemoryService {
     } catch (error) {
       console.error('❌ Error generating conversation context:', error.message);
       return '';
+    }
+  }
+
+  // NEXELLA-SPECIFIC METHODS
+
+  /**
+   * Match Nexella services to customer pain points
+   */
+  async matchServicesToPainPoints(painPoints) {
+    const services = [];
+    const painPointsLower = painPoints.toLowerCase();
+    
+    if (painPointsLower.includes('lead') || painPointsLower.includes('follow up') || 
+        painPointsLower.includes('response') || painPointsLower.includes('slow')) {
+      services.push('SMS Revive', 'AI Texting', 'SMS Follow-Ups');
+    }
+    
+    if (painPointsLower.includes('appointment') || painPointsLower.includes('booking') || 
+        painPointsLower.includes('schedule') || painPointsLower.includes('calendar')) {
+      services.push('Appointment Bookings', 'AI Voice Calls');
+    }
+    
+    if (painPointsLower.includes('support') || painPointsLower.includes('customer service') || 
+        painPointsLower.includes('overwhelmed')) {
+      services.push('AI Voice Calls', 'AI Texting');
+    }
+    
+    if (painPointsLower.includes('review') || painPointsLower.includes('feedback') || 
+        painPointsLower.includes('reputation')) {
+      services.push('Review Collector');
+    }
+    
+    if (painPointsLower.includes('crm') || painPointsLower.includes('integration') || 
+        painPointsLower.includes('system')) {
+      services.push('CRM Integration');
+    }
+    
+    if (painPointsLower.includes('dead leads') || painPointsLower.includes('old leads') || 
+        painPointsLower.includes('cold leads')) {
+      services.push('SMS Revive');
+    }
+    
+    return [...new Set(services)]; // Remove duplicates
+  }
+
+  /**
+   * Generate enhanced conversation context with Nexella knowledge
+   */
+  async generateEnhancedConversationContext(customerEmail, currentQuery) {
+    try {
+      let context = '';
+      
+      // Get customer history
+      if (customerEmail && customerEmail !== 'prospect@example.com') {
+        const customerMemories = await this.retrieveRelevantMemories(customerEmail, currentQuery, 2);
+        
+        if (customerMemories.length > 0) {
+          context += 'CUSTOMER HISTORY: ';
+          customerMemories.forEach(memory => {
+            context += `${memory.content}. `;
+          });
+        }
+      }
+      
+      // Get relevant Nexella knowledge
+      const nexellaQueryEmbedding = await this.createEmbedding(currentQuery);
+      const nexellaKnowledge = await this.index.query({
+        vector: nexellaQueryEmbedding,
+        filter: {
+          source: { $eq: 'nexella_knowledge' }
+        },
+        topK: 2,
+        includeMetadata: true
+      });
+      
+      if (nexellaKnowledge.matches && nexellaKnowledge.matches.length > 0) {
+        context += '\nRELEVANT NEXELLA INFO: ';
+        nexellaKnowledge.matches.forEach(match => {
+          if (match.metadata.answer) {
+            context += `${match.metadata.answer}. `;
+          } else if (match.metadata.content) {
+            context += `${match.metadata.content}. `;
+          }
+        });
+      }
+      
+      return context.trim();
+      
+    } catch (error) {
+      console.error('❌ Error generating enhanced context:', error.message);
+      return this.generateConversationContext(customerEmail, currentQuery); // Fallback to original method
+    }
+  }
+
+  /**
+   * Store conversation with Nexella service recommendations
+   */
+  async storeEnhancedConversationMemory(callId, customerData, conversationData, discoveryData) {
+    try {
+      // First store using the original method
+      const baseResult = await this.storeConversationMemory(callId, customerData, conversationData, discoveryData);
+      
+      // Then add Nexella-specific recommendations
+      if (discoveryData['Pain points']) {
+        const recommendedServices = await this.matchServicesToPainPoints(discoveryData['Pain points']);
+        
+        if (recommendedServices.length > 0) {
+          const recommendationContent = `Based on ${customerData.customerName}'s pain points: "${discoveryData['Pain points']}", 
+            Nexella AI recommends these services: ${recommendedServices.join(', ')}. 
+            These services directly address their challenges with automated solutions.`;
+          
+          const recommendationEmbedding = await this.createEmbedding(recommendationContent);
+          
+          await this.storeMemories([{
+            id: `${callId}_nexella_recommendations`,
+            values: recommendationEmbedding,
+            metadata: {
+              memory_type: 'service_recommendation',
+              customer_email: customerData.customerEmail,
+              customer_name: customerData.customerName,
+              timestamp: new Date().toISOString(),
+              content: recommendationContent,
+              call_id: callId,
+              recommended_services: recommendedServices,
+              pain_points: discoveryData['Pain points']
+            }
+          }]);
+          
+          console.log('✅ Stored Nexella service recommendations:', recommendedServices);
+        }
+      }
+      
+      return baseResult;
+      
+    } catch (error) {
+      console.error('❌ Error storing enhanced conversation memory:', error.message);
+      // Fallback to original method
+      return this.storeConversationMemory(callId, customerData, conversationData, discoveryData);
     }
   }
 
