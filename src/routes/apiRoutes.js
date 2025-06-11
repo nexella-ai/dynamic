@@ -21,6 +21,16 @@ try {
   console.log('⚠️ WebSocketHandlerWithMemory not available');
 }
 
+// Import memory services
+let RAGMemoryService = null;
+let DocumentIngestionService = null;
+try {
+  RAGMemoryService = require('../services/memory/RAGMemoryService');
+  DocumentIngestionService = require('../services/memory/DocumentIngestionService');
+} catch (error) {
+  console.log('⚠️ Memory services not available');
+}
+
 const router = express.Router();
 
 // Root endpoint
@@ -1052,7 +1062,7 @@ router.get('/health/memory', async (req, res) => {
           testMode: config.MEMORY_TEST_MODE,
           betaCustomers: config.MEMORY_BETA_CUSTOMERS.length,
           rolloutPercentage: config.MEMORY_ROLLOUT_PERCENTAGE,
-          knowledgeSystemAvailable: !!ingestionService,
+          knowledgeSystemAvailable: !!DocumentIngestionService,
           stats: stats
         });
       } catch (memoryError) {
@@ -1078,7 +1088,213 @@ router.get('/health/memory', async (req, res) => {
   }
 });
 
-// Add other existing endpoints here...
-// (HTTP Request - Trigger Retell Call, Retell webhook handler, etc.)
+// NEXELLA KNOWLEDGE ENDPOINTS
+
+// Search specifically in Nexella knowledge base
+router.get('/admin/search/nexella-knowledge', async (req, res) => {
+  try {
+    const { q: query, limit = 5 } = req.query;
+    
+    if (!query) {
+      return res.status(400).json({
+        success: false,
+        error: 'Query parameter "q" is required'
+      });
+    }
+    
+    if (!RAGMemoryService) {
+      return res.status(500).json({
+        success: false,
+        error: 'Memory service not available'
+      });
+    }
+    
+    const memoryService = new RAGMemoryService();
+    const queryEmbedding = await memoryService.createEmbedding(query);
+    
+    const searchResults = await memoryService.index.query({
+      vector: queryEmbedding,
+      filter: {
+        source: { $eq: 'nexella_knowledge' }
+      },
+      topK: parseInt(limit),
+      includeMetadata: true
+    });
+    
+    const results = memoryService.processSearchResults(searchResults);
+    
+    res.json({
+      success: true,
+      query,
+      results: results.map(r => ({
+        content: r.content.substring(0, 200) + '...',
+        score: r.score,
+        type: r.memoryType,
+        metadata: r.metadata,
+        relevance: r.relevance
+      }))
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Force re-ingestion of Nexella knowledge (for testing)
+router.post('/admin/ingest/nexella-force', async (req, res) => {
+  try {
+    console.log('🔄 Force re-ingesting Nexella knowledge base...');
+    
+    if (!DocumentIngestionService) {
+      return res.status(500).json({
+        success: false,
+        error: 'Document ingestion service not available'
+      });
+    }
+    
+    const ingestionService = new DocumentIngestionService();
+    const result = await ingestionService.ingestNexellaKnowledgeBase();
+    
+    res.json({
+      success: result.success,
+      message: result.success ? 'Nexella knowledge base re-ingested successfully' : 'Ingestion failed',
+      totalItems: result.totalItems,
+      details: result
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Admin endpoint to manually ingest Nexella knowledge
+router.post('/admin/ingest/nexella-knowledge', async (req, res) => {
+  try {
+    console.log('🏢 Manually ingesting Nexella knowledge base...');
+    
+    if (!DocumentIngestionService) {
+      return res.status(500).json({
+        success: false,
+        error: 'Document ingestion service not available'
+      });
+    }
+    
+    const ingestionService = new DocumentIngestionService();
+    const result = await ingestionService.ingestNexellaKnowledgeBase();
+    
+    res.json({
+      success: result.success,
+      message: result.success ? 'Nexella knowledge base ingested successfully' : 'Ingestion failed',
+      totalItems: result.totalItems,
+      details: result
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Get memory stats
+router.get('/admin/memory/stats', async (req, res) => {
+  try {
+    if (!RAGMemoryService) {
+      return res.status(500).json({
+        success: false,
+        error: 'Memory service not available'
+      });
+    }
+    
+    const memoryService = new RAGMemoryService();
+    const stats = await memoryService.getMemoryStats();
+    
+    res.json({
+      success: true,
+      stats,
+      pineconeIndex: config.PINECONE_INDEX_NAME || 'nexella-memory'
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Test memory retrieval for a customer
+router.get('/admin/memory/customer/:email', async (req, res) => {
+  try {
+    const { email } = req.params;
+    
+    if (!RAGMemoryService) {
+      return res.status(500).json({
+        success: false,
+        error: 'Memory service not available'
+      });
+    }
+    
+    const memoryService = new RAGMemoryService();
+    
+    const profile = await memoryService.getCustomerContext(email);
+    const memories = await memoryService.getMemoriesByType(email, 'customer_profile', 5);
+    
+    res.json({
+      success: true,
+      email,
+      profile,
+      recentMemories: memories
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Search company knowledge endpoint (from existing code)
+router.get('/admin/search/knowledge', async (req, res) => {
+  try {
+    const { q: query, limit = 5 } = req.query;
+    
+    if (!query) {
+      return res.status(400).json({
+        success: false,
+        error: 'Query parameter "q" is required'
+      });
+    }
+    
+    if (!DocumentIngestionService) {
+      return res.status(500).json({
+        success: false,
+        error: 'Document ingestion service not available'
+      });
+    }
+    
+    const ingestionService = new DocumentIngestionService();
+    const results = await ingestionService.searchCompanyKnowledge(query, parseInt(limit));
+    
+    res.json({
+      success: true,
+      query,
+      results: results.map(r => ({
+        content: r.content.substring(0, 200) + '...',
+        score: r.score,
+        type: r.memoryType,
+        relevance: r.relevance
+      }))
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
 
 module.exports = router;
