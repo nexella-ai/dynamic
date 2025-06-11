@@ -1165,6 +1165,66 @@ KEEP IT SHORT AND FOCUSED.`
             await this.sendResponse(response, responseId);
             return;
           }
+
+          // Update the handleClose method in WebSocketHandlerWithMemory.js (around line 1165)
+
+  async handleClose() {
+    console.log('🔌 CONNECTION CLOSED WITH MEMORY SAVE');
+    
+    try {
+      // Get session info for memory storage
+      const sessionInfo = globalDiscoveryManager.getSessionInfo(this.callId);
+      
+      if (sessionInfo && sessionInfo.questionsCompleted > 0 && this.memoryService && this.connectionData.customerEmail) {
+        console.log(`💾 Saving conversation to memory: ${sessionInfo.questionsCompleted}/6 questions`);
+        
+        // Prepare conversation data for memory storage
+        const conversationData = {
+          duration: this.calculateCallDuration(),
+          questionsCompleted: sessionInfo.questionsCompleted,
+          schedulingCompleted: sessionInfo.schedulingStarted || false,
+          userSentiment: this.detectUserSentiment(),
+          callEndReason: 'user_disconnect',
+          appointmentBooked: this.appointmentBooked || false
+        };
+        
+        // Get discovery data
+        const discoveryData = globalDiscoveryManager.getFinalDiscoveryData(this.callId);
+        
+        // Store in RAG memory system with Nexella enhancements
+        if (this.memoryService.storeEnhancedConversationMemory) {
+          await this.memoryService.storeEnhancedConversationMemory(
+            this.callId,
+            this.connectionData,
+            conversationData,
+            discoveryData
+          );
+        } else {
+          // Fallback to original method
+          await this.memoryService.storeConversationMemory(
+            this.callId,
+            this.connectionData,
+            conversationData,
+            discoveryData
+          );
+        }
+        
+        // Send final webhook
+        setTimeout(() => {
+          sendSchedulingPreference(
+            this.connectionData.customerName,
+            this.connectionData.customerEmail, 
+            this.connectionData.customerPhone,
+            'Call ended early',
+            this.callId,
+            discoveryData
+          ).catch(err => console.error('Final webhook error:', err));
+        }, 1000);
+      }
+    } catch (error) {
+      console.error('Error in memory-enabled connection close handler:', error.message);
+    }
+  }
           
           // Ask next question
           const nextQuestion = globalDiscoveryManager.getNextUnansweredQuestion(this.callId);
