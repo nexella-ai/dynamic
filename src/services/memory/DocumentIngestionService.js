@@ -172,6 +172,238 @@ Benefits: ${product.benefits || ''}`;
     }
   }
 
+  /**
+   * Ingest Nexella-specific knowledge base
+   */
+  async ingestNexellaKnowledgeBase() {
+    try {
+      console.log('🚀 Starting Nexella knowledge base ingestion...');
+      
+      let totalIngested = 0;
+      
+      // 1. Ingest Services
+      const servicesResult = await this.ingestNexellaServices();
+      totalIngested += servicesResult.count || 0;
+      
+      // 2. Ingest Company Overview
+      const overviewResult = await this.ingestNexellaOverview();
+      totalIngested += overviewResult.count || 0;
+      
+      // 3. Ingest Success Stories
+      const storiesResult = await this.ingestNexellaSuccessStories();
+      totalIngested += storiesResult.count || 0;
+      
+      // 4. Ingest FAQs (using your existing method)
+      const nexellaFAQs = this.getNexellaFAQs();
+      const faqResult = await this.ingestFAQs(nexellaFAQs);
+      totalIngested += faqResult.faqs || 0;
+      
+      console.log(`✅ Nexella knowledge base ingestion complete: ${totalIngested} items`);
+      return { success: true, totalItems: totalIngested };
+      
+    } catch (error) {
+      console.error('❌ Nexella knowledge base ingestion failed:', error.message);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Ingest Nexella services
+   */
+  async ingestNexellaServices() {
+    const services = [
+      {
+        name: 'AI Texting',
+        description: 'Our Texting App integrates directly or extended from your website. So customers can receive immediate info and book from a human-like agent.',
+        benefits: 'Immediate response, human-like interaction, seamless website integration'
+      },
+      {
+        name: 'SMS Revive',
+        description: 'Our SMS system will text your dead leads and revive them. Resulting in booked appointments from low interest customers.',
+        benefits: 'Revive dead leads, convert low-interest prospects, automated re-engagement'
+      },
+      {
+        name: 'AI Voice Calls',
+        description: 'Our human-like AI voice will call your customers, follow up, nurture, log every detail into your crm, and schedule appointments for you.',
+        benefits: 'Automated calling, CRM integration, appointment scheduling, detailed logging'
+      },
+      {
+        name: 'Appointment Bookings',
+        description: 'Our AI Systems will book your appointments hands-free for you.',
+        benefits: 'Hands-free booking, calendar integration, automated scheduling'
+      },
+      {
+        name: 'SMS Follow-Ups',
+        description: 'Our SMS Flows will follow-up on leads making sure they don\'t lose interest and close.',
+        benefits: 'Persistent follow-up, lead nurturing, increased conversion rates'
+      },
+      {
+        name: 'CRM Integration',
+        description: 'Easily integrate to several of the most popular CRM\'s.',
+        benefits: 'Seamless data sync, popular CRM support, unified workflow'
+      },
+      {
+        name: 'Review Collector',
+        description: 'Collect reviews automatically after the customer was taken care of.',
+        benefits: 'Automated review requests, improved online reputation, customer feedback'
+      }
+    ];
+
+    const chunks = [];
+    for (const service of services) {
+      const content = `Nexella AI Service: ${service.name}. ${service.description} Benefits: ${service.benefits}`;
+      chunks.push({
+        id: `nexella_service_${service.name.replace(/\s+/g, '_').toLowerCase()}`,
+        content,
+        metadata: {
+          memory_type: 'nexella_service',
+          service_name: service.name,
+          description: service.description,
+          benefits: service.benefits,
+          source: 'nexella_knowledge',
+          category: 'services'
+        }
+      });
+    }
+
+    await this.storeDocumentChunks(chunks, { source: 'nexella_knowledge' });
+    return { success: true, count: chunks.length };
+  }
+
+  /**
+   * Ingest Nexella company overview
+   */
+  async ingestNexellaOverview() {
+    const overviewChunks = [
+      {
+        id: 'nexella_overview_problem',
+        content: 'Nexella AI solves critical business problems: The average business loses 50% of leads due to slow response times. Appointment no-shows and weak follow-ups drain your calendar and cash flow. Overwhelmed support teams cause refund requests, bad reviews, and lost trust.',
+        metadata: {
+          memory_type: 'company_overview',
+          topic: 'problems_solved',
+          source: 'nexella_knowledge'
+        }
+      },
+      {
+        id: 'nexella_overview_solution',
+        content: 'Nexella AI simplifies your system and implements AI to automate your follow up process, onboarding, and appointment booking. We implement SMS and email systems to nurture your leads. We handle all calls, follow ups, lead qualification, nurturing, CRM updating. So you can sit back, relax, and watch the qualified leads come in.',
+        metadata: {
+          memory_type: 'company_overview',
+          topic: 'solution',
+          source: 'nexella_knowledge'
+        }
+      }
+    ];
+
+    await this.storeDocumentChunks(overviewChunks, { source: 'nexella_knowledge' });
+    return { success: true, count: overviewChunks.length };
+  }
+
+  /**
+   * Ingest Nexella success stories
+   */
+  async ingestNexellaSuccessStories() {
+    const stories = [
+      {
+        id: 'nexella_success_retroshot',
+        content: 'Nexella AI Success Story: We took Retroshot from $10k/mo to over $200k/mo in 6 months using our own SMS Flows, email flows, AI sales assistants, and Ad Strategies. That\'s a 20x increase in revenue!',
+        metadata: {
+          memory_type: 'success_story',
+          client: 'Retroshot',
+          revenue_before: '$10k/mo',
+          revenue_after: '$200k/mo',
+          timeframe: '6 months',
+          services_used: 'SMS Flows, email flows, AI sales assistants, Ad Strategies',
+          source: 'nexella_knowledge'
+        }
+      },
+      {
+        id: 'nexella_success_nebula_orb',
+        content: 'Nexella AI Success Story: We took Nebula Orb from $25k/mo to over $250k/mo in 8 months using our SMS Flows, AI sales assistants, AI Voice Call, AI Texting, SMS Revive, and Ad Strategies. That\'s a 10x increase in revenue!',
+        metadata: {
+          memory_type: 'success_story',
+          client: 'Nebula Orb',
+          revenue_before: '$25k/mo',
+          revenue_after: '$250k/mo',
+          timeframe: '8 months',
+          services_used: 'SMS Flows, AI sales assistants, AI Voice Call, AI Texting, SMS Revive, Ad Strategies',
+          source: 'nexella_knowledge'
+        }
+      }
+    ];
+
+    await this.storeDocumentChunks(stories, { source: 'nexella_knowledge' });
+    return { success: true, count: stories.length };
+  }
+
+  /**
+   * Get Nexella FAQs
+   */
+  getNexellaFAQs() {
+    return [
+      {
+        question: 'How fast is your response time?',
+        answer: 'Our AI Systems respond to leads immediately or we can set a delay to your liking.',
+        category: 'performance'
+      },
+      {
+        question: 'Will you book my appointments to my calendar?',
+        answer: 'Our AI systems will text and or call your leads, follow up, collect information and book your appointments automatically to your calendar.',
+        category: 'features'
+      },
+      {
+        question: 'Can your service ask questions to qualify leads?',
+        answer: 'Yes, we can add a string of questions to qualify leads. You tell us exactly what you need and we will train our AI using a vector database to speak your company\'s language.',
+        category: 'features'
+      },
+      {
+        question: 'What type of support does your team offer?',
+        answer: 'Nexella provides comprehensive support to assist you every step of the way. Our dedicated support team is available to address any questions, concerns, or technical issues you may encounter. You can reach out to us via email at info@nexella.io, through our online chat feature inside the platform and for certain plans via a dedicated slack support channel.',
+        category: 'support'
+      },
+      {
+        question: 'Can I cancel my subscription anytime?',
+        answer: 'Yes, if for any reason you decide Nexella AI is not for you. You are welcome to cancel inside of your account or contact our team.',
+        category: 'billing'
+      },
+      {
+        question: 'Can I integrate Nexella with other tools or platforms?',
+        answer: 'Yes, Nexella offers flexible integration options to seamlessly connect with your existing tools and platforms. Whether it\'s CRM software, helpdesk systems, or other communication channels, you can integrate Nexella to enhance workflow efficiency and maximize productivity.',
+        category: 'integration'
+      },
+      {
+        question: 'Can I make outbound and inbound calls with Nexella AI?',
+        answer: 'Yes. Nexella supports both inbound and outbound call capabilities in all plans.',
+        category: 'features'
+      },
+      {
+        question: 'Do I need to bring my own Twilio and other APIs?',
+        answer: 'No, when you create an account with Nexella AI, the Platform, Voice, LLM, Transcription and Telephony systems are already included. We focus on bringing a centralized solution for lightning speed deployments and best results.',
+        category: 'technical'
+      },
+      {
+        question: 'Can I use my number for outgoing calls with Nexella AI?',
+        answer: 'Yes. Nexella AI allows you to import your Caller ID for free.',
+        category: 'features'
+      },
+      {
+        question: 'Can I use Nexella AI for Sales Calls?',
+        answer: 'Yes, absolutely! Nexella is designed to enhance sales calls by providing AI-powered agents that can engage with customers, answer questions, and assist in closing deals effectively.',
+        category: 'use_cases'
+      },
+      {
+        question: 'Can I use Nexella AI for Customer Support?',
+        answer: 'Certainly! Nexella is ideal for customer support, allowing you to automate responses, handle inquiries, and provide assistance to customers in a timely and efficient manner.',
+        category: 'use_cases'
+      },
+      {
+        question: 'How much does cost? What\'s your pricing?',
+        answer: 'Our pricing ranges from as little as $2,000 to as high as $25,000 depending on the complexity of your setup. Your setup heavily depends on your situation and various factors. Book a call with us so we can determine what plan fits best for you.',
+        category: 'pricing'
+      }
+    ];
+  }
+
   // DOCUMENT PROCESSING HELPERS
 
   async getDocumentFiles(directoryPath) {
