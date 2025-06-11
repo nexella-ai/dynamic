@@ -1,7 +1,7 @@
 // src/services/calendar/CalendarHelpers.js - FIXED WITH PROPER TIMEZONE HANDLING
 const GoogleCalendarService = require('./GoogleCalendarService');
 const GoogleAppointmentScheduleService = require('./GoogleAppointmentScheduleService');
-const AppointmentController = require('../../api/appointments/AppointmentController');
+// Removed AppointmentController - not available in this project
 const fs = require('fs').promises;
 
 let calendarService = null;
@@ -183,21 +183,16 @@ async function autoBookAppointment(customerName, customerEmail, customerPhone, p
         bookingAttempts.set(appointmentKey, Date.now());
         console.log('📌 Marked appointment as booked:', appointmentKey);
         
-        // Store in appointment controller for backup
-        try {
-          await AppointmentController.bookAppointment({
-            customerName,
-            customerEmail,
-            customerPhone,
-            appointmentTime: startTime,
-            discoveryData,
-            googleEventId: bookingResult.eventId,
-            meetingLink: bookingResult.meetingLink
-          });
-          console.log('💾 Appointment saved to database');
-        } catch (dbError) {
-          console.error('⚠️ Database save failed (appointment still booked):', dbError.message);
-        }
+        // Log appointment details for debugging
+        console.log('💾 Appointment details:', {
+          customerName,
+          customerEmail,
+          customerPhone,
+          appointmentTime: startTime,
+          discoveryData,
+          googleEventId: bookingResult.eventId,
+          meetingLink: bookingResult.meetingLink
+        });
         
         // Generate display time for confirmation
         const displayTime = startTime.toLocaleString('en-US', {
