@@ -1,198 +1,330 @@
-// src/services/calendar/CalendarHelpers.js - FIXED WITH PROPER TIMEZONE HANDLING
+// src/services/calendar/CalendarHelpers.js - FIXED WITH ANTI-LOOP BOOKING SYSTEM
 const GoogleCalendarService = require('./GoogleCalendarService');
-const GoogleAppointmentScheduleService = require('./GoogleAppointmentScheduleService');
-// Removed AppointmentController - not available in this project
-const fs = require('fs').promises;
-
-let calendarService = null;
-let appointmentScheduleService = null;
-let isInitialized = false;
-
-// In-memory stores to prevent duplicate bookings
-const bookingAttempts = new Map(); // key: email_datetime, value: timestamp
-const bookingLocks = new Map(); // key: email_datetime, value: true
 
 // Initialize calendar service
+let calendarService = null;
+let calendarInitialized = false;
+
+// CRITICAL: Track booking attempts to prevent duplicate bookings
+const bookingAttempts = new Map(); // appointmentKey -> timestamp
+const bookingLocks = new Set(); // Active booking processes
+
 async function initializeCalendarService() {
-  if (isInitialized) {
-    return { success: true, calendarService, appointmentScheduleService };
-  }
-  
   try {
-    console.log('🔧 Initializing calendar services...');
-    
+    console.log('🔧 Initializing Google Calendar service...');
     calendarService = new GoogleCalendarService();
-    await calendarService.initialize();
-    console.log('✅ Google Calendar service initialized');
+    calendarInitialized = await calendarService.initialize();
     
-    appointmentScheduleService = new GoogleAppointmentScheduleService();
-    await appointmentScheduleService.initialize();
-    console.log('✅ Google Appointment Schedule service initialized');
-    
-    isInitialized = true;
-    return { success: true, calendarService, appointmentScheduleService };
-    
-  } catch (error) {
-    console.error('❌ Calendar service initialization failed:', error.message);
-    isInitialized = false;
-    return { success: false, error: error.message };
-  }
-}
-
-// Check if calendar is initialized
-function isCalendarInitialized() {
-  return isInitialized && calendarService !== null;
-}
-
-// Get available time slots for a given date
-async function getAvailableTimeSlots(date) {
-  if (!calendarService) {
-    await initializeCalendarService();
-  }
-  
-  if (!calendarService) {
-    console.error('❌ Calendar service not available');
-    return [];
-  }
-  
-  try {
-    const slots = await calendarService.getAvailableSlots(date);
-    return slots;
-  } catch (error) {
-    console.error('❌ Error getting available slots:', error.message);
-    return [];
-  }
-}
-
-// Generate natural availability response
-async function generateAvailabilityResponse(date) {
-  try {
-    const slots = await getAvailableTimeSlots(date);
-    
-    if (!slots || slots.length === 0) {
-      return "I don't see any available times for that day. Would you like to check another day?";
-    }
-    
-    const timeStrings = slots.slice(0, 3).map(slot => slot.displayTime);
-    
-    if (timeStrings.length === 1) {
-      return `I have ${timeStrings[0]} available. Does that work for you?`;
-    } else if (timeStrings.length === 2) {
-      return `I have ${timeStrings[0]} or ${timeStrings[1]} available. Which would you prefer?`;
+    if (calendarInitialized) {
+      console.log('✅ Google Calendar service ready - REAL calendar mode');
+      const calendarInfo = calendarService.getCalendarInfo();
+      console.log('📅 Calendar Info:', calendarInfo);
     } else {
-      return `I have a few times available: ${timeStrings[0]}, ${timeStrings[1]}, or ${timeStrings[2]}. Which works best for you?`;
+      throw new Error('Calendar service failed to initialize');
     }
+    
+    return calendarInitialized;
   } catch (error) {
-    console.error('❌ Error generating availability response:', error.message);
-    return "Let me check my calendar and get back to you with available times.";
+    console.error('❌ Calendar initialization failed:', error.message);
+    throw error;
   }
 }
 
-// CRITICAL FIX: Auto-book appointment with duplicate prevention and proper timezone handling
-async function autoBookAppointment(customerName, customerEmail, customerPhone, preferredDateTime, discoveryData = {}) {
+// ENHANCED: Check availability with robust error handling
+async function checkAvailability(startTime, endTime) {
   try {
-    console.log('🎯 AUTO-BOOKING APPOINTMENT WITH CALENDAR');
-    console.log('📧 Customer:', customerEmail);
-    console.log('📅 Requested time:', preferredDateTime);
+    console.log('🔍 Checking calendar availability...');
+    console.log('⏰ Start time:', startTime);
+    console.log('⏰ End time:', endTime);
     
-    // CRITICAL: Initialize if not already
+    if (!calendarInitialized || !calendarService?.isInitialized()) {
+      throw new Error('Calendar service not available - cannot check availability');
+    }
+    
+    // Add timeout for availability check
+    const availabilityPromise = calendarService.isSlotAvailable(startTime, endTime);
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Availability check timeout')), 10000)
+    );
+    
+    const available = await Promise.race([availabilityPromise, timeoutPromise]);
+    console.log('📊 Real calendar result:', available);
+    return available;
+  } catch (error) {
+    console.error('❌ Error checking calendar availability:', error.message);
+    throw error;
+  }
+}
+
+// FIXED: Get available time slots with proper business hours filtering
+async function getAvailableTimeSlots(date) {
+  try {
+    console.log('📅 Getting available calendar slots for:', date, '(Arizona MST)');
+    
     if (!calendarService) {
-      console.log('🔧 Calendar not initialized, initializing now...');
-      const initResult = await initializeCalendarService();
-      if (!initResult.success) {
-        console.error('❌ Failed to initialize calendar:', initResult.error);
-        return {
-          success: false,
-          error: 'Calendar service unavailable',
-          message: 'Unable to book appointment at this time'
-        };
+      throw new Error('No calendar service initialized');
+    }
+    
+    if (!calendarInitialized) {
+      throw new Error('Calendar service not properly initialized');
+    }
+    
+    console.log('📅 Using REAL Google Calendar');
+    const availableSlots = await calendarService.getAvailableSlots(date);
+    console.log(`📋 Retrieved ${availableSlots.length} real calendar slots from service`);
+    
+    console.log(`✅ ${availableSlots.length} slots available (business hours already filtered by service)`);
+    return availableSlots;
+    
+  } catch (error) {
+    console.error('❌ Error getting calendar slots:', error.message);
+    throw error;
+  }
+}
+
+// Get formatted available slots with proper Arizona MST display
+async function getFormattedAvailableSlots(startDate = null, daysAhead = 7) {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const searchStart = startDate ? new Date(startDate) : today;
+    
+    console.log(`📅 Getting calendar slots starting from: ${searchStart.toDateString()} (Arizona MST)`);
+    
+    const allAvailableSlots = [];
+    
+    for (let i = 0; i < daysAhead; i++) {
+      const checkDate = new Date(searchStart);
+      checkDate.setDate(searchStart.getDate() + i);
+      
+      // Skip past dates
+      if (checkDate < today) {
+        continue;
+      }
+      
+      // Skip weekends
+      const dayOfWeek = checkDate.getDay();
+      if (dayOfWeek === 0 || dayOfWeek === 6) {
+        continue;
+      }
+      
+      try {
+        console.log(`🔍 Checking calendar availability for date: ${checkDate.toDateString()}`);
+        const slots = await getAvailableTimeSlots(checkDate);
+        
+        if (slots.length > 0) {
+          const dayName = checkDate.toLocaleDateString('en-US', { 
+            weekday: 'long',
+            month: 'long', 
+            day: 'numeric',
+            timeZone: 'America/Phoenix'
+          });
+          
+          const limitedSlots = slots.slice(0, 4).map(slot => ({
+            ...slot,
+            displayTime: slot.displayTime
+          }));
+          
+          allAvailableSlots.push({
+            date: checkDate.toDateString(),
+            dayName: dayName,
+            slots: limitedSlots,
+            formattedSlots: limitedSlots.map(slot => slot.displayTime).join(', ')
+          });
+          
+          console.log(`✅ Added ${limitedSlots.length} calendar slots for ${dayName}: ${limitedSlots.map(s => s.displayTime).join(', ')} Arizona MST`);
+        } else {
+          console.log(`📅 No calendar availability found for ${checkDate.toDateString()}`);
+        }
+      } catch (dayError) {
+        console.error(`❌ Error getting calendar slots for ${checkDate.toDateString()}:`, dayError.message);
+        throw dayError;
       }
     }
     
-    // ANTI-DUPLICATE: Check if we've attempted this booking recently
-    const appointmentKey = `${customerEmail}_${preferredDateTime.toISOString()}`;
+    console.log(`✅ Found calendar slots across ${allAvailableSlots.length} days`);
+    return allAvailableSlots;
     
-    // Check if booking is locked (in progress)
-    if (bookingLocks.has(appointmentKey)) {
-      console.log('🔒 BOOKING ALREADY IN PROGRESS - preventing duplicate');
+  } catch (error) {
+    console.error('❌ Error getting formatted calendar slots:', error.message);
+    throw error;
+  }
+}
+
+// Generate availability response with proper Arizona MST times
+async function generateAvailabilityResponse() {
+  try {
+    console.log('🤖 Generating availability response from calendar...');
+    
+    const availableSlots = await getFormattedAvailableSlots();
+    console.log(`📊 Got ${availableSlots.length} days with calendar availability`);
+    
+    if (availableSlots.length === 0) {
+      return "I don't have any availability in the next week. Let me check for times the following week.";
+    }
+    
+    if (availableSlots.length === 1) {
+      const day = availableSlots[0];
+      return `I have availability on ${day.dayName} at ${day.formattedSlots}. Which time works best for you?`;
+    }
+    
+    if (availableSlots.length === 2) {
+      const day1 = availableSlots[0];
+      const day2 = availableSlots[1];
+      return `I have a few options available. On ${day1.dayName}, I have ${day1.formattedSlots}. Or on ${day2.dayName}, I have ${day2.formattedSlots}. What works better for you?`;
+    }
+    
+    // 3 or more days available
+    let response = "I have several times available this week. ";
+    const daysToShow = availableSlots.slice(0, 3);
+    
+    daysToShow.forEach((day, index) => {
+      if (index === 0) {
+        response += `${day.dayName} at ${day.formattedSlots}`;
+      } else if (index === daysToShow.length - 1) {
+        response += `, or ${day.dayName} at ${day.formattedSlots}`;
+      } else {
+        response += `, ${day.dayName} at ${day.formattedSlots}`;
+      }
+    });
+    response += ". Which day and time would work best for you?";
+    
+    console.log(`✅ Generated calendar availability response: ${response}`);
+    return response;
+    
+  } catch (error) {
+    console.error('❌ Error generating calendar availability response:', error.message);
+    throw error;
+  }
+}
+
+// COMPLETELY REWRITTEN: Auto-booking function with COMPREHENSIVE anti-loop system
+async function autoBookAppointment(customerName, customerEmail, customerPhone, preferredDateTime, discoveryData = {}) {
+  try {
+    console.log('🔄 Starting ANTI-LOOP appointment booking process...');
+    console.log('👤 Customer:', customerName, customerEmail);
+    console.log('📅 Requested time:', preferredDateTime);
+    
+    // CRITICAL VALIDATION: Check inputs first
+    if (!customerEmail || customerEmail === 'prospect@example.com') {
+      console.log('❌ Invalid customer email for booking');
       return {
         success: false,
-        error: 'Booking already in progress',
-        message: 'Your appointment is being processed'
+        error: 'Invalid customer email',
+        message: 'Customer email required for booking'
+      };
+    }
+
+    if (!calendarInitialized || !calendarService?.isInitialized()) {
+      console.log('❌ Calendar service not available');
+      return {
+        success: false,
+        error: 'Calendar service unavailable',
+        message: 'Calendar system not properly initialized'
+      };
+    }
+
+    // ANTI-DUPLICATE: Create unique appointment key
+    const appointmentKey = `${customerEmail}_${preferredDateTime.toISOString()}`;
+    const now = Date.now();
+    
+    // Check for recent booking attempts (30 second cooldown)
+    const lastAttempt = bookingAttempts.get(appointmentKey);
+    if (lastAttempt && (now - lastAttempt) < 30000) {
+      console.log('🚫 DUPLICATE BOOKING ATTEMPT BLOCKED - Recent attempt detected');
+      return {
+        success: false,
+        error: 'Duplicate booking attempt',
+        message: 'Booking already in progress for this time slot'
       };
     }
     
-    // Check if we've booked this recently
-    if (bookingAttempts.has(appointmentKey)) {
-      const lastAttempt = bookingAttempts.get(appointmentKey);
-      const timeSince = Date.now() - lastAttempt;
-      if (timeSince < 30000) { // 30 seconds
-        console.log('⚠️ DUPLICATE BOOKING ATTEMPT DETECTED - already booked');
-        return {
-          success: true,
-          eventId: 'duplicate_prevented',
-          message: 'Your appointment has already been booked!',
-          displayTime: preferredDateTime.toLocaleString('en-US', { 
-            timeZone: 'America/Phoenix',
-            weekday: 'long',
-            month: 'long',
-            day: 'numeric',
-            hour: 'numeric',
-            minute: '2-digit',
-            hour12: true
-          })
-        };
-      }
+    // Check if this booking is currently being processed
+    if (bookingLocks.has(appointmentKey)) {
+      console.log('🚫 CONCURRENT BOOKING ATTEMPT BLOCKED - Already processing');
+      return {
+        success: false,
+        error: 'Booking in progress',
+        message: 'This appointment is already being processed'
+      };
     }
     
-    // LOCK this booking to prevent concurrent attempts
-    bookingLocks.set(appointmentKey, true);
+    // LOCK THIS BOOKING PROCESS
+    bookingLocks.add(appointmentKey);
+    bookingAttempts.set(appointmentKey, now);
+    
     console.log('🔒 BOOKING LOCKED for:', appointmentKey);
     
     try {
-      // Prepare appointment details
+      // Clean up old attempts (older than 5 minutes)
+      for (const [key, timestamp] of bookingAttempts.entries()) {
+        if (now - timestamp > 300000) { // 5 minutes
+          bookingAttempts.delete(key);
+        }
+      }
+
       const startTime = new Date(preferredDateTime);
       const endTime = new Date(startTime.getTime() + 60 * 60 * 1000); // 1 hour
+
+      console.log('🔍 Checking slot availability with timeout...');
       
+      // ROBUST: Check availability with timeout
+      let isAvailable;
+      try {
+        const availabilityCheck = await Promise.race([
+          checkAvailability(startTime.toISOString(), endTime.toISOString()),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Availability check timeout')), 10000))
+        ]);
+        isAvailable = availabilityCheck;
+      } catch (availabilityError) {
+        console.error('❌ Availability check failed:', availabilityError.message);
+        return {
+          success: false,
+          error: 'Availability check failed',
+          message: 'Unable to verify time slot availability'
+        };
+      }
+
+      if (!isAvailable) {
+        console.log('❌ Time slot not available');
+        return {
+          success: false,
+          error: 'Slot unavailable',
+          message: 'That time slot is no longer available'
+        };
+      }
+
+      // Create appointment details
       const appointmentDetails = {
-        summary: `Discovery Call with ${customerName}`,
-        description: `Discovery call with ${customerName}\nEmail: ${customerEmail}\nPhone: ${customerPhone}\n\nDiscovery Information:\n${JSON.stringify(discoveryData, null, 2)}`,
-        startTime: startTime,
-        endTime: endTime,
-        customerEmail: customerEmail,
-        customerPhone: customerPhone,
-        customerName: customerName
-      };
-      
-      console.log('📋 Booking details:', {
-        customerName,
-        customerEmail,
+        summary: 'Nexella AI Consultation Call',
+        description: `Discovery call with ${customerName}\n\nCustomer Information:\nEmail: ${customerEmail}\nPhone: ${customerPhone}\n\nDiscovery Notes:\n${Object.entries(discoveryData).map(([key, value]) => `${key}: ${value}`).join('\n')}`,
         startTime: startTime.toISOString(),
-        arizonaTime: startTime.toLocaleString('en-US', { timeZone: 'America/Phoenix' })
-      });
+        endTime: endTime.toISOString(),
+        attendeeEmail: customerEmail,
+        attendeeName: customerName
+      };
+
+      console.log('📅 Creating calendar event with timeout...');
       
-      // Create the calendar event
-      const bookingResult = await calendarService.createAppointment(appointmentDetails);
-      
+      // ROBUST: Create event with timeout and retry logic
+      let bookingResult;
+      try {
+        bookingResult = await Promise.race([
+          calendarService.createEvent(appointmentDetails),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Calendar booking timeout')), 15000))
+        ]);
+      } catch (bookingError) {
+        console.error('❌ Calendar booking failed:', bookingError.message);
+        
+        return {
+          success: false,
+          error: bookingError.message,
+          message: 'Failed to create calendar appointment'
+        };
+      }
+
       if (bookingResult.success) {
-        console.log('✅ APPOINTMENT BOOKED SUCCESSFULLY!');
-        console.log('📅 Event ID:', bookingResult.eventId);
-        console.log('🔗 Meeting Link:', bookingResult.meetingLink);
-        
-        // Mark this appointment as booked
-        bookingAttempts.set(appointmentKey, Date.now());
-        console.log('📌 Marked appointment as booked:', appointmentKey);
-        
-        // Log appointment details for debugging
-        console.log('💾 Appointment details:', {
-          customerName,
-          customerEmail,
-          customerPhone,
-          appointmentTime: startTime,
-          discoveryData,
-          googleEventId: bookingResult.eventId,
-          meetingLink: bookingResult.meetingLink
-        });
+        console.log('✅ APPOINTMENT BOOKING SUCCESSFUL!');
         
         // Generate display time for confirmation
         const displayTime = startTime.toLocaleString('en-US', {
@@ -267,14 +399,14 @@ async function detectAndBookAppointment(userMessage, customerData, discoveryData
   try {
     console.log('🕐 DETECTING APPOINTMENT BOOKING REQUEST:', userMessage);
     
-    // Enhanced patterns to detect appointment requests - FIXED time parsing
+    // Enhanced patterns to detect appointment requests
     const patterns = [
-      // "Wednesday at 10 AM" or "June 11th at 10 AM"
-      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|june\s+\d{1,2}(?:th|st|nd|rd)?)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?/i,
-      // "10 AM Wednesday" or "10 AM on June 11th"
-      /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|june\s+\d{1,2}(?:th|st|nd|rd)?)/i,
-      // "Wednesday 10" or "June 11th 10"
-      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|june\s+\d{1,2}(?:th|st|nd|rd)?)\s+(\d{1,2})\b/i
+      // "Wednesday at 8 AM" or "June 11th at 8 AM"
+      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|june\s+\d{1,2}(?:th|st|nd|rd)?)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
+      // "8 AM Wednesday" or "8 AM on June 11th"
+      /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|june\s+\d{1,2}(?:th|st|nd|rd)?)/i,
+      // "Wednesday 8" or "June 11th 8"
+      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|june\s+\d{1,2}(?:th|st|nd|rd)?)\s+(\d{1,2})\b/i
     ];
 
     for (let i = 0; i < patterns.length; i++) {
@@ -288,7 +420,7 @@ async function detectAndBookAppointment(userMessage, customerData, discoveryData
           console.log('📅 PARSED APPOINTMENT DETAILS:', appointmentDetails);
           
           // Validate business hours
-          if (!appointmentDetails.isBusinessHours) {
+          if (appointmentDetails.hour < 8 || appointmentDetails.hour >= 16) {
             return {
               success: false,
               message: `I'd love to schedule you for ${appointmentDetails.timeString}, but our business hours are 8 AM to 4 PM Arizona time. Would you like to choose a time between 8 AM and 4 PM instead?`
@@ -307,7 +439,7 @@ async function detectAndBookAppointment(userMessage, customerData, discoveryData
           if (bookingResult.success) {
             return {
               success: true,
-              message: `Perfect! I've booked your consultation for ${appointmentDetails.dayName} at ${appointmentDetails.timeString} Arizona time. You'll receive a calendar invitation at ${customerData.customerEmail} shortly!`,
+              message: `Perfect! I've booked your consultation for ${appointmentDetails.dayName} at ${appointmentDetails.timeString} Arizona time. You'll receive a calendar invitation shortly!`,
               bookingDetails: bookingResult
             };
           } else {
@@ -331,135 +463,94 @@ async function detectAndBookAppointment(userMessage, customerData, discoveryData
   }
 }
 
-// FIXED: Parse appointment match into structured data with proper timezone handling
+// Parse appointment match into structured data
 function parseAppointmentMatch(match, patternIndex) {
   let day, hour, minutes = 0, period = 'am';
   
   try {
     switch (patternIndex) {
-      case 0: // "Wednesday at 10am" or "June 11th at 10am"
+      case 0: // "Wednesday at 8am" or "June 11th at 8am"
         day = match[1];
         hour = parseInt(match[2]);
         minutes = parseInt(match[3] || '0');
         period = match[4] || 'am';
         break;
-      case 1: // "10am Wednesday" or "10am on June 11th"
+      case 1: // "8am Wednesday" or "8am on June 11th"
         hour = parseInt(match[1]);
         minutes = parseInt(match[2] || '0');
         period = match[3] || 'am';
         day = match[4];
         break;
-      case 2: // "Wednesday 10" or "June 11th 10"
+      case 2: // "Wednesday 8" or "June 11th 8"
         day = match[1];
         hour = parseInt(match[2]);
-        // For ambiguous times, assume AM for 8-11, PM for 1-4
-        if (hour >= 8 && hour <= 11) {
-          period = 'am';
-        } else if (hour >= 1 && hour <= 4) {
-          period = 'pm';
-        } else {
-          period = 'am'; // Default to AM
-        }
+        // Assume AM for morning hours, PM for afternoon
+        period = hour >= 8 && hour <= 11 ? 'am' : (hour >= 1 && hour <= 4 ? 'pm' : 'am');
         break;
     }
 
-    // FIXED: Proper 12-hour to 24-hour conversion
-    let hour24 = hour;
-    period = period.toLowerCase();
-    
-    // Handle period variations (am, a.m., AM, etc.)
-    if (period.includes('p')) {
-      // PM times
-      if (hour !== 12) {
-        hour24 = hour + 12;
-      }
-      // 12 PM stays as 12
-    } else {
-      // AM times
-      if (hour === 12) {
-        hour24 = 0; // 12 AM is midnight
-      }
-      // Other AM times stay the same
+    // Convert to 24-hour format
+    if (period.toLowerCase().includes('p') && hour !== 12) {
+      hour += 12;
+    } else if (period.toLowerCase().includes('a') && hour === 12) {
+      hour = 0;
     }
 
-    // Validate business hours (8 AM - 4 PM = 8:00 - 16:00)
-    const isBusinessHours = hour24 >= 8 && hour24 < 16;
-
-    // Calculate target date in Arizona timezone
-    const targetDate = calculateTargetDateArizona(day, hour24, minutes);
+    // Calculate target date
+    const targetDate = calculateTargetDate(day, hour, minutes);
     
-    // Format display time
-    const displayHour = hour24 > 12 ? hour24 - 12 : hour24 === 0 ? 12 : hour24;
-    const displayPeriod = hour24 >= 12 ? 'PM' : 'AM';
+    const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
+    const displayPeriod = hour >= 12 ? 'PM' : 'AM';
     
-    const result = {
+    return {
       dateTime: targetDate,
       dayName: day,
       timeString: `${displayHour}:${minutes.toString().padStart(2, '0')} ${displayPeriod}`,
-      hour: hour24,
-      isBusinessHours: isBusinessHours,
+      hour: hour,
       originalMatch: match[0]
     };
-    
-    console.log('✅ APPOINTMENT PARSING RESULT:', result);
-    return result;
-    
   } catch (error) {
     console.error('❌ Error parsing appointment match:', error.message);
     return null;
   }
 }
 
-// FIXED: Calculate target date properly in Arizona timezone
-function calculateTargetDateArizona(day, hour, minutes) {
-  try {
-    // Get current date/time
-    const now = new Date();
-    
-    // Create target date
-    let targetDate = new Date(now);
-    
-    // Handle relative days
-    if (day.toLowerCase() === 'tomorrow') {
-      targetDate.setDate(targetDate.getDate() + 1);
-    } else if (day.toLowerCase() === 'today') {
-      // Keep today
-    } else if (day.toLowerCase().includes('june')) {
-      // Handle specific dates like "June 11th"
-      const dateMatch = day.match(/june\s+(\d{1,2})/i);
-      if (dateMatch) {
-        const dayOfMonth = parseInt(dateMatch[1]);
-        targetDate.setMonth(5); // June is month 5 (0-indexed)
-        targetDate.setDate(dayOfMonth);
-      }
-    } else {
-      // Handle day names
-      const daysOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-      const dayIndex = daysOfWeek.indexOf(day.toLowerCase());
-      if (dayIndex !== -1) {
-        const currentDay = targetDate.getDay();
-        let daysToAdd = dayIndex - currentDay;
-        if (daysToAdd <= 0) daysToAdd += 7; // Next occurrence
-        targetDate.setDate(targetDate.getDate() + daysToAdd);
-      }
+// Calculate target date for appointment
+function calculateTargetDate(day, hour, minutes) {
+  // CRITICAL: Create date in Arizona timezone context
+  const now = new Date();
+  
+  // Get current time in Arizona
+  const arizonaNow = new Date(now.toLocaleString("en-US", {timeZone: "America/Phoenix"}));
+  
+  let targetDate = new Date(arizonaNow);
+  
+  if (day === 'tomorrow') {
+    targetDate.setDate(targetDate.getDate() + 1);
+  } else if (day === 'today') {
+    // Keep today
+  } else {
+    // Handle day names
+    const daysOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const dayIndex = daysOfWeek.indexOf(day.toLowerCase());
+    if (dayIndex !== -1) {
+      const currentDay = targetDate.getDay();
+      let daysToAdd = dayIndex - currentDay;
+      if (daysToAdd <= 0) daysToAdd += 7; // Next week
+      targetDate.setDate(targetDate.getDate() + daysToAdd);
     }
-    
-    // Set the time (hour is already in 24-hour format)
-    targetDate.setHours(hour, minutes, 0, 0);
-    
-    // Log the calculation for debugging
-    console.log('📅 Target date calculation:');
-    console.log('   Input:', `${day} at ${hour}:${minutes.toString().padStart(2, '0')}`);
-    console.log('   Local time:', targetDate.toString());
-    console.log('   Arizona time:', targetDate.toLocaleString('en-US', { timeZone: 'America/Phoenix' }));
-    console.log('   UTC time:', targetDate.toISOString());
-    
-    return targetDate;
-    
-  } catch (error) {
-    console.error('❌ Error calculating target date:', error.message);
-    throw error;
   }
+  
+  // Set the time
+  targetDate.setHours(hour, minutes, 0, 0);
+  
+  console.log('📅 Target date calculation:');
+  console.log('   Day requested:', day);
+  console.log('   Time requested:', `${hour}:${minutes.toString().padStart(2, '0')}`);
+  console.log('   Arizona time:', targetDate.toLocaleString('en-US', { timeZone: 'America/Phoenix' }));
+  console.log('   UTC time:', targetDate.toISOString());
+  
+  return targetDate;
 }
 
 // Parse user's scheduling preference with Arizona MST awareness
@@ -537,39 +628,122 @@ function handleSchedulingPreference(userMessage) {
       };
     } else {
       const daysOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-      const targetDayIndex = daysOfWeek.indexOf(preferredDay);
-      const currentDayIndex = targetDate.getDay();
+      const requestedDayIndex = daysOfWeek.findIndex(d => d === preferredDay);
       
-      let daysToAdd = targetDayIndex - currentDayIndex;
-      if (daysToAdd <= 0) {
-        daysToAdd += 7;
+      if (requestedDayIndex !== -1) {
+        const currentDay = targetDate.getDay();
+        let daysToAdd = requestedDayIndex - currentDay;
+        
+        if (daysToAdd <= 0) {
+          daysToAdd += 7;
+        }
+        
+        targetDate.setDate(targetDate.getDate() + daysToAdd);
+        
+        return {
+          dayName: preferredDay,
+          date: targetDate,
+          isSpecific: true,
+          timePreference: timeMatch ? timeMatch[0] : 'morning',
+          fullPreference: userMessage,
+          timezone: 'America/Phoenix'
+        };
       }
-      
-      targetDate.setDate(targetDate.getDate() + daysToAdd);
-      
-      return {
-        dayName: preferredDay,
-        date: targetDate,
-        isSpecific: true,
-        timePreference: timeMatch ? timeMatch[0] : 'morning',
-        fullPreference: userMessage,
-        timezone: 'America/Phoenix'
-      };
     }
   }
   
   return null;
 }
 
-// Clean up old booking attempts periodically
+// Utility functions with Arizona MST awareness
+function formatDateRange(startDate, endDate) {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  
+  if (start.toDateString() === end.toDateString()) {
+    return `${start.toLocaleDateString('en-US', { 
+      weekday: 'long', 
+      month: 'long', 
+      day: 'numeric',
+      timeZone: 'America/Phoenix'
+    })} from ${start.toLocaleTimeString('en-US', { 
+      hour: 'numeric', 
+      minute: '2-digit', 
+      hour12: true,
+      timeZone: 'America/Phoenix'
+    })} to ${end.toLocaleTimeString('en-US', { 
+      hour: 'numeric', 
+      minute: '2-digit', 
+      hour12: true,
+      timeZone: 'America/Phoenix'
+    })} Arizona time`;
+  } else {
+    return `${start.toLocaleDateString('en-US', { 
+      weekday: 'long', 
+      month: 'long', 
+      day: 'numeric',
+      timeZone: 'America/Phoenix'
+    })} at ${start.toLocaleTimeString('en-US', { 
+      hour: 'numeric', 
+      minute: '2-digit', 
+      hour12: true,
+      timeZone: 'America/Phoenix'
+    })} Arizona time`;
+  }
+}
+
+// Business hours check for Arizona MST
+function isBusinessHours(dateTime) {
+  const date = new Date(dateTime);
+  
+  // Convert to Arizona time for checking
+  const arizonaTime = new Date(date.toLocaleString("en-US", {timeZone: "America/Phoenix"}));
+  const dayOfWeek = arizonaTime.getDay(); // 0 = Sunday, 6 = Saturday
+  const hour = arizonaTime.getHours();
+  
+  // Monday to Friday (1-5), 8 AM to 4 PM Arizona time
+  return dayOfWeek >= 1 && dayOfWeek <= 5 && hour >= 8 && hour < 16;
+}
+
+function getNextBusinessDay(fromDate = new Date()) {
+  const date = new Date(fromDate);
+  date.setDate(date.getDate() + 1);
+  
+  while (date.getDay() === 0 || date.getDay() === 6) { // Skip weekends
+    date.setDate(date.getDate() + 1);
+  }
+  
+  return date;
+}
+
+// Getters
+function getCalendarService() {
+  return calendarService;
+}
+
+function isCalendarInitialized() {
+  return calendarInitialized;
+}
+
+// Clean up booking attempts and locks periodically
 setInterval(() => {
   const now = Date.now();
   let cleaned = 0;
   
+  // Clean up old booking attempts (older than 5 minutes)
   for (const [key, timestamp] of bookingAttempts.entries()) {
     if (now - timestamp > 300000) { // 5 minutes
       bookingAttempts.delete(key);
       cleaned++;
+    }
+  }
+  
+  // Clean up any stale locks (older than 2 minutes - should never happen)
+  for (const key of bookingLocks) {
+    const timestamp = bookingAttempts.get(key);
+    if (!timestamp || now - timestamp > 120000) { // 2 minutes
+      bookingLocks.delete(key);
+      console.log('🧹 Cleaned up stale booking lock:', key);
     }
   }
   
@@ -578,115 +752,28 @@ setInterval(() => {
   }
 }, 60000); // Run every minute
 
-// Additional helper functions that were in the original file
-
-// Format date range for display
-function formatDateRange(startDate, endDate) {
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-  
-  const options = {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-    timeZone: 'America/Phoenix'
-  };
-  
-  const startStr = start.toLocaleString('en-US', options);
-  const endTime = end.toLocaleString('en-US', { 
-    hour: 'numeric', 
-    minute: '2-digit', 
-    hour12: true,
-    timeZone: 'America/Phoenix'
-  });
-  
-  return `${startStr} - ${endTime} Arizona time`;
-}
-
-// Check if a specific slot is within business hours
-function isWithinBusinessHours(dateTime) {
-  const date = new Date(dateTime);
-  const hour = date.getHours();
-  const dayOfWeek = date.getDay();
-  
-  // Monday to Friday (1-5), 8 AM to 4 PM
-  return dayOfWeek >= 1 && dayOfWeek <= 5 && hour >= 8 && hour < 16;
-}
-
-// Get the next available business day
-function getNextBusinessDay(fromDate = new Date()) {
-  const date = new Date(fromDate);
-  date.setDate(date.getDate() + 1);
-  
-  // Skip weekends
-  while (date.getDay() === 0 || date.getDay() === 6) {
-    date.setDate(date.getDate() + 1);
-  }
-  
-  return date;
-}
-
-// Parse time preference (morning, afternoon, etc.)
-function parseTimePreference(preference) {
-  const pref = preference.toLowerCase();
-  
-  if (pref.includes('morning') || pref.includes('am')) {
-    return { start: 8, end: 12 }; // 8 AM - 12 PM
-  } else if (pref.includes('afternoon') || pref.includes('pm')) {
-    return { start: 13, end: 16 }; // 1 PM - 4 PM
-  } else if (pref.includes('early')) {
-    return { start: 8, end: 10 }; // 8 AM - 10 AM
-  } else if (pref.includes('late')) {
-    return { start: 14, end: 16 }; // 2 PM - 4 PM
-  } else {
-    return { start: 8, end: 16 }; // All business hours
-  }
-}
-
-// Get formatted slots for a specific day
-async function getFormattedSlotsForDay(date) {
-  try {
-    const slots = await getAvailableTimeSlots(date);
-    
-    return slots.map(slot => ({
-      time: new Date(slot.startTime).toLocaleString('en-US', {
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-        timeZone: 'America/Phoenix'
-      }),
-      dateTime: slot.startTime,
-      available: true
-    }));
-  } catch (error) {
-    console.error('Error getting formatted slots:', error.message);
-    return [];
-  }
-}
-
-// Export all functions
+// Export functions and debug info
 module.exports = {
-  // Main functions
   initializeCalendarService,
-  isCalendarInitialized,
+  checkAvailability,
   getAvailableTimeSlots,
+  getFormattedAvailableSlots,
   generateAvailabilityResponse,
   autoBookAppointment,
   detectAndBookAppointment,
   suggestAlternativeTime,
   handleSchedulingPreference,
+  formatDateRange,
+  isBusinessHours,
+  getNextBusinessDay,
+  getCalendarService,
+  isCalendarInitialized,
+  
+  // Export for debugging/testing
+  bookingAttempts,
+  bookingLocks,
   
   // Helper functions
-  formatDateRange,
-  isWithinBusinessHours,
-  getNextBusinessDay,
-  parseTimePreference,
-  getFormattedSlotsForDay,
-  
-  // For debugging/monitoring
-  bookingAttempts,
-  bookingLocks
+  parseAppointmentMatch,
+  calculateTargetDate
 };
