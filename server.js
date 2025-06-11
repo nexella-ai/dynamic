@@ -279,6 +279,46 @@ wss.on('connection', async (ws, req) => {
     
   } catch (error) {
     console.error('❌ Error creating WebSocket handler:', error.message);
+
+    // Add this after the calendar initialization section in server.js (around line 283)
+
+  // Auto-ingest Nexella knowledge base on startup
+  if (config.ENABLE_MEMORY && ingestionService) {
+    console.log('📚 Checking Nexella knowledge base...');
+    
+    try {
+      // Check current memory stats
+      const memoryService = ingestionService.memoryService;
+      const stats = await memoryService.getMemoryStats();
+      console.log('📊 Current Pinecone stats:', stats);
+      
+      // Check if Nexella knowledge is already ingested
+      const nexellaKnowledge = await memoryService.index.query({
+        vector: new Array(3072).fill(0),
+        filter: { source: { $eq: 'nexella_knowledge' } },
+        topK: 1,
+        includeMetadata: true
+      });
+      
+      if (!nexellaKnowledge.matches || nexellaKnowledge.matches.length === 0) {
+        console.log('📥 Ingesting Nexella knowledge base for the first time...');
+        
+        const result = await ingestionService.ingestNexellaKnowledgeBase();
+        if (result.success) {
+          console.log('✅ Nexella knowledge base ingested successfully!');
+          console.log(`📚 Total items stored: ${result.totalItems}`);
+        } else {
+          console.error('❌ Failed to ingest Nexella knowledge base:', result.error);
+        }
+      } else {
+        console.log('✅ Nexella knowledge base already exists in Pinecone');
+        console.log(`📚 Found ${nexellaKnowledge.matches.length} Nexella knowledge items`);
+      }
+      
+    } catch (error) {
+      console.error('❌ Error checking/ingesting Nexella knowledge:', error.message);
+    }
+  }
     
     // Try fallback to regular handler
     try {
