@@ -72,53 +72,55 @@ class DiscoveryService {
       case 1: // Industry/Business
         if (answer.includes('solar')) {
           return "Solar industry, that's awesome! Clean energy is the future.";
-        } else if (answer.includes('real estate') || answer.includes('property')) {
-          return "Real estate, excellent! That's a great market.";
-        } else if (answer.includes('healthcare') || answer.includes('medical')) {
-          return "Healthcare, wonderful! Such important work.";
+        } else if (answer.includes('real estate')) {
+          return "Real estate, great! Such a dynamic market.";
         } else if (answer.includes('restaurant') || answer.includes('food')) {
-          return "Food industry, nice! Everyone loves good food.";
-        } else if (answer.includes('fitness') || answer.includes('gym')) {
-          return "Fitness industry, fantastic! Health is so important.";
-        } else if (answer.includes('e-commerce') || answer.includes('online')) {
-          return "E-commerce, perfect! Online business is booming.";
+          return "Food service, wonderful! Everyone loves good food.";
+        } else if (answer.includes('consulting') || answer.includes('agency')) {
+          return "Consulting, perfect! Business expertise is so valuable.";
         } else {
-          return `The ${answer.split(' ')[0]} industry, that's great.`;
+          return "That sounds interesting!";
         }
         
       case 2: // Main product/service
-        if (answer.includes('solar')) {
-          return "Solar installations, excellent choice for the market.";
-        } else if (answer.includes('coaching') || answer.includes('consulting')) {
-          return "Coaching services, that's valuable work.";
-        } else if (answer.includes('software') || answer.includes('app')) {
-          return "Software solutions, perfect for today's market.";
+        if (answer.includes('software') || answer.includes('app')) {
+          return "Software solutions, that's excellent.";
+        } else if (answer.includes('service')) {
+          return "Service-based business, fantastic.";
+        } else if (answer.includes('product')) {
+          return "Product-focused, that's great.";
         } else {
-          return "Got it, that sounds like a great service.";
+          return "Sounds like a great offering.";
         }
         
       case 3: // Running ads
-        if (answer.includes('yes') || answer.includes('google') || answer.includes('facebook') || answer.includes('meta')) {
-          return "Great, so you're already running ads. That's smart.";
+        if (answer.includes('facebook') || answer.includes('meta')) {
+          return "Facebook ads, they can be really effective.";
+        } else if (answer.includes('google') || answer.includes('ppc')) {
+          return "Google ads, great for capturing intent.";
+        } else if (answer.includes('yes')) {
+          return "Good, advertising is important for growth.";
         } else if (answer.includes('no') || answer.includes('not')) {
-          return "No ads currently, that's totally fine.";
+          return "No ads currently, that's okay.";
         } else {
-          return "Got it, thanks for that info.";
+          return "I see, that's helpful to know.";
         }
         
-      case 4: // Using CRM
-        if (answer.includes('gohighlevel') || answer.includes('go high level')) {
-          return "GoHighLevel, excellent choice! That's a powerful platform.";
+      case 4: // Using CRM - FIXED FOR GOHIGHLEVEL
+        if (answer.includes('gohighlevel') || answer.includes('go high level') || answer.includes('highlevel')) {
+          return "GoHighLevel, excellent choice! That's a powerful platform. Now, ";
         } else if (answer.includes('hubspot')) {
-          return "HubSpot, nice! That's a solid CRM.";
+          return "HubSpot, nice! That's a solid CRM. Now, ";
         } else if (answer.includes('salesforce')) {
-          return "Salesforce, perfect! The industry standard.";
+          return "Salesforce, perfect! The industry standard. Now, ";
+        } else if (answer.includes('pipedrive')) {
+          return "Pipedrive, great choice! Very user-friendly. Now, ";
         } else if (answer.includes('yes')) {
-          return "Great, having a CRM system is really important.";
+          return "Great, having a CRM system is really important. Now, ";
         } else if (answer.includes('no') || answer.includes('not')) {
-          return "No CRM currently, that's actually pretty common.";
+          return "No CRM currently, that's actually pretty common. Now, ";
         } else {
-          return "Perfect, I understand.";
+          return "Perfect, I understand. Now, ";
         }
         
       case 5: // Pain points
@@ -146,81 +148,49 @@ class DiscoveryService {
           "Perfect, understood.",
           "Awesome, got it."
         ];
-        return acknowledgments[questionIndex % acknowledgments.length];
+        return acknowledgments[Math.floor(Math.random() * acknowledgments.length)];
     }
   }
 
-  // FIXED: Much more precise question detection
+  // Get next question that hasn't been asked
+  getNextQuestion() {
+    const nextQ = this.questions.find((q, index) => !q.asked && index === this.progress.currentQuestionIndex + 1);
+    return nextQ;
+  }
+
+  // Check if bot just asked a question
   detectQuestionAsked(botMessage) {
+    if (!botMessage || this.progress.allQuestionsCompleted) {
+      return false;
+    }
+    
     const botContent = botMessage.toLowerCase();
+    const nextQuestionIndex = this.progress.currentQuestionIndex + 1;
     
-    // CRITICAL FIX: Don't detect questions if scheduling has started
-    if (this.progress.schedulingStarted) {
-      console.log('🚫 Scheduling started - ignoring question detection');
-      return false;
-    }
-    
-    // CRITICAL FIX: Don't detect if all questions are complete
-    if (this.progress.allQuestionsCompleted) {
-      console.log('🚫 All questions complete - ignoring question detection');
-      return false;
-    }
-    
-    // CRITICAL FIX: Don't detect scheduling responses as questions
-    const schedulingIndicators = [
-      'available', 'times', 'slots', 'calendar', 'schedule', 'appointment',
-      'monday', 'tuesday', 'wednesday', 'thursday', 'friday',
-      'am', 'pm', 'morning', 'afternoon', 'evening'
-    ];
-    
-    const hasSchedulingContent = schedulingIndicators.some(indicator => 
-      botContent.includes(indicator)
-    );
-    
-    if (hasSchedulingContent) {
-      console.log('🚫 Bot message contains scheduling content - not a discovery question');
-      return false;
-    }
-    
-    const nextQuestionIndex = this.questions.findIndex(q => !q.asked);
-    
-    if (nextQuestionIndex === -1) {
-      console.log('✅ All questions have been asked');
-      return false;
-    }
-    
-    if (this.progress.waitingForAnswer) {
-      console.log(`⚠️ Already waiting for answer to question ${this.progress.currentQuestionIndex + 1} - ignoring detection`);
+    if (nextQuestionIndex >= this.questions.length) {
       return false;
     }
     
     const nextQuestion = this.questions[nextQuestionIndex];
     let detected = false;
     
-    // MUCH MORE SPECIFIC detection patterns
     switch (nextQuestionIndex) {
       case 0: // How did you hear about us?
-        detected = (botContent.includes('hear about') && botContent.includes('us')) && 
-                  !botContent.includes('schedule') && 
-                  !botContent.includes('available') &&
-                  !botContent.includes('times');
+        detected = botContent.includes('how') && botContent.includes('hear') && botContent.includes('about');
         break;
         
       case 1: // What industry or business are you in?
-        detected = ((botContent.includes('industry') || 
-                   (botContent.includes('business') && botContent.includes('in'))) && 
-                   !botContent.includes('hear about') &&
-                   !botContent.includes('schedule') &&
-                   !botContent.includes('available'));
+        detected = (botContent.includes('industry') || botContent.includes('business')) && 
+                  botContent.includes('what') &&
+                  !botContent.includes('available') &&
+                  !botContent.includes('schedule');
         break;
         
       case 2: // What's your main product or service?
-        detected = ((botContent.includes('product') || botContent.includes('service')) && 
-                   (botContent.includes('main') || botContent.includes('your'))) && 
-                   !botContent.includes('industry') && 
-                   !botContent.includes('business') &&
-                   !botContent.includes('available') &&
-                   !botContent.includes('schedule');
+        detected = (botContent.includes('product') || botContent.includes('service')) && 
+                  botContent.includes('main') &&
+                  !botContent.includes('available') &&
+                  !botContent.includes('schedule');
         break;
         
       case 3: // Are you currently running any ads?
@@ -260,7 +230,7 @@ class DiscoveryService {
     return false;
   }
 
-  // FIXED: Better answer capture with scheduling detection
+  // FIXED: Better answer capture with improved CRM detection
   captureUserAnswer(userMessage) {
     if (!this.progress.waitingForAnswer || this.isCapturingAnswer) {
       return;
@@ -280,75 +250,78 @@ class DiscoveryService {
     ];
     
     const userLower = userMessage.toLowerCase();
-    const isSchedulingRequest = schedulingKeywords.some(keyword => 
-      userLower.includes(keyword)
-    );
+    const isSchedulingRequest = schedulingKeywords.some(keyword => userLower.includes(keyword));
     
-    // CRITICAL FIX: If 4+ questions done and user asks about scheduling, don't capture as answer
-    if (isSchedulingRequest && this.progress.questionsCompleted >= 4) {
-      console.log(`🗓️ User requesting scheduling with ${this.progress.questionsCompleted}/6 questions done - not capturing as discovery answer`);
-      console.log(`📝 Scheduling request: "${userMessage}"`);
+    // Handle scheduling interruption
+    if (isSchedulingRequest && !this.progress.allQuestionsCompleted) {
+      console.log('⚠️ Scheduling request detected during discovery - buffering');
       return;
     }
     
-    // CRITICAL FIX: Also check for obvious availability questions
-    const availabilityQuestions = [
-      'what times', 'when are you', 'when do you', 'what days', 'available'
-    ];
-    
-    const isAvailabilityQuestion = availabilityQuestions.some(phrase => 
-      userLower.includes(phrase)
-    );
-    
-    if (isAvailabilityQuestion) {
-      console.log(`❓ User asking about availability - not capturing as discovery answer: "${userMessage}"`);
-      return;
+    // FIXED: Better CRM detection including GoHighLevel variations
+    if (this.progress.currentQuestionIndex === 4) { // CRM question
+      const crmKeywords = ['gohighlevel', 'go high level', 'highlevel', 'hubspot', 'salesforce', 
+                          'pipedrive', 'zoho', 'monday', 'clickup', 'notion', 'keap', 'activecampaign'];
+      const hasCRM = crmKeywords.some(crm => userLower.includes(crm));
+      
+      if (hasCRM || userLower.includes('yes') || userLower.includes('no') || userLower.includes('not using')) {
+        // Process the answer immediately for CRM question
+        this.isCapturingAnswer = true;
+        currentQ.answer = userMessage;
+        currentQ.answered = true;
+        this.progress.questionsCompleted++;
+        this.progress.waitingForAnswer = false;
+        this.discoveryData[currentQ.field] = userMessage;
+        
+        console.log(`✅ CAPTURED Answer ${this.progress.currentQuestionIndex + 1}: "${userMessage}"`);
+        
+        // Move to next question (pain points)
+        if (this.progress.currentQuestionIndex < 5) {
+          console.log('➡️ Moving to question 6: Pain points');
+        } else {
+          this.progress.allQuestionsCompleted = true;
+          console.log('🎯 All discovery questions completed!');
+        }
+        
+        this.isCapturingAnswer = false;
+        return;
+      }
     }
     
-    console.log(`📝 Buffering answer for Q${this.progress.currentQuestionIndex + 1}: "${userMessage}"`);
-    console.log(`🎯 This is for question: "${currentQ.question}"`);
+    // Start capture process for other questions
+    this.isCapturingAnswer = true;
+    this.userResponseBuffer.push(userMessage);
     
-    this.userResponseBuffer.push(userMessage.trim());
-    
+    // Clear existing timer
     if (this.answerCaptureTimer) {
       clearTimeout(this.answerCaptureTimer);
     }
     
-    // Shorter timer for faster response
+    // Set timer to finalize answer capture
     this.answerCaptureTimer = setTimeout(() => {
-      if (this.isCapturingAnswer) return;
-      
-      this.isCapturingAnswer = true;
-      
-      const completeAnswer = this.userResponseBuffer.join(' ');
-      
-      // Validate answer makes sense for the question
-      if (this.isValidAnswerForQuestion(completeAnswer, this.progress.currentQuestionIndex)) {
+      if (this.userResponseBuffer.length > 0) {
+        const fullAnswer = this.userResponseBuffer.join(' ').trim();
+        currentQ.answer = fullAnswer;
         currentQ.answered = true;
-        currentQ.answer = completeAnswer;
-        this.discoveryData[currentQ.field] = completeAnswer;
-        this.discoveryData[`question_${this.progress.currentQuestionIndex}`] = completeAnswer;
-        
         this.progress.questionsCompleted++;
         this.progress.waitingForAnswer = false;
-        this.progress.allQuestionsCompleted = this.questions.every(q => q.answered);
+        this.discoveryData[currentQ.field] = fullAnswer;
         
-        console.log(`✅ CAPTURED Q${this.progress.currentQuestionIndex + 1}: "${completeAnswer}"`);
-        console.log(`📊 Progress: ${this.progress.questionsCompleted}/6 questions completed`);
+        console.log(`✅ CAPTURED Answer ${this.progress.currentQuestionIndex + 1}: "${fullAnswer}"`);
         
-        // CRITICAL FIX: Auto-transition to scheduling if all questions done
-        if (this.progress.allQuestionsCompleted) {
-          console.log('🎉 ALL DISCOVERY QUESTIONS COMPLETED - Ready for scheduling');
+        // Check if all questions are complete
+        if (this.progress.questionsCompleted >= 6) {
+          this.progress.allQuestionsCompleted = true;
+          console.log('🎯 All discovery questions completed!');
         }
-      } else {
-        console.log(`⚠️ Answer doesn't seem to match question ${this.progress.currentQuestionIndex + 1}, waiting for better answer`);
+        
+        // Clear buffer
+        this.userResponseBuffer = [];
       }
       
-      this.userResponseBuffer = [];
       this.isCapturingAnswer = false;
       this.answerCaptureTimer = null;
-      
-    }, 1500); // Faster capture
+    }, 1500); // 1.5 seconds to capture complete answer
   }
 
   // FIXED: Better validation
@@ -361,91 +334,53 @@ class DiscoveryService {
       'next week', 'tomorrow at', 'today at', 'available times', 'what times'
     ];
     
-    const isSchedulingPhrase = schedulingPhrases.some(phrase => 
-      answerLower.includes(phrase)
-    );
-    
+    const isSchedulingPhrase = schedulingPhrases.some(phrase => answerLower.includes(phrase));
     if (isSchedulingPhrase) {
-      console.log(`🚫 Blocking scheduling phrase as discovery answer: "${answer}"`);
       return false;
     }
     
-    // Basic length check
-    if (answer.trim().length < 2) {
-      return false;
+    // Minimum answer length check (except for yes/no questions)
+    if (questionIndex === 3 || questionIndex === 4) { // Ads and CRM questions
+      return answer.length > 1; // Allow short answers like "no"
     }
     
-    return true;
+    return answer.length > 2; // Other questions need slightly longer answers
   }
 
-  // FIXED: Context prompt that prevents loops
-  generateContextPrompt() {
-    // CRITICAL FIX: Don't generate discovery prompts if scheduling started
-    if (this.progress.schedulingStarted) {
-      console.log('🚫 Scheduling started - no discovery prompts');
-      return null;
-    }
-    
-    if (!this.progress.allQuestionsCompleted) {
-      const nextUnanswered = this.getNextUnansweredQuestion();
-      if (nextUnanswered) {
-        const questionNumber = this.questions.indexOf(nextUnanswered) + 1;
-        const completed = this.getCompletedQuestionsSummary();
-        
-        const lastAnsweredQ = this.questions.find(q => q.asked && q.answered && q.answer);
-        let acknowledgmentInstruction = '';
-        
-        if (lastAnsweredQ && this.progress.questionsCompleted > 0) {
-          const lastQuestionIndex = this.questions.indexOf(lastAnsweredQ);
-          const suggestedAck = this.getContextualAcknowledgment(lastAnsweredQ.answer, lastQuestionIndex);
-          acknowledgmentInstruction = `
-
-The user just answered: "${lastAnsweredQ.answer}"
-Acknowledge this with: "${suggestedAck}" then ask the next question.`;
-        }
-        
-        return `
-
-DISCOVERY STATUS (${this.progress.questionsCompleted}/6 COMPLETE):
-${completed || 'None yet'}
-
-NEXT QUESTION TO ASK:
-${questionNumber}. ${nextUnanswered.question}${acknowledgmentInstruction}
-
-CRITICAL RULES:
-- Ask question ${questionNumber} EXACTLY as written above
-- Ask ONLY this one question, nothing else
-- Wait for user's complete answer before proceeding
-- Do NOT skip to scheduling
-- If user asks about scheduling/times, say: "Let me finish getting some information first, then we'll find you a perfect time."
-
-KEEP IT SHORT AND FOCUSED.`;
-      }
-    }
-    return null;
-  }
-
-  // Mark scheduling started (prevents discovery loops)
-  markSchedulingStarted() {
-    this.progress.schedulingStarted = true;
-    console.log('🗓️ SCHEDULING PHASE STARTED - Discovery questions disabled');
-  }
-
-  // Check if we can start scheduling
-  canStartScheduling() {
+  // Check if ready for scheduling
+  isReadyForScheduling() {
     return this.progress.allQuestionsCompleted && !this.progress.schedulingStarted;
   }
 
-  // Get next unanswered question
-  getNextUnansweredQuestion() {
-    return this.questions.find(q => !q.answered);
+  // Mark scheduling as started
+  markSchedulingStarted() {
+    this.progress.schedulingStarted = true;
+    console.log('📅 Scheduling phase started');
   }
 
-  // Get completed questions summary
-  getCompletedQuestionsSummary() {
+  // Get current progress
+  getProgress() {
+    return {
+      currentQuestion: this.progress.currentQuestionIndex + 1,
+      totalQuestions: this.questions.length,
+      questionsCompleted: this.progress.questionsCompleted,
+      allQuestionsCompleted: this.progress.allQuestionsCompleted,
+      waitingForAnswer: this.progress.waitingForAnswer,
+      lastQuestionAsked: this.progress.lastQuestionAsked,
+      schedulingStarted: this.progress.schedulingStarted
+    };
+  }
+
+  // Get discovery data
+  getDiscoveryData() {
+    return this.discoveryData;
+  }
+
+  // Get formatted summary
+  getSummary() {
     return this.questions
       .filter(q => q.answered)
-      .map((q, i) => `${this.questions.indexOf(q) + 1}. ${q.question} ✓`)
+      .map(q => `${q.question} ${q.answer} ✓`)
       .join('\n');
   }
 
