@@ -786,6 +786,26 @@ USE MEMORY: Reference any previous interactions or context naturally.`
     console.log('📅 Handling scheduling interest');
     
     const userLower = userMessage.toLowerCase();
+
+    // Check for timezone in user message
+  const detectedTimezone = this.timezoneHandler.parseTimezoneFromInput(userMessage);
+  if (detectedTimezone) {
+    this.userTimezone = detectedTimezone;
+    this.timezoneConfirmed = true;
+    console.log('🌍 User specified timezone:', this.userTimezone);
+  }
+  
+  // If no timezone yet, try to detect from phone
+  if (!this.userTimezone && this.connectionData.customerPhone) {
+    this.userTimezone = this.timezoneHandler.detectTimezoneFromPhone(this.connectionData.customerPhone);
+    if (this.userTimezone) {
+      const timezoneName = this.timezoneHandler.getTimezoneName(this.userTimezone);
+      const response = `I see you're calling from ${timezoneName}. I'll show you times in your timezone. Is that correct?`;
+      this.conversationHistory.push({ role: 'assistant', content: response });
+      await this.sendResponse(response, responseId);
+      return;
+    }
+  }
     
     if (userLower.includes('yes') || userLower.includes('sure') || userLower.includes('interested') || 
         userLower.includes('yeah') || userLower.includes('sounds good') || userLower.includes('ok')) {
@@ -1002,6 +1022,22 @@ USE MEMORY: Reference any previous interactions or context naturally.`
   async handleImmediateAppointmentBooking(appointmentRequest, responseId) {
     try {
       console.log('🎯 Processing immediate booking with memory');
+
+       // Add timezone detection if not already done
+  if (!this.userTimezone) {
+    this.userTimezone = this.timezoneHandler.detectTimezoneFromPhone(this.connectionData.customerPhone);
+    console.log('🌍 Detected user timezone:', this.userTimezone);
+  }
+  
+  // Convert the requested time to Arizona time if user timezone is known
+  let bookingDateTime = appointmentRequest.dateTime;
+  if (this.userTimezone && this.userTimezone !== 'America/Phoenix') {
+    bookingDateTime = this.timezoneHandler.convertToArizonaTime(
+      appointmentRequest.dateTime, 
+      this.userTimezone
+    );
+    console.log('🕐 Converted to Arizona time:', bookingDateTime);
+  }
       
       if (!appointmentRequest.isBusinessHours) {
         const response = `I'd love to book that time, but Jaden's demo calls are available between 8 AM and 4 PM Arizona time. Would morning or afternoon work better for you on ${appointmentRequest.dayName}?`;
@@ -1029,7 +1065,12 @@ USE MEMORY: Reference any previous interactions or context naturally.`
       };
 
       // Immediate confirmation
-      const confirmationResponse = `Excellent! I'm booking your demo with Jaden for ${appointmentRequest.dayName} at ${appointmentRequest.timeString} Arizona time right now... Done! You'll get a calendar invitation at ${this.connectionData.customerEmail} with all the details including a meeting link. Jaden's really looking forward to showing you how we can solve those ${this.connectionData.painPoint || 'challenges'} you mentioned!`;
+      // In handleImmediateAppointmentBooking method
+const confirmResponse = `Perfect! I'm booking your demo with Jaden for ${appointmentRequest.dayName} at ${appointmentRequest.timeString}${
+  this.userTimezone && this.userTimezone !== 'America/Phoenix' 
+    ? ` ${this.timezoneHandler.getTimezoneName(this.userTimezone)} (${arizonaTimeString} Arizona time)` 
+    : ' Arizona time'
+}. You'll receive a calendar invitation at ${this.connectionData.customerEmail} shortly!`; Jaden's really looking forward to showing you how we can solve those ${this.connectionData.painPoint || 'challenges'} you mentioned!`;
       
       await this.sendResponse(confirmationResponse, responseId);
 
