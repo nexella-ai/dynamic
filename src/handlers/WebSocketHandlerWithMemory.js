@@ -273,13 +273,8 @@ class WebSocketHandlerWithMemory {
     if (scriptedResponse) {
       await this.sendResponse(scriptedResponse, responseId);
       
-      // Check if there are queued responses
-      if (this.conversationManager.responseQueue.length > 0) {
-        const queuedResponse = this.conversationManager.responseQueue.shift();
-        setTimeout(() => {
-          this.sendResponse(queuedResponse, Date.now());
-        }, 2000);
-      }
+      // Process any queued responses
+      this.processQueuedResponses();
     } else if (this.conversationManager.needsAIResponse(userMessage)) {
       // Generate AI response for complex questions
       const messages = [
@@ -289,6 +284,27 @@ class WebSocketHandlerWithMemory {
       
       const aiResponse = await this.conversationManager.generateAIResponse(messages);
       await this.sendResponse(aiResponse, responseId);
+    }
+  }
+  
+  async processQueuedResponses() {
+    // Check for queued responses periodically
+    if (this.conversationManager.responseQueue.length > 0) {
+      // Get the first queued response
+      const queuedResponse = this.conversationManager.responseQueue.shift();
+      
+      // Wait a moment before sending
+      setTimeout(async () => {
+        if (typeof queuedResponse === 'function') {
+          const response = await queuedResponse();
+          await this.sendResponse(response, Date.now());
+        } else {
+          await this.sendResponse(queuedResponse, Date.now());
+        }
+        
+        // Check for more queued responses
+        this.processQueuedResponses();
+      }, 2000);
     }
   }
 
