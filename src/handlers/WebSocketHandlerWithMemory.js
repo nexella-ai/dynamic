@@ -91,12 +91,12 @@ TONE GUIDELINES:
 - Personalize with their name and company
 
 PAIN POINT SOLUTIONS:
-- "Not generating enough leads" → AI Texting captures web visitors instantly, SMS Revive wakes up old leads
-- "Not following up quickly" → AI responds in seconds 24/7, books appointments automatically
-- "Not qualified leads" → AI asks your exact qualifying questions before booking
-- "Missing calls" → AI never misses a call, texts if they can't talk
-- "Can't handle volume" → Complete automation handles unlimited leads simultaneously
-- "Mix of everything" → Our complete system solves all these issues at once
+- "Not generating enough leads" → AI Texting captures website visitors instantly, SMS Revive wakes up old database, and Review Collector boosts your online reputation to attract more leads organically.
+- "Not following up quickly" → AI responds to every lead within seconds 24/7. AI Voice Calls handle phone inquiries instantly, SMS Follow-Ups nurture leads automatically, and Appointment Bookings schedule meetings without any manual work.
+- "Not qualified leads" → AI asks your exact qualifying questions before ever booking an appointment. Plus, everything integrates with your CRM to track lead quality and conversion rates.
+- "Missing calls" → AI Voice system answers every call 24/7/365 - nights, weekends, holidays. If someone can't talk, we automatically text them to continue the conversation. You'll never miss another opportunity.
+- "Can't handle volume" → Complete automation suite handles unlimited leads simultaneously. Every lead gets instant attention, proper qualification, and automatic scheduling. Your CRM stays updated automatically so nothing falls through the cracks.
+- "Mix of everything" → Our Complete AI Revenue Rescue System solves ALL these problems with one integrated solution. Your leads get instant responses, proper qualification, automatic follow-up, and seamless appointment booking - all while you sleep!
 
 BOOKING RULES:
 - Build rapport FIRST, don't rush to scheduling
@@ -142,6 +142,14 @@ USE MEMORY: Reference any previous interactions or context naturally.`
     // First, try to get data from standard sources
     await this.fetchCustomerDataFromSources();
     
+    // Log what we have so far
+    console.log('📊 Data after initial fetch:', {
+      firstName: this.connectionData.firstName,
+      companyName: this.connectionData.companyName,
+      painPoint: this.connectionData.painPoint,
+      email: this.connectionData.customerEmail
+    });
+    
     // Then enhance with memory if available
     if (this.memoryService && this.connectionData.customerEmail) {
       try {
@@ -164,12 +172,19 @@ USE MEMORY: Reference any previous interactions or context naturally.`
             const typeformData = typeformMemories[0].metadata;
             console.log('📋 Retrieved Typeform data from memory:', typeformData);
             
-            // Update connection data with memory data
+            // Update connection data with memory data if not already set
             this.connectionData.firstName = this.connectionData.firstName || typeformData.first_name;
             this.connectionData.lastName = this.connectionData.lastName || typeformData.last_name;
-            this.connectionData.companyName = this.connectionData.companyName || typeformData.company_name;
-            this.connectionData.painPoint = this.connectionData.painPoint || typeformData.pain_point;
+            this.connectionData.companyName = this.connectionData.companyName || typeformData.company_name || typeformData.business_type;
+            this.connectionData.painPoint = this.connectionData.painPoint || typeformData.pain_point || typeformData.struggling_with;
+            this.connectionData.customerPhone = this.connectionData.customerPhone || typeformData.phone;
             this.connectionData.typeformData = typeformData;
+            
+            console.log('📋 Updated data from memory:', {
+              firstName: this.connectionData.firstName,
+              companyName: this.connectionData.companyName,
+              painPoint: this.connectionData.painPoint
+            });
           }
           
           // Get previous pain points and solutions discussed
@@ -201,6 +216,16 @@ USE MEMORY: Reference any previous interactions or context naturally.`
         console.error('❌ Error loading customer memory:', error.message);
       }
     }
+    
+    // Final check - ensure we have critical data
+    console.log('✅ Final customer data loaded:', {
+      firstName: this.connectionData.firstName,
+      lastName: this.connectionData.lastName,
+      companyName: this.connectionData.companyName,
+      painPoint: this.connectionData.painPoint,
+      email: this.connectionData.customerEmail,
+      phone: this.connectionData.customerPhone
+    });
   }
 
   async fetchCustomerDataFromSources() {
@@ -220,22 +245,41 @@ USE MEMORY: Reference any previous interactions or context naturally.`
             if (response.data) {
               const data = response.data.data || response.data;
               
+              // Extract all possible fields
               this.connectionData.customerEmail = data.email || data.customer_email;
               this.connectionData.customerName = data.name || data.customer_name;
               this.connectionData.firstName = data.first_name || data.firstName;
               this.connectionData.lastName = data.last_name || data.lastName;
-              this.connectionData.companyName = data.company_name || data.companyName;
+              this.connectionData.companyName = data.company_name || data.companyName || data.business_type;
               this.connectionData.customerPhone = data.phone || data.customer_phone;
-              this.connectionData.painPoint = data.pain_point || data.struggle;
+              
+              // Handle pain point - check multiple possible field names
+              this.connectionData.painPoint = data.pain_point || 
+                                             data.struggle || 
+                                             data['What are you struggling the most with?'] ||
+                                             data.struggling_with;
               
               if (data.typeform_data) {
                 this.connectionData.typeformData = data.typeform_data;
               }
               
               console.log('✅ Retrieved customer data from:', endpoint);
-              break;
+              console.log('📋 Extracted data:', {
+                firstName: this.connectionData.firstName,
+                lastName: this.connectionData.lastName,
+                email: this.connectionData.customerEmail,
+                companyName: this.connectionData.companyName,
+                painPoint: this.connectionData.painPoint,
+                phone: this.connectionData.customerPhone
+              });
+              
+              // If we have key data, break
+              if (this.connectionData.customerEmail && this.connectionData.firstName) {
+                break;
+              }
             }
           } catch (error) {
+            console.log(`⚠️ Failed to fetch from ${endpoint}:`, error.message);
             continue;
           }
         }
@@ -248,12 +292,21 @@ USE MEMORY: Reference any previous interactions or context naturally.`
     if (global.lastTypeformSubmission && !this.connectionData.typeformData) {
       console.log('📋 Using global Typeform submission');
       const typeform = global.lastTypeformSubmission;
+      
+      // Update with any missing data from global submission
       this.connectionData.customerEmail = this.connectionData.customerEmail || typeform.email;
       this.connectionData.firstName = this.connectionData.firstName || typeform.first_name;
       this.connectionData.lastName = this.connectionData.lastName || typeform.last_name;
-      this.connectionData.companyName = this.connectionData.companyName || typeform.company_name;
-      this.connectionData.painPoint = this.connectionData.painPoint || typeform.pain_point;
+      this.connectionData.companyName = this.connectionData.companyName || typeform.company_name || typeform.business_type;
+      this.connectionData.painPoint = this.connectionData.painPoint || typeform.pain_point || typeform.struggling_with;
+      this.connectionData.customerPhone = this.connectionData.customerPhone || typeform.phone;
       this.connectionData.typeformData = typeform;
+      
+      console.log('📋 Updated with global Typeform data:', {
+        firstName: this.connectionData.firstName,
+        companyName: this.connectionData.companyName,
+        painPoint: this.connectionData.painPoint
+      });
     }
   }
 
@@ -265,9 +318,11 @@ USE MEMORY: Reference any previous interactions or context naturally.`
     try {
       console.log('💾 Storing Typeform submission in memory...');
       
+      // Create comprehensive content including business type and pain point
       const typeformContent = `Typeform submission from ${this.connectionData.firstName} ${this.connectionData.lastName} 
-        Company: ${this.connectionData.companyName}
+        Company/Business Type: ${this.connectionData.companyName}
         Email: ${this.connectionData.customerEmail}
+        Phone: ${this.connectionData.customerPhone || 'Not provided'}
         Pain Point: ${this.connectionData.painPoint}
         Struggling with: ${this.connectionData.painPoint}`;
       
@@ -282,7 +337,10 @@ USE MEMORY: Reference any previous interactions or context naturally.`
           first_name: this.connectionData.firstName,
           last_name: this.connectionData.lastName,
           company_name: this.connectionData.companyName,
+          business_type: this.connectionData.companyName, // Store as both for compatibility
           pain_point: this.connectionData.painPoint,
+          struggling_with: this.connectionData.painPoint, // Store as both
+          phone: this.connectionData.customerPhone,
           timestamp: new Date().toISOString(),
           call_id: this.callId,
           content: typeformContent
@@ -290,6 +348,11 @@ USE MEMORY: Reference any previous interactions or context naturally.`
       }]);
       
       console.log('✅ Typeform data stored in memory');
+      console.log('📋 Stored data:', {
+        firstName: this.connectionData.firstName,
+        companyName: this.connectionData.companyName,
+        painPoint: this.connectionData.painPoint
+      });
       
     } catch (error) {
       console.error('❌ Error storing Typeform data:', error.message);
@@ -441,6 +504,7 @@ USE MEMORY: Reference any previous interactions or context naturally.`
 
   async handlePainPointPhase(userMessage, responseId) {
     console.log('🎯 Discussing pain points with empathy');
+    console.log('📊 Customer pain point:', this.connectionData.painPoint);
     
     // Map pain points to empathetic responses and solutions
     const painPointResponses = {
@@ -482,10 +546,21 @@ USE MEMORY: Reference any previous interactions or context naturally.`
     
     if (this.connectionData.painPoint) {
       const painLower = this.connectionData.painPoint.toLowerCase();
+      console.log('🔍 Analyzing pain point:', painLower);
+      
       for (const [key, value] of Object.entries(painPointResponses)) {
-        if (painLower.includes(key) || key.includes(painLower)) {
+        // More flexible matching
+        if (painLower.includes(key) || 
+            key.includes(painLower) ||
+            (key.includes("not generating") && painLower.includes("generating")) ||
+            (key.includes("not following") && painLower.includes("following")) ||
+            (key.includes("qualified") && painLower.includes("qualified")) ||
+            (key.includes("miss calls") && painLower.includes("miss")) ||
+            (key.includes("can't handle") && painLower.includes("handle")) ||
+            (key.includes("mix") && painLower.includes("everything"))) {
           matchedPainPoint = value;
           painPointKey = key;
+          console.log('✅ Matched pain point:', key);
           break;
         }
       }
@@ -752,6 +827,7 @@ USE MEMORY: Reference any previous interactions or context naturally.`
         first_name: this.connectionData.firstName,
         last_name: this.connectionData.lastName,
         company_name: this.connectionData.companyName,
+        business_type: this.connectionData.companyName,
         pain_point: this.connectionData.painPoint,
         recommended_services: this.recommendedServices?.join(', '),
         source: 'Typeform + AI Call',
@@ -1093,7 +1169,9 @@ USE MEMORY: Reference any previous interactions or context naturally.`
           first_name: this.connectionData.firstName,
           last_name: this.connectionData.lastName,
           company_name: this.connectionData.companyName,
+          business_type: this.connectionData.companyName,
           pain_point: this.connectionData.painPoint,
+          struggling_with: this.connectionData.painPoint,
           recommended_services: this.recommendedServices?.join(', ')
         };
         
@@ -1120,7 +1198,9 @@ USE MEMORY: Reference any previous interactions or context naturally.`
             pain_point_discussed: this.conversationFlow.painPointDiscussed,
             solution_presented: this.conversationFlow.solutionPresented,
             scheduling_offered: this.conversationFlow.schedulingOffered,
-            appointment_booked: this.appointmentBooked
+            appointment_booked: this.appointmentBooked,
+            business_type: this.connectionData.companyName,
+            pain_point: this.connectionData.painPoint
           }
         );
       }
