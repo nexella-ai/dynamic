@@ -413,6 +413,12 @@ USE MEMORY: Reference any previous interactions or context naturally.`
     // Add to conversation history
     this.conversationHistory.push({ role: 'user', content: userMessage });
 
+    // Check for interruptions/questions during flow
+    if (this.isInterruption(userMessage) && this.conversationFlow.phase !== 'booking') {
+      await this.handleInterruption(userMessage, parsed.response_id);
+      return;
+    }
+
     // Route based on conversation phase
     switch (this.conversationFlow.phase) {
       case 'greeting':
@@ -424,7 +430,18 @@ USE MEMORY: Reference any previous interactions or context naturally.`
         break;
       
       case 'pain_point':
-        await this.handlePainPointPhase(userMessage, parsed.response_id);
+        // Check if user is acknowledging the pain point discussion
+        const acknowledgments = ['yeah', 'yes', 'yep', 'yup', 'right', 'exactly', 'true', 'correct', 'absolutely', 'definitely'];
+        const userLower = userMessage.toLowerCase();
+        const isAcknowledgment = acknowledgments.some(ack => userLower.includes(ack));
+        
+        if (this.conversationFlow.painPointDiscussed && isAcknowledgment) {
+          console.log('✅ User acknowledged pain point - moving to solution');
+          this.conversationFlow.phase = 'solution';
+          await this.handleSolutionPhase(userMessage, parsed.response_id);
+        } else {
+          await this.handlePainPointPhase(userMessage, parsed.response_id);
+        }
         break;
       
       case 'solution':
@@ -442,6 +459,26 @@ USE MEMORY: Reference any previous interactions or context naturally.`
       default:
         await this.generateMemoryEnhancedResponse(userMessage, parsed.response_id);
     }
+  }
+
+  isInterruption(userMessage) {
+    const phrases = [
+      'wait', 'hold on', 'question', 'what do you', 'how does', 
+      'explain', 'tell me', 'what is', 'how much', 'pricing', 'cost'
+    ];
+    const lower = userMessage.toLowerCase();
+    return phrases.some(p => lower.includes(p));
+  }
+
+  async handleInterruption(userMessage, responseId) {
+    const messages = [...this.conversationHistory, {
+      role: 'system',
+      content: 'User interrupted with a question. Answer directly, then ask if they have other questions.'
+    }];
+    
+    const response = await this.generateAIResponseWithMemory(messages);
+    this.conversationHistory.push({ role: 'assistant', content: response });
+    await this.sendResponse(response, responseId);
   }
 
   async handleGreetingPhase(userMessage, responseId) {
@@ -505,6 +542,7 @@ USE MEMORY: Reference any previous interactions or context naturally.`
   async handlePainPointPhase(userMessage, responseId) {
     console.log('🎯 Discussing pain points with empathy');
     console.log('📊 Customer pain point:', this.connectionData.painPoint);
+    console.log('📝 User response:', userMessage);
     
     // Map pain points to empathetic responses and solutions
     const painPointResponses = {
@@ -570,17 +608,27 @@ USE MEMORY: Reference any previous interactions or context naturally.`
       // Send empathetic response
       const response = `${matchedPainPoint.empathy} ${this.connectionData.companyName ? `Especially for a company like ${this.connectionData.companyName}...` : ''}`;
       
+      console.log('📝 Sending empathetic response:', response);
       this.conversationHistory.push({ role: 'assistant', content: response });
       await this.sendResponse(response, responseId);
       
-      // Store recommended services
+      // Store recommended services and transition phrase
       this.recommendedServices = matchedPainPoint.solutions;
       this.transitionPhrase = matchedPainPoint.transition;
+      
+      console.log('💡 Recommended services:', this.recommendedServices);
+      console.log('🔄 Transition phrase:', this.transitionPhrase);
       
       // Store pain point in memory
       if (this.memoryService && this.connectionData.customerEmail) {
         await this.storePainPointInMemory(painPointKey, response);
       }
+      
+      // Mark pain point as discussed
+      this.conversationFlow.painPointDiscussed = true;
+      
+      // Wait for user acknowledgment before transitioning
+      console.log('⏳ Waiting for user acknowledgment before moving to solution...');
       
     } else {
       // Ask for clarification
@@ -588,19 +636,16 @@ USE MEMORY: Reference any previous interactions or context naturally.`
       this.conversationHistory.push({ role: 'assistant', content: response });
       await this.sendResponse(response, responseId);
     }
-    
-    this.conversationFlow.phase = 'solution';
-    this.conversationFlow.painPointDiscussed = true;
   }
 
   async handleSolutionPhase(userMessage, responseId) {
     console.log('💡 Presenting personalized solution');
+    console.log('📊 Customer pain point:', this.connectionData.painPoint);
     
-    // Wait a bit for natural flow
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    // Use transition phrase if available
+    // First, send the transition phrase if we have one
     if (this.transitionPhrase) {
+      console.log('🔄 Sending transition phrase:', this.transitionPhrase);
+      this.conversationHistory.push({ role: 'assistant', content: this.transitionPhrase });
       await this.sendResponse(this.transitionPhrase, responseId);
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
@@ -625,25 +670,37 @@ USE MEMORY: Reference any previous interactions or context naturally.`
       if (this.recommendedServices.includes("AI Texting")) {
         solutionResponse += "When someone visits your website, our AI chats with them immediately and captures their info. ";
       }
+      if (this.recommendedServices.includes("Review Collector")) {
+        solutionResponse += "Plus, we automatically collect reviews from happy customers to boost your online reputation and attract even more leads organically. ";
+      }
       
       solutionResponse += `The best part? Everything integrates with your current systems, and we handle all the tech stuff for you.`;
     } else {
       solutionResponse = "Based on what you've shared, I have some ideas on how we can really help transform your lead management...";
     }
     
+    console.log('📝 Sending solution response:', solutionResponse);
     this.conversationHistory.push({ role: 'assistant', content: solutionResponse });
     await this.sendResponse(solutionResponse, responseId);
     
-    // Wait then offer demo
+    // Mark solution as presented
+    this.conversationFlow.solutionPresented = true;
+    
+    // Wait for natural pause
     await new Promise(resolve => setTimeout(resolve, 3000));
     
+    // Now offer the demo
     const demoOffer = `You know what? I'd love to show you exactly how this would work for ${this.connectionData.companyName || 'your specific business'}. Our owner, Jaden, does these personalized demo calls where he can show you the system live and create a custom solution just for you. It's completely free and super valuable - even if you decide not to move forward. Would you be interested in seeing it in action?`;
     
+    console.log('🎯 Sending demo offer:', demoOffer);
     this.conversationHistory.push({ role: 'assistant', content: demoOffer });
     await this.sendResponse(demoOffer, responseId);
     
+    // Transition to scheduling phase
     this.conversationFlow.phase = 'scheduling';
-    this.conversationFlow.solutionPresented = true;
+    this.conversationFlow.schedulingOffered = true;
+    
+    console.log('✅ Solution phase completed, moved to scheduling');
   }
 
   async handleSchedulingPhase(userMessage, responseId) {
