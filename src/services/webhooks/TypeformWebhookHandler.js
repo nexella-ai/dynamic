@@ -1,4 +1,4 @@
-// src/services/webhooks/TypeformWebhookHandler.js - FIXED FOR YOUR TYPEFORM QUESTIONS
+// src/services/webhooks/TypeformWebhookHandler.js - FIXED WITH BETTER FIELD EXTRACTION
 const RAGMemoryService = require('../memory/RAGMemoryService');
 
 class TypeformWebhookHandler {
@@ -82,36 +82,130 @@ class TypeformWebhookHandler {
 
       const fieldRef = answer.field?.ref?.toLowerCase() || '';
       const fieldTitle = answer.field?.title?.toLowerCase() || '';
+      const fieldId = answer.field?.id || '';
       
-      // Extract based on field reference or title
-      if (fieldRef.includes('first_name') || fieldTitle.includes('first name')) {
+      // Log exact field title for debugging
+      console.log(`🔍 Checking field: "${answer.field?.title}" (lowercase: "${fieldTitle}")`);
+      
+      // ENHANCED EXTRACTION LOGIC - Check multiple patterns
+      
+      // First Name
+      if (fieldRef.includes('first_name') || 
+          fieldRef.includes('firstname') || 
+          fieldRef === 'first' ||
+          fieldTitle.includes('first name') ||
+          fieldTitle === 'first name' ||
+          fieldTitle === 'what is your first name?' ||
+          fieldTitle === "what's your first name?") {
         customerData.first_name = answer.text;
+        console.log('✅ Found first name:', answer.text);
       } 
-      else if (fieldRef.includes('last_name') || fieldTitle.includes('last name')) {
+      // Last Name
+      else if (fieldRef.includes('last_name') || 
+               fieldRef.includes('lastname') || 
+               fieldRef === 'last' ||
+               fieldTitle.includes('last name') ||
+               fieldTitle === 'last name' ||
+               fieldTitle === 'what is your last name?' ||
+               fieldTitle === "what's your last name?") {
         customerData.last_name = answer.text;
+        console.log('✅ Found last name:', answer.text);
       }
-      else if (fieldRef.includes('email') || answer.type === 'email') {
+      // Email
+      else if (answer.type === 'email' || 
+               fieldRef.includes('email') || 
+               fieldTitle.includes('email')) {
         customerData.email = answer.email;
+        console.log('✅ Found email:', answer.email);
       }
-      else if (fieldRef.includes('phone') || answer.type === 'phone_number') {
+      // Phone
+      else if (answer.type === 'phone_number' || 
+               fieldRef.includes('phone') || 
+               fieldTitle.includes('phone')) {
         customerData.phone = answer.phone_number;
+        console.log('✅ Found phone:', answer.phone_number);
       }
-      // FIXED: Check for "What type of business do you run?"
-      else if (fieldTitle.includes('what type of business') || fieldTitle.includes('business do you run') || 
-               fieldRef.includes('business_type') || fieldRef.includes('company')) {
+      // Company/Business Type - EXACT MATCH FOR YOUR TYPEFORM
+      else if (fieldTitle === 'what type of business do you run?' || 
+               fieldTitle.includes('what type of business') || 
+               fieldTitle.includes('business do you run') || 
+               fieldTitle.includes('type of business') ||
+               fieldTitle.includes('company name') ||
+               fieldTitle.includes('business name') ||
+               fieldRef.includes('business_type') || 
+               fieldRef.includes('company') ||
+               fieldRef.includes('business')) {
         customerData.company_name = answer.text;
-        customerData.business_type = answer.text; // Store as both
+        customerData.business_type = answer.text;
+        console.log('✅ Found company/business:', answer.text);
       }
-      // FIXED: Check for "What are you struggling the most with?"
-      else if (fieldTitle.includes('what are you struggling') || fieldTitle.includes('struggling the most with') ||
-               fieldRef.includes('struggle') || fieldRef.includes('pain_point')) {
-        if (answer.type === 'choice') {
-          customerData.pain_point = answer.choice?.label;
+      // Pain Point - EXACT MATCH FOR YOUR TYPEFORM
+      else if (fieldTitle === 'what are you struggling the most with?' ||
+               fieldTitle.includes('what are you struggling') || 
+               fieldTitle.includes('struggling the most with') ||
+               fieldTitle.includes('struggling with') ||
+               fieldTitle.includes('biggest challenge') ||
+               fieldTitle.includes('pain point') ||
+               fieldRef.includes('struggle') || 
+               fieldRef.includes('pain_point') ||
+               fieldRef.includes('pain') ||
+               fieldRef.includes('challenge')) {
+        if (answer.type === 'choice' && answer.choice) {
+          customerData.pain_point = answer.choice.label;
+          console.log('✅ Found pain point (choice):', answer.choice.label);
         } else if (answer.type === 'text') {
           customerData.pain_point = answer.text;
+          console.log('✅ Found pain point (text):', answer.text);
         }
       }
+      // Fallback: Try to detect by question position if nothing else works
+      else if (!customerData.first_name && index === 0 && answer.type === 'text') {
+        customerData.first_name = answer.text;
+        console.log('⚠️ Assuming first field is first name:', answer.text);
+      }
+      else if (!customerData.last_name && index === 1 && answer.type === 'text') {
+        customerData.last_name = answer.text;
+        console.log('⚠️ Assuming second field is last name:', answer.text);
+      }
     });
+
+    // CRITICAL: If still missing data, try alternative extraction
+    if (!customerData.first_name || !customerData.last_name || !customerData.company_name || !customerData.pain_point) {
+      console.log('⚠️ Missing critical data, attempting alternative extraction...');
+      
+      // Look through all answers again with looser matching
+      answers.forEach((answer, index) => {
+        const value = answer.text || answer.email || answer.phone_number || answer.choice?.label;
+        
+        // If we're missing first name and this looks like a name
+        if (!customerData.first_name && answer.type === 'text' && value && 
+            !value.includes('@') && !value.match(/^\+?\d+$/) && 
+            value.length < 30 && index < 3) {
+          if (!customerData.last_name) {
+            // Might be first name
+            customerData.first_name = value;
+            console.log('⚠️ Guessing first name:', value);
+          }
+        }
+        
+        // If we're missing company and this is a longer text answer
+        if (!customerData.company_name && answer.type === 'text' && value && 
+            value.length > 3 && !value.includes('@') && index > 2) {
+          // Check if it's not already assigned
+          if (value !== customerData.first_name && value !== customerData.last_name) {
+            customerData.company_name = value;
+            customerData.business_type = value;
+            console.log('⚠️ Guessing company:', value);
+          }
+        }
+        
+        // If we're missing pain point and this is a choice
+        if (!customerData.pain_point && answer.type === 'choice' && answer.choice?.label) {
+          customerData.pain_point = answer.choice.label;
+          console.log('⚠️ Found pain point in choice:', answer.choice.label);
+        }
+      });
+    }
 
     // Extract hidden fields if present
     if (formResponse.hidden) {
@@ -123,15 +217,23 @@ class TypeformWebhookHandler {
       customerData.full_name = `${customerData.first_name || ''} ${customerData.last_name || ''}`.trim();
     }
 
-    // Log what we found
+    // Log final extraction results
     console.log('✅ Final extracted data:', {
-      first_name: customerData.first_name,
-      last_name: customerData.last_name,
-      email: customerData.email,
-      company_name: customerData.company_name,
-      business_type: customerData.business_type,
-      pain_point: customerData.pain_point
+      first_name: customerData.first_name || 'MISSING',
+      last_name: customerData.last_name || 'MISSING',
+      email: customerData.email || 'MISSING',
+      phone: customerData.phone || 'MISSING',
+      company_name: customerData.company_name || 'MISSING',
+      business_type: customerData.business_type || 'MISSING',
+      pain_point: customerData.pain_point || 'MISSING'
     });
+
+    // Log warning if critical data is missing
+    if (!customerData.first_name || !customerData.pain_point) {
+      console.error('⚠️ WARNING: Critical data missing!');
+      console.error('⚠️ Please check Typeform field configuration');
+      console.error('⚠️ Expected fields: first_name, last_name, email, phone, business type, pain point');
+    }
 
     return customerData;
   }
@@ -169,7 +271,7 @@ class TypeformWebhookHandler {
       console.log('🧠 Storing Typeform submission in RAG memory...');
       
       // Create comprehensive memory content
-      const memoryContent = `Typeform submission from ${customerData.full_name || customerData.email}
+      const memoryContent = `Typeform submission from ${customerData.full_name || customerData.first_name || customerData.email}
 Business Type: ${customerData.business_type || customerData.company_name || 'Not specified'}
 Email: ${customerData.email}
 Phone: ${customerData.phone || 'Not provided'}
@@ -204,7 +306,7 @@ Submitted: ${new Date(customerData.submittedAt).toLocaleString()}`;
 
       // Also store the pain point as a separate memory
       if (customerData.pain_point) {
-        const painPointContent = `${customerData.first_name} who runs ${customerData.business_type || customerData.company_name} is struggling with: ${customerData.pain_point}`;
+        const painPointContent = `${customerData.first_name || 'Customer'} who runs ${customerData.business_type || customerData.company_name || 'a business'} is struggling with: ${customerData.pain_point}`;
         const painPointEmbedding = await this.memoryService.createEmbedding(painPointContent);
         
         await this.memoryService.storeMemories([{
@@ -213,7 +315,7 @@ Submitted: ${new Date(customerData.submittedAt).toLocaleString()}`;
           metadata: {
             memory_type: 'pain_points',
             customer_email: customerData.email,
-            customer_name: customerData.full_name,
+            customer_name: customerData.full_name || customerData.first_name,
             company_name: customerData.company_name || customerData.business_type,
             business_type: customerData.business_type,
             pain_point: customerData.pain_point,
@@ -285,7 +387,7 @@ Submitted: ${new Date(customerData.submittedAt).toLocaleString()}`;
   prepareCallMetadata(customerData) {
     return {
       customer_email: customerData.email,
-      customer_name: customerData.full_name,
+      customer_name: customerData.full_name || `${customerData.first_name || ''} ${customerData.last_name || ''}`.trim(),
       first_name: customerData.first_name,
       last_name: customerData.last_name,
       customer_phone: customerData.phone,
