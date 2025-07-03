@@ -1,4 +1,4 @@
-// src/services/webhooks/TypeformWebhookHandler.js - ENHANCED TYPEFORM DATA HANDLER
+// src/services/webhooks/TypeformWebhookHandler.js - FIXED FOR YOUR TYPEFORM QUESTIONS
 const RAGMemoryService = require('../memory/RAGMemoryService');
 
 class TypeformWebhookHandler {
@@ -17,6 +17,7 @@ class TypeformWebhookHandler {
    */
   async processTypeformWebhook(webhookData) {
     console.log('📋 Processing Typeform webhook data...');
+    console.log('📋 Raw webhook data:', JSON.stringify(webhookData, null, 2));
     
     try {
       // Extract form response data
@@ -28,6 +29,8 @@ class TypeformWebhookHandler {
 
       // Parse answers to extract customer data
       const customerData = this.extractCustomerData(formResponse);
+      
+      console.log('📋 Extracted customer data:', customerData);
       
       // Store in global for immediate access
       this.storeGlobally(customerData);
@@ -62,53 +65,46 @@ class TypeformWebhookHandler {
     const customerData = {
       formId: formResponse.form_id,
       submittedAt: formResponse.submitted_at,
-      responseId: formResponse.response_id
+      responseId: formResponse.response_id || formResponse.token
     };
 
-    // Map Typeform field IDs to data fields
-    const fieldMapping = {
-      'first_name': ['first_name', 'fname', 'firstname'],
-      'last_name': ['last_name', 'lname', 'lastname'],
-      'email': ['email', 'email_address'],
-      'phone': ['phone', 'phone_number', 'mobile'],
-      'company_name': ['company', 'company_name', 'business_name'],
-      'pain_point': ['struggle', 'pain_point', 'challenge', 'problem']
-    };
+    console.log('📋 Processing answers:', answers.length);
 
     // Process each answer
-    answers.forEach(answer => {
-      const fieldId = answer.field?.id;
-      const fieldRef = answer.field?.ref;
+    answers.forEach((answer, index) => {
+      console.log(`📋 Answer ${index}:`, {
+        field_id: answer.field?.id,
+        field_ref: answer.field?.ref,
+        field_title: answer.field?.title,
+        type: answer.type,
+        value: answer.text || answer.email || answer.phone_number || answer.choice?.label
+      });
+
+      const fieldRef = answer.field?.ref?.toLowerCase() || '';
       const fieldTitle = answer.field?.title?.toLowerCase() || '';
       
-      // Check field mappings
-      for (const [dataField, possibleRefs] of Object.entries(fieldMapping)) {
-        if (possibleRefs.some(ref => fieldRef?.includes(ref) || fieldTitle.includes(ref))) {
-          // Extract value based on answer type
-          switch (answer.type) {
-            case 'text':
-              customerData[dataField] = answer.text;
-              break;
-            case 'email':
-              customerData.email = answer.email;
-              break;
-            case 'phone_number':
-              customerData.phone = answer.phone_number;
-              break;
-            case 'choice':
-              if (dataField === 'pain_point') {
-                customerData.pain_point = answer.choice?.label || answer.choice?.other;
-              } else {
-                customerData[dataField] = answer.choice?.label;
-              }
-              break;
-          }
-        }
+      // Extract based on field reference or title
+      if (fieldRef.includes('first_name') || fieldTitle.includes('first name')) {
+        customerData.first_name = answer.text;
+      } 
+      else if (fieldRef.includes('last_name') || fieldTitle.includes('last name')) {
+        customerData.last_name = answer.text;
       }
-      
-      // Special handling for the pain point question
-      if (fieldTitle.includes('struggling') || fieldTitle.includes('challenge') || 
-          fieldTitle.includes('problem') || fieldRef === 'pain_point') {
+      else if (fieldRef.includes('email') || answer.type === 'email') {
+        customerData.email = answer.email;
+      }
+      else if (fieldRef.includes('phone') || answer.type === 'phone_number') {
+        customerData.phone = answer.phone_number;
+      }
+      // FIXED: Check for "What type of business do you run?"
+      else if (fieldTitle.includes('what type of business') || fieldTitle.includes('business do you run') || 
+               fieldRef.includes('business_type') || fieldRef.includes('company')) {
+        customerData.company_name = answer.text;
+        customerData.business_type = answer.text; // Store as both
+      }
+      // FIXED: Check for "What are you struggling the most with?"
+      else if (fieldTitle.includes('what are you struggling') || fieldTitle.includes('struggling the most with') ||
+               fieldRef.includes('struggle') || fieldRef.includes('pain_point')) {
         if (answer.type === 'choice') {
           customerData.pain_point = answer.choice?.label;
         } else if (answer.type === 'text') {
@@ -122,10 +118,20 @@ class TypeformWebhookHandler {
       Object.assign(customerData, formResponse.hidden);
     }
 
-    // Ensure we have full name if first/last are provided
+    // Ensure we have full name
     if (customerData.first_name || customerData.last_name) {
       customerData.full_name = `${customerData.first_name || ''} ${customerData.last_name || ''}`.trim();
     }
+
+    // Log what we found
+    console.log('✅ Final extracted data:', {
+      first_name: customerData.first_name,
+      last_name: customerData.last_name,
+      email: customerData.email,
+      company_name: customerData.company_name,
+      business_type: customerData.business_type,
+      pain_point: customerData.pain_point
+    });
 
     return customerData;
   }
@@ -141,17 +147,18 @@ class TypeformWebhookHandler {
       last_name: customerData.last_name,
       name: customerData.full_name,
       phone: customerData.phone,
-      company_name: customerData.company_name,
+      company_name: customerData.company_name || customerData.business_type,
+      business_type: customerData.business_type,
       pain_point: customerData.pain_point,
       source: 'Typeform Webhook',
       responseId: customerData.responseId
     };
     
-    console.log('💾 Stored Typeform data globally for immediate access');
+    console.log('💾 Stored Typeform data globally:', global.lastTypeformSubmission);
   }
 
   /**
-   * Store customer data in RAG memory for long-term retrieval
+   * Store customer data in RAG memory
    */
   async storeInMemory(customerData, formResponse) {
     if (!this.memoryService || !customerData.email) {
@@ -163,11 +170,13 @@ class TypeformWebhookHandler {
       
       // Create comprehensive memory content
       const memoryContent = `Typeform submission from ${customerData.full_name || customerData.email}
-Company: ${customerData.company_name || 'Not specified'}
+Business Type: ${customerData.business_type || customerData.company_name || 'Not specified'}
 Email: ${customerData.email}
 Phone: ${customerData.phone || 'Not provided'}
 Struggling with: ${customerData.pain_point || 'Not specified'}
 Submitted: ${new Date(customerData.submittedAt).toLocaleString()}`;
+
+      console.log('🧠 Memory content:', memoryContent);
 
       // Create embedding
       const embedding = await this.memoryService.createEmbedding(memoryContent);
@@ -181,7 +190,8 @@ Submitted: ${new Date(customerData.submittedAt).toLocaleString()}`;
           customer_email: customerData.email,
           first_name: customerData.first_name,
           last_name: customerData.last_name,
-          company_name: customerData.company_name,
+          company_name: customerData.company_name || customerData.business_type,
+          business_type: customerData.business_type,
           pain_point: customerData.pain_point,
           phone: customerData.phone,
           submitted_at: customerData.submittedAt,
@@ -192,9 +202,9 @@ Submitted: ${new Date(customerData.submittedAt).toLocaleString()}`;
         }
       }]);
 
-      // Also store the pain point as a separate memory for better retrieval
+      // Also store the pain point as a separate memory
       if (customerData.pain_point) {
-        const painPointContent = `${customerData.first_name} from ${customerData.company_name} is struggling with: ${customerData.pain_point}`;
+        const painPointContent = `${customerData.first_name} who runs ${customerData.business_type || customerData.company_name} is struggling with: ${customerData.pain_point}`;
         const painPointEmbedding = await this.memoryService.createEmbedding(painPointContent);
         
         await this.memoryService.storeMemories([{
@@ -204,31 +214,12 @@ Submitted: ${new Date(customerData.submittedAt).toLocaleString()}`;
             memory_type: 'pain_points',
             customer_email: customerData.email,
             customer_name: customerData.full_name,
-            company_name: customerData.company_name,
+            company_name: customerData.company_name || customerData.business_type,
+            business_type: customerData.business_type,
             pain_point: customerData.pain_point,
             source: 'typeform',
             timestamp: new Date().toISOString(),
             content: painPointContent
-          }
-        }]);
-      }
-
-      // Analyze pain point and store recommended services
-      const recommendedServices = this.analyzePainPoint(customerData.pain_point);
-      if (recommendedServices.length > 0) {
-        const recommendationContent = `Recommended Nexella AI services for ${customerData.full_name}: ${recommendedServices.join(', ')} to address: ${customerData.pain_point}`;
-        const recommendationEmbedding = await this.memoryService.createEmbedding(recommendationContent);
-        
-        await this.memoryService.storeMemories([{
-          id: `recommendation_${customerData.responseId}_${Date.now()}`,
-          values: recommendationEmbedding,
-          metadata: {
-            memory_type: 'service_recommendation',
-            customer_email: customerData.email,
-            recommended_services: recommendedServices,
-            pain_point: customerData.pain_point,
-            timestamp: new Date().toISOString(),
-            content: recommendationContent
           }
         }]);
       }
@@ -249,38 +240,43 @@ Submitted: ${new Date(customerData.submittedAt).toLocaleString()}`;
     const painPointLower = painPoint.toLowerCase();
     const recommendations = [];
     
-    if (painPointLower.includes('not generating enough leads') || 
-        painPointLower.includes('leads') && painPointLower.includes('enough')) {
+    // Check for exact matches from your Typeform options
+    if (painPointLower === "we're not generating enough leads" || 
+        painPointLower.includes('not generating enough leads') ||
+        painPointLower.includes('generating') && painPointLower.includes('leads')) {
       recommendations.push('AI Texting', 'SMS Revive', 'Review Collector');
     }
     
-    if (painPointLower.includes('not following up') || 
+    if (painPointLower === "we're not following up with leads quickly enough" ||
+        painPointLower.includes('not following up') || 
         painPointLower.includes('follow') && painPointLower.includes('quickly')) {
       recommendations.push('AI Voice Calls', 'SMS Follow-Ups', 'Appointment Bookings');
     }
     
-    if (painPointLower.includes('qualified leads') || 
-        painPointLower.includes('not speaking to qualified')) {
+    if (painPointLower === "we're not speaking to qualified leads" ||
+        painPointLower.includes('qualified leads') || 
+        painPointLower.includes('qualified')) {
       recommendations.push('AI Qualification System', 'CRM Integration');
     }
     
-    if (painPointLower.includes('miss calls') || 
-        painPointLower.includes('missing calls')) {
+    if (painPointLower === "we miss calls too much" ||
+        painPointLower.includes('miss calls') || 
+        painPointLower.includes('missing')) {
       recommendations.push('AI Voice Calls', 'SMS Follow-Ups');
     }
     
-    if (painPointLower.includes("can't handle") || 
-        painPointLower.includes('amount of leads') ||
-        painPointLower.includes('volume')) {
+    if (painPointLower === "we can't handle the amount of leads" ||
+        painPointLower.includes("can't handle") || 
+        painPointLower.includes('amount') && painPointLower.includes('leads')) {
       recommendations.push('Complete Automation Suite', 'CRM Integration');
     }
     
-    if (painPointLower.includes('mix of everything') || 
-        painPointLower.includes('all of the above')) {
+    if (painPointLower === "a mix of everything above" ||
+        painPointLower.includes('mix') && painPointLower.includes('everything')) {
       return ['Complete AI Revenue Rescue System'];
     }
     
-    return [...new Set(recommendations)]; // Remove duplicates
+    return [...new Set(recommendations)];
   }
 
   /**
@@ -293,7 +289,8 @@ Submitted: ${new Date(customerData.submittedAt).toLocaleString()}`;
       first_name: customerData.first_name,
       last_name: customerData.last_name,
       customer_phone: customerData.phone,
-      company_name: customerData.company_name,
+      company_name: customerData.company_name || customerData.business_type,
+      business_type: customerData.business_type,
       pain_point: customerData.pain_point,
       source: 'typeform',
       typeform_response_id: customerData.responseId,
