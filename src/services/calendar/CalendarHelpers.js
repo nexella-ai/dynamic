@@ -1,4 +1,4 @@
-// src/services/calendar/CalendarHelpers.js - FIXED WITH TIMEZONE SUPPORT AND ANTI-LOOP BOOKING SYSTEM
+// src/services/calendar/CalendarHelpers.js - COMPLETE FILE WITH TIMEZONE SUPPORT
 const GoogleCalendarService = require('./GoogleCalendarService');
 
 // Initialize calendar service
@@ -204,6 +204,7 @@ async function autoBookAppointment(customerName, customerEmail, customerPhone, p
     console.log('🔄 Starting ANTI-LOOP appointment booking process...');
     console.log('👤 Customer:', customerName, customerEmail);
     console.log('📅 Requested time:', preferredDateTime);
+    console.log('🌍 Customer timezone:', discoveryData.timezone || 'Not specified');
     
     // CRITICAL VALIDATION: Check inputs first
     if (!customerEmail || customerEmail === 'prospect@example.com') {
@@ -301,7 +302,9 @@ async function autoBookAppointment(customerName, customerEmail, customerPhone, p
         startTime: startTime.toISOString(),
         endTime: endTime.toISOString(),
         attendeeEmail: customerEmail,
-        attendeeName: customerName
+        attendeeName: customerName,
+        attendeePhone: customerPhone,
+        customerTimezone: discoveryData.timezone || 'America/Phoenix' // Pass timezone info
       };
 
       console.log('📅 Creating calendar event with timeout...');
@@ -353,7 +356,8 @@ async function autoBookAppointment(customerName, customerEmail, customerPhone, p
           timezone: 'America/Phoenix',
           customerEmail: customerEmail,
           customerName: customerName,
-          startTime: startTime.toISOString()
+          startTime: startTime.toISOString(),
+          customerTimezone: discoveryData.timezone
         };
       } else {
         console.log('❌ Calendar service returned failure:', bookingResult.error);
