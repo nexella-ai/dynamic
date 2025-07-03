@@ -1,4 +1,4 @@
-// src/routes/apiRoutes.js - COMPLETE FILE WITH ALL DEBUG ENDPOINTS AND BOOKING MEMORY
+// src/routes/apiRoutes.js - COMPLETE FILE WITH ALL ENDPOINTS INCLUDING TYPEFORM
 const express = require('express');
 const axios = require('axios');
 const config = require('../config/environment');
@@ -31,7 +31,16 @@ try {
   console.log('⚠️ Memory services not available');
 }
 
+// Import Typeform handler
+let TypeformWebhookHandler = null;
+try {
+  TypeformWebhookHandler = require('../services/webhooks/TypeformWebhookHandler');
+} catch (error) {
+  console.log('⚠️ TypeformWebhookHandler not available');
+}
+
 const router = express.Router();
+const typeformHandler = TypeformWebhookHandler ? new TypeformWebhookHandler() : null;
 
 // Root endpoint
 router.get('/', (req, res) => {
@@ -899,6 +908,186 @@ router.post('/set-customer-data', express.json(), async (req, res) => {
   }
 });
 
+// Typeform webhook endpoint
+router.post('/webhook/typeform', express.json(), async (req, res) => {
+  try {
+    console.log('📋 Received Typeform webhook');
+    console.log('Event type:', req.body.event_type);
+    
+    if (!typeformHandler) {
+      return res.status(503).json({
+        success: false,
+        error: 'Typeform handler not available'
+      });
+    }
+    
+    // Process the webhook
+    const result = await typeformHandler.processTypeformWebhook(req.body);
+    
+    if (result.success) {
+      console.log('✅ Typeform data processed:', result.customerData);
+      
+      // Optional: Trigger an outbound call immediately
+      if (result.customerData.phone && req.query.trigger_call === 'true') {
+        // You can add logic here to trigger a call via Retell API
+        console.log('📞 Would trigger call to:', result.customerData.phone);
+      }
+      
+      res.status(200).json({
+        success: true,
+        message: 'Typeform submission processed',
+        customer: {
+          name: result.customerData.full_name,
+          email: result.customerData.email,
+          company: result.customerData.company_name,
+          pain_point: result.customerData.pain_point
+        }
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        error: result.error
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ Typeform webhook error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Get Typeform data by email (for testing/debugging)
+router.get('/typeform/customer/:email', async (req, res) => {
+  try {
+    const { email } = req.params;
+    
+    if (!typeformHandler || !typeformHandler.memoryService) {
+      return res.status(503).json({
+        success: false,
+        error: 'Memory service not available'
+      });
+    }
+    
+    const customerData = await typeformHandler.getCustomerFromMemory(email);
+    
+    if (customerData) {
+      res.json({
+        success: true,
+        customer: customerData
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        error: 'Customer not found'
+      });
+    }
+    
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Manual Typeform data submission (for testing)
+router.post('/typeform/submit', express.json(), async (req, res) => {
+  try {
+    const { 
+      first_name, 
+      last_name, 
+      email, 
+      phone, 
+      company_name, 
+      pain_point 
+    } = req.body;
+    
+    // Validate required fields
+    if (!email || !first_name || !pain_point) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: email, first_name, pain_point'
+      });
+    }
+    
+    if (!typeformHandler) {
+      return res.status(503).json({
+        success: false,
+        error: 'Typeform handler not available'
+      });
+    }
+    
+    // Create mock Typeform webhook data
+    const mockWebhookData = {
+      event_id: `test_${Date.now()}`,
+      event_type: 'form_response',
+      form_response: {
+        form_id: 'q0upggQW',
+        response_id: `test_response_${Date.now()}`,
+        submitted_at: new Date().toISOString(),
+        answers: [
+          {
+            field: { id: 'field_1', ref: 'first_name', title: 'First Name' },
+            type: 'text',
+            text: first_name
+          },
+          {
+            field: { id: 'field_2', ref: 'last_name', title: 'Last Name' },
+            type: 'text',
+            text: last_name
+          },
+          {
+            field: { id: 'field_3', ref: 'email', title: 'Email' },
+            type: 'email',
+            email: email
+          },
+          {
+            field: { id: 'field_4', ref: 'phone', title: 'Phone Number' },
+            type: 'phone_number',
+            phone_number: phone
+          },
+          {
+            field: { id: 'field_5', ref: 'company_name', title: 'Company Name' },
+            type: 'text',
+            text: company_name
+          },
+          {
+            field: { id: 'field_6', ref: 'pain_point', title: 'What are you struggling the most with?' },
+            type: 'choice',
+            choice: { label: pain_point }
+          }
+        ]
+      }
+    };
+    
+    // Process through the handler
+    const result = await typeformHandler.processTypeformWebhook(mockWebhookData);
+    
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'Test Typeform submission processed',
+        customer: result.customerData,
+        metadata: result.callMetadata
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: result.error
+      });
+    }
+    
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Calendar status endpoint
 router.get('/calendar-status', (req, res) => {
   const { getCalendarService } = require('../services/calendar/CalendarHelpers');
@@ -1051,9 +1240,7 @@ router.get('/health/memory', async (req, res) => {
   try {
     if (config.ENABLE_MEMORY && WebSocketHandlerWithMemory) {
       try {
-        const RAGMemoryService = require('../services/memory/RAGMemoryService');
         const memoryService = new RAGMemoryService();
-        
         const stats = await memoryService.getMemoryStats();
         
         res.json({
@@ -1192,6 +1379,89 @@ router.post('/admin/ingest/nexella-knowledge', async (req, res) => {
       totalItems: result.totalItems,
       details: result
     });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Ingest Nexella pain point solutions into memory
+router.post('/admin/ingest/pain-point-solutions', async (req, res) => {
+  try {
+    if (!RAGMemoryService) {
+      return res.status(503).json({
+        success: false,
+        error: 'Memory service not available'
+      });
+    }
+    
+    const memoryService = new RAGMemoryService();
+    
+    // Pain point solution mappings
+    const painPointSolutions = [
+      {
+        pain_point: "We're not generating enough leads",
+        solutions: "AI Texting captures website visitors instantly, SMS Revive wakes up your old database, and Review Collector boosts your online reputation to attract more leads organically.",
+        services: ["AI Texting", "SMS Revive", "Review Collector"]
+      },
+      {
+        pain_point: "We're not following up with leads quickly enough",
+        solutions: "Our AI responds to every lead within seconds, 24/7. AI Voice Calls handle phone inquiries instantly, SMS Follow-Ups nurture leads automatically, and Appointment Bookings schedule meetings without any manual work.",
+        services: ["AI Voice Calls", "SMS Follow-Ups", "Appointment Bookings"]
+      },
+      {
+        pain_point: "We're not speaking to qualified leads",
+        solutions: "Our AI qualification system asks YOUR exact qualifying questions before ever booking an appointment. Plus, everything integrates with your CRM to track lead quality and conversion rates.",
+        services: ["AI Qualification System", "CRM Integration"]
+      },
+      {
+        pain_point: "We miss calls too much",
+        solutions: "Our AI Voice system answers every call 24/7/365 - nights, weekends, holidays. If someone can't talk, we automatically text them to continue the conversation. You'll never miss another opportunity.",
+        services: ["AI Voice Calls", "SMS Follow-Ups"]
+      },
+      {
+        pain_point: "We can't handle the amount of leads",
+        solutions: "Our complete automation suite handles unlimited leads simultaneously. Every lead gets instant attention, proper qualification, and automatic scheduling. Your CRM stays updated automatically so nothing falls through the cracks.",
+        services: ["Complete Automation Suite", "CRM Integration"]
+      },
+      {
+        pain_point: "A mix of everything above",
+        solutions: "Our Complete AI Revenue Rescue System solves ALL these problems with one integrated solution. Your leads get instant responses, proper qualification, automatic follow-up, and seamless appointment booking - all while you sleep!",
+        services: ["Complete AI Revenue Rescue System"]
+      }
+    ];
+    
+    let storedCount = 0;
+    
+    for (const solution of painPointSolutions) {
+      const content = `Pain Point: ${solution.pain_point}. Solution: ${solution.solutions} Services: ${solution.services.join(', ')}`;
+      const embedding = await memoryService.createEmbedding(content);
+      
+      await memoryService.storeMemories([{
+        id: `pain_solution_${solution.pain_point.replace(/\s+/g, '_').toLowerCase()}`,
+        values: embedding,
+        metadata: {
+          memory_type: 'pain_point_solution',
+          pain_point: solution.pain_point,
+          solution_description: solution.solutions,
+          recommended_services: solution.services,
+          source: 'nexella_knowledge',
+          timestamp: new Date().toISOString(),
+          content: content
+        }
+      }]);
+      
+      storedCount++;
+    }
+    
+    res.json({
+      success: true,
+      message: 'Pain point solutions ingested successfully',
+      count: storedCount
+    });
+    
   } catch (error) {
     res.status(500).json({
       success: false,
