@@ -69,6 +69,11 @@ class WebSocketHandlerWithMemory {
     this.responsesSent = [];
     this.maxResponsesPerMinute = 10;
     
+    // Phase tracking flags to prevent loops
+    this.transitionPhraseSent = false;
+    this.lastProcessedMessageId = null;
+    this.messageProcessingQueue = new Set();
+    
     // Enhanced conversation history with personalized system prompt
     this.conversationHistory = [
       {
@@ -392,6 +397,22 @@ USE MEMORY: Reference any previous interactions or context naturally.`
   }
 
   async processUserMessage(parsed) {
+    // Prevent processing the same message multiple times
+    const messageId = parsed.response_id || Date.now();
+    if (this.lastProcessedMessageId === messageId) {
+      console.log('⚠️ Duplicate message detected, skipping processing');
+      return;
+    }
+    
+    // Check if we're already processing this message
+    if (this.messageProcessingQueue.has(messageId)) {
+      console.log('⚠️ Message already in processing queue, skipping');
+      return;
+    }
+    
+    this.messageProcessingQueue.add(messageId);
+    this.lastProcessedMessageId = messageId;
+    
     const latestUserUtterance = parsed.transcript[parsed.transcript.length - 1];
     const userMessage = latestUserUtterance?.content || "";
 
@@ -407,6 +428,7 @@ USE MEMORY: Reference any previous interactions or context naturally.`
     if (this.appointmentBooked) {
       console.log('✅ Appointment already booked');
       await this.sendResponse("Wonderful! You're all set. Looking forward to showing you how we can help your business grow!", parsed.response_id);
+      this.messageProcessingQueue.delete(messageId);
       return;
     }
 
@@ -416,6 +438,7 @@ USE MEMORY: Reference any previous interactions or context naturally.`
     // Check for interruptions/questions during flow
     if (this.isInterruption(userMessage) && this.conversationFlow.phase !== 'booking') {
       await this.handleInterruption(userMessage, parsed.response_id);
+      this.messageProcessingQueue.delete(messageId);
       return;
     }
 
@@ -445,7 +468,14 @@ USE MEMORY: Reference any previous interactions or context naturally.`
         break;
       
       case 'solution':
-        await this.handleSolutionPhase(userMessage, parsed.response_id);
+        // If we're already in solution phase and solution was presented, move to scheduling
+        if (this.conversationFlow.solutionPresented) {
+          console.log('📊 Solution already presented, staying in scheduling phase');
+          this.conversationFlow.phase = 'scheduling';
+          await this.handleSchedulingPhase(userMessage, parsed.response_id);
+        } else {
+          await this.handleSolutionPhase(userMessage, parsed.response_id);
+        }
         break;
       
       case 'scheduling':
@@ -459,6 +489,11 @@ USE MEMORY: Reference any previous interactions or context naturally.`
       default:
         await this.generateMemoryEnhancedResponse(userMessage, parsed.response_id);
     }
+    
+    // Remove from processing queue after a delay
+    setTimeout(() => {
+      this.messageProcessingQueue.delete(messageId);
+    }, 5000);
   }
 
   isInterruption(userMessage) {
@@ -642,11 +677,18 @@ USE MEMORY: Reference any previous interactions or context naturally.`
     console.log('💡 Presenting personalized solution');
     console.log('📊 Customer pain point:', this.connectionData.painPoint);
     
-    // First, send the transition phrase if we have one
-    if (this.transitionPhrase) {
+    // CRITICAL: Check if we've already presented the solution
+    if (this.conversationFlow.solutionPresented) {
+      console.log('⚠️ Solution already presented, skipping to avoid loops');
+      return;
+    }
+    
+    // First, send the transition phrase if we have one and haven't sent it yet
+    if (this.transitionPhrase && !this.transitionPhraseSent) {
       console.log('🔄 Sending transition phrase:', this.transitionPhrase);
       this.conversationHistory.push({ role: 'assistant', content: this.transitionPhrase });
       await this.sendResponse(this.transitionPhrase, responseId);
+      this.transitionPhraseSent = true;
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
     
@@ -683,22 +725,26 @@ USE MEMORY: Reference any previous interactions or context naturally.`
     this.conversationHistory.push({ role: 'assistant', content: solutionResponse });
     await this.sendResponse(solutionResponse, responseId);
     
-    // Mark solution as presented
+    // Mark solution as presented IMMEDIATELY to prevent re-entry
     this.conversationFlow.solutionPresented = true;
     
     // Wait for natural pause
     await new Promise(resolve => setTimeout(resolve, 3000));
     
-    // Now offer the demo
-    const demoOffer = `You know what? I'd love to show you exactly how this would work for ${this.connectionData.companyName || 'your specific business'}. Our owner, Jaden, does these personalized demo calls where he can show you the system live and create a custom solution just for you. It's completely free and super valuable - even if you decide not to move forward. Would you be interested in seeing it in action?`;
-    
-    console.log('🎯 Sending demo offer:', demoOffer);
-    this.conversationHistory.push({ role: 'assistant', content: demoOffer });
-    await this.sendResponse(demoOffer, responseId);
+    // Now offer the demo ONLY if we haven't already
+    if (!this.conversationFlow.schedulingOffered) {
+      const demoOffer = `You know what? I'd love to show you exactly how this would work for ${this.connectionData.companyName || 'your specific business'}. Our owner, Jaden, does these personalized demo calls where he can show you the system live and create a custom solution just for you. It's completely free and super valuable - even if you decide not to move forward. Would you be interested in seeing it in action?`;
+      
+      console.log('🎯 Sending demo offer:', demoOffer);
+      this.conversationHistory.push({ role: 'assistant', content: demoOffer });
+      await this.sendResponse(demoOffer, responseId);
+      
+      // Mark scheduling as offered
+      this.conversationFlow.schedulingOffered = true;
+    }
     
     // Transition to scheduling phase
     this.conversationFlow.phase = 'scheduling';
-    this.conversationFlow.schedulingOffered = true;
     
     console.log('✅ Solution phase completed, moved to scheduling');
   }
