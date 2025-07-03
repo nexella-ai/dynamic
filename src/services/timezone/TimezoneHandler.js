@@ -78,13 +78,13 @@ class TimezoneHandler {
       '945': 'America/Chicago', '952': 'America/Chicago', '956': 'America/Chicago',
       '972': 'America/Chicago', '979': 'America/Chicago', '985': 'America/Chicago',
       
-      // Mountain Time
+      // Mountain Time (Note: Your calendar is in Arizona/Mountain time)
       '208': 'America/Denver', '303': 'America/Denver', '307': 'America/Denver',
       '385': 'America/Denver', '406': 'America/Denver', '435': 'America/Denver',
-      '505': 'America/Denver', '575': 'America/Denver', '719': 'America/Denver',
+      '505': 'America/Denver', '719': 'America/Denver',
       '720': 'America/Denver', '801': 'America/Denver', '970': 'America/Denver',
       
-      // Arizona (no DST)
+      // Arizona (no DST - always MST)
       '480': 'America/Phoenix', '520': 'America/Phoenix', '602': 'America/Phoenix',
       '623': 'America/Phoenix', '928': 'America/Phoenix',
       
@@ -186,10 +186,14 @@ class TimezoneHandler {
    */
   getTimezoneOffset(userTimezone) {
     const now = new Date();
+    
+    // Get current time in both timezones
     const arizonaTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Phoenix' }));
     const userTime = new Date(now.toLocaleString('en-US', { timeZone: userTimezone }));
     
-    const offsetHours = (userTime - arizonaTime) / (1000 * 60 * 60);
+    // Calculate offset in hours
+    const offsetMs = userTime.getTime() - arizonaTime.getTime();
+    const offsetHours = Math.round(offsetMs / (1000 * 60 * 60));
     
     return {
       hours: offsetHours,
@@ -261,29 +265,75 @@ class TimezoneHandler {
     // Arizona doesn't observe DST, so we need to be careful
     const date = new Date(arizonaDateTime);
     
-    // Get offset difference
-    const offset = this.getTimezoneOffset(userTimezone);
-    
-    // Adjust the time
-    const userDate = new Date(date.getTime() + (offset.hours * 60 * 60 * 1000));
-    
-    return userDate;
+    // Since the date object represents a specific moment in time,
+    // we just need to display it in the user's timezone
+    return date; // The Date object is timezone-agnostic
   }
 
   /**
    * Convert user's timezone to Arizona time
    */
   convertToArizonaTime(userDateTime, userTimezone) {
-    // Convert in the opposite direction
-    const date = new Date(userDateTime);
+    if (!userTimezone || userTimezone === 'America/Phoenix') {
+      return new Date(userDateTime);
+    }
     
-    // Get offset difference
-    const offset = this.getTimezoneOffset(userTimezone);
+    // Create date string with timezone info for proper conversion
+    const dateObj = new Date(userDateTime);
     
-    // Adjust the time (subtract the offset)
-    const arizonaDate = new Date(date.getTime() - (offset.hours * 60 * 60 * 1000));
+    // The Date object represents an absolute point in time
+    // When we book on the calendar, we need to ensure it's the correct moment
+    console.log(`🕐 Converting from ${userTimezone} to Arizona:`);
+    console.log(`   Input date: ${dateObj.toISOString()}`);
+    console.log(`   User sees: ${dateObj.toLocaleString('en-US', { timeZone: userTimezone })}`);
+    console.log(`   Arizona sees: ${dateObj.toLocaleString('en-US', { timeZone: 'America/Phoenix' })}`);
     
-    return arizonaDate;
+    // Return the date object (it represents the same moment in time)
+    return dateObj;
+  }
+
+  /**
+   * Calculate hours difference between timezones at a specific date
+   */
+  getHoursDifference(timezone1, timezone2, date = new Date()) {
+    // Format the date in both timezones
+    const time1 = new Date(date.toLocaleString('en-US', { timeZone: timezone1 }));
+    const time2 = new Date(date.toLocaleString('en-US', { timeZone: timezone2 }));
+    
+    // Calculate difference in hours
+    const diffMs = time2.getTime() - time1.getTime();
+    const diffHours = Math.round(diffMs / (1000 * 60 * 60));
+    
+    return diffHours;
+  }
+
+  /**
+   * Check if a timezone observes DST
+   */
+  observesDST(timezone) {
+    // Arizona doesn't observe DST
+    if (timezone === 'America/Phoenix') return false;
+    
+    // Hawaii doesn't observe DST
+    if (timezone === 'Pacific/Honolulu') return false;
+    
+    // Most other US timezones do observe DST
+    return true;
+  }
+
+  /**
+   * Get all US timezones
+   */
+  getAllUSTimezones() {
+    return [
+      { value: 'America/New_York', label: 'Eastern Time (ET)' },
+      { value: 'America/Chicago', label: 'Central Time (CT)' },
+      { value: 'America/Denver', label: 'Mountain Time (MT)' },
+      { value: 'America/Phoenix', label: 'Arizona Time (MST)' },
+      { value: 'America/Los_Angeles', label: 'Pacific Time (PT)' },
+      { value: 'America/Anchorage', label: 'Alaska Time (AKT)' },
+      { value: 'Pacific/Honolulu', label: 'Hawaii Time (HST)' }
+    ];
   }
 }
 
