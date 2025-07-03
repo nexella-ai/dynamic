@@ -1,4 +1,4 @@
-// src/handlers/WebSocketHandler.js - ENHANCED WITH PERSONALIZED TYPEFORM FLOW
+// src/handlers/WebSocketHandler.js - PERSONALIZED TYPEFORM FLOW (NO FALLBACKS)
 const axios = require('axios');
 const config = require('../config/environment');
 const globalDiscoveryManager = require('../services/discovery/GlobalDiscoveryManager');
@@ -28,7 +28,7 @@ class WebSocketHandler {
     
     console.log('📞 Extracted Call ID:', this.callId);
     
-    // Store connection data with this WebSocket
+    // Store connection data
     this.connectionData = {
       callId: this.callId,
       metadata: null,
@@ -39,13 +39,13 @@ class WebSocketHandler {
       lastName: null,
       companyName: null,
       painPoint: null,
-      isOutboundCall: false,
-      isAppointmentConfirmation: false
+      typeformData: null
     };
 
     // Conversation flow management
     this.conversationFlow = {
-      phase: 'greeting', // greeting -> rapport -> pain_point -> solution -> scheduling -> booking
+      phase: 'waiting', // waiting -> greeting -> rapport -> pain_point -> solution -> scheduling -> booking
+      userHasSpoken: false,
       greetingCompleted: false,
       rapportBuilt: false,
       painPointDiscussed: false,
@@ -54,61 +54,49 @@ class WebSocketHandler {
       bookingInProgress: false
     };
 
-    // Anti-loop state management for calendar booking
+    // Booking state
     this.appointmentBooked = false;
     this.bookingInProgress = false;
     this.lastBookingAttempt = 0;
     this.bookingCooldown = 10000;
     
-    // Response tracking to prevent loops
+    // Response tracking
     this.responsesSent = [];
     this.maxResponsesPerMinute = 10;
     
-    // Calendar booking state tracking
+    // Calendar booking state
     this.calendarBookingState = {
       hasDetectedBookingRequest: false,
       bookingConfirmed: false,
       lastBookingResponse: null,
       bookingResponseSent: false,
-      lastAppointmentMatch: null
+      lastAppointmentMatch: null,
+      awaitingTimeSelection: false,
+      offeredTimes: [],
+      selectedDay: null
     };
 
-    // Enhanced system prompt for personalized flow
+    // System prompt
     this.conversationHistory = [
       {
         role: 'system',
-        content: `You are Sarah from Nexella AI, a warm and friendly customer success specialist who builds genuine rapport before discussing business.
+        content: `You are Sarah from Nexella AI, a warm and friendly customer success specialist.
+
+CRITICAL RULES:
+1. WAIT for the user to speak first
+2. Greet them by their FIRST NAME (from Typeform data)
+3. Build rapport - ask how they're doing and respond warmly
+4. Acknowledge their SPECIFIC pain point from the form
+5. Explain how Nexella AI solves their specific problem
+6. Only offer scheduling AFTER explaining the solution
+7. When interrupted with questions, STOP and answer them
 
 CONVERSATION FLOW:
-1. PERSONALIZED GREETING: Greet the customer by their first name warmly and ask how they're doing
-2. RAPPORT BUILDING: Respond to their greeting naturally, show genuine interest in their well-being
-3. PAIN POINT ACKNOWLEDGMENT: Naturally transition to acknowledging their specific struggle from the form
-4. SOLUTION PRESENTATION: Explain how Nexella AI specifically solves their pain point using our services
-5. SCHEDULING OFFER: After building rapport and discussing solutions, offer a free demo call with the owner
-6. BOOKING: If they're interested, book immediately without asking for confirmation
+Wait → Greet by name → Build rapport → Discuss pain point → Present solution → Offer scheduling → Book appointment
 
-TONE AND STYLE:
-- Warm, friendly, and conversational - like talking to a helpful friend
-- Use natural speech patterns with appropriate pauses (use "..." for pauses)
-- Show empathy and understanding for their struggles
-- Be enthusiastic about how we can help, but not pushy
-- Use their first name occasionally to personalize the conversation
+TONE: Warm, friendly, conversational. Use natural pauses.
 
-NEXELLA AI SERVICES TO MENTION BASED ON PAIN POINTS:
-- "Not generating enough leads" → AI Texting, SMS Revive, Review Collector
-- "Not following up quickly" → AI Voice Calls, SMS Follow-Ups, Appointment Bookings
-- "Not speaking to qualified leads" → AI qualification system, CRM Integration
-- "Missing calls" → AI Voice Calls (24/7 availability), SMS Follow-Ups
-- "Can't handle lead volume" → Complete automation suite, CRM Integration
-- "Mix of everything" → Our complete AI Revenue Rescue System
-
-SCHEDULING RULES:
-- Only offer scheduling AFTER discussing their pain points and solutions
-- When they agree to schedule, book immediately
-- Business hours: 8 AM to 4 PM Arizona time (MST), Monday-Friday
-- Always confirm they'll receive a calendar invitation at their email
-
-Remember: Build rapport first, show you understand their struggle, then offer help.`
+BOOKING: When they give day/time, confirm and book immediately.`
       }
     ];
     
@@ -122,17 +110,18 @@ Remember: Build rapport first, show you understand their struggle, then offer he
   }
 
   async initialize() {
-    // Check calendar status
     const calendarStatus = isCalendarInitialized();
     console.log('📅 Calendar Status:', calendarStatus ? 'ENABLED ✅' : 'DISABLED ⚠️');
     
-    // Try to fetch customer data including Typeform data
+    // Fetch customer data
     await this.fetchCustomerData();
     
     this.setupEventHandlers();
 
-    // Wait for user to speak first
     console.log('🔇 Waiting for user to speak first...');
+    console.log('👤 Customer:', this.connectionData.firstName);
+    console.log('🏢 Company:', this.connectionData.companyName);
+    console.log('🎯 Pain Point:', this.connectionData.painPoint);
   }
 
   async fetchCustomerData() {
@@ -141,74 +130,55 @@ Remember: Build rapport first, show you understand their struggle, then offer he
         console.log('🔍 Fetching customer data for call:', this.callId);
         const TRIGGER_SERVER_URL = process.env.TRIGGER_SERVER_URL || config.TRIGGER_SERVER_URL || 'https://trigger-server-qt7u.onrender.com';
         
-        // Try multiple endpoints to get customer data
-        const possibleEndpoints = [
+        // Try endpoints
+        const endpoints = [
           `${TRIGGER_SERVER_URL}/api/get-call-data/${this.callId}`,
           `${TRIGGER_SERVER_URL}/get-call-info/${this.callId}`,
-          `${TRIGGER_SERVER_URL}/call-data/${this.callId}`,
-          `${TRIGGER_SERVER_URL}/api/call/${this.callId}`
+          `${TRIGGER_SERVER_URL}/api/typeform/${this.callId}`
         ];
         
-        for (const endpoint of possibleEndpoints) {
+        for (const endpoint of endpoints) {
           try {
-            console.log(`Trying endpoint: ${endpoint}`);
-            const response = await fetch(endpoint, { 
-              timeout: 3000,
-              headers: {
-                'Content-Type': 'application/json'
+            const response = await axios.get(endpoint, { timeout: 3000 });
+            
+            if (response.data) {
+              const data = response.data.data || response.data;
+              console.log('📋 Retrieved data:', data);
+              
+              // Extract data
+              this.connectionData.customerEmail = data.email || data.customer_email;
+              this.connectionData.customerName = data.name || data.customer_name;
+              this.connectionData.firstName = data.first_name || data.firstName;
+              this.connectionData.lastName = data.last_name || data.lastName;
+              this.connectionData.companyName = data.company_name || data.companyName;
+              this.connectionData.customerPhone = data.phone || data.customer_phone;
+              this.connectionData.painPoint = data.pain_point || data.struggle || data['What are you struggling the most with?'];
+              
+              if (this.connectionData.customerEmail && this.connectionData.firstName) {
+                break;
               }
-            });
-            if (response.ok) {
-              const callData = await response.json();
-              console.log('📋 Retrieved call metadata:', callData);
-              
-              // Handle nested response structure
-              const actualData = callData.data || callData;
-              this.connectionData.metadata = actualData;
-              
-              // Extract Typeform data
-              this.connectionData.customerEmail = actualData.email || actualData.customer_email;
-              this.connectionData.customerName = actualData.name || actualData.customer_name;
-              this.connectionData.firstName = actualData.first_name || actualData.firstName || this.extractFirstName(this.connectionData.customerName);
-              this.connectionData.lastName = actualData.last_name || actualData.lastName;
-              this.connectionData.companyName = actualData.company_name || actualData.companyName;
-              this.connectionData.customerPhone = actualData.phone || actualData.customer_phone;
-              this.connectionData.painPoint = actualData.pain_point || actualData.struggle || actualData.painPoint;
-              
-              console.log('📧 Extracted customer data:', {
-                email: this.connectionData.customerEmail,
-                firstName: this.connectionData.firstName,
-                painPoint: this.connectionData.painPoint,
-                company: this.connectionData.companyName
-              });
-              
-              break;
             }
-          } catch (endpointError) {
-            console.log(`Endpoint ${endpoint} failed:`, endpointError.message);
+          } catch (error) {
+            console.log(`Failed ${endpoint}:`, error.message);
           }
         }
         
-        // Also check global Typeform submission
-        if (global.lastTypeformSubmission && !this.connectionData.painPoint) {
-          console.log('📋 Using global Typeform submission data');
-          const typeform = global.lastTypeformSubmission;
-          this.connectionData.customerEmail = this.connectionData.customerEmail || typeform.email;
-          this.connectionData.firstName = this.connectionData.firstName || typeform.first_name || typeform.firstName;
-          this.connectionData.lastName = this.connectionData.lastName || typeform.last_name || typeform.lastName;
-          this.connectionData.companyName = this.connectionData.companyName || typeform.company_name || typeform.companyName;
-          this.connectionData.painPoint = this.connectionData.painPoint || typeform.pain_point || typeform.struggle;
+        // Check global Typeform
+        if (global.lastTypeformSubmission) {
+          console.log('📋 Using global Typeform data');
+          const tf = global.lastTypeformSubmission;
+          
+          this.connectionData.customerEmail = this.connectionData.customerEmail || tf.email;
+          this.connectionData.firstName = this.connectionData.firstName || tf.first_name;
+          this.connectionData.lastName = this.connectionData.lastName || tf.last_name;
+          this.connectionData.companyName = this.connectionData.companyName || tf.company_name;
+          this.connectionData.painPoint = this.connectionData.painPoint || tf.pain_point;
         }
         
       } catch (error) {
-        console.log('❌ Error fetching call metadata:', error.message);
+        console.log('❌ Error fetching data:', error.message);
       }
     }
-  }
-
-  extractFirstName(fullName) {
-    if (!fullName) return null;
-    return fullName.split(' ')[0];
   }
 
   setupEventHandlers() {
@@ -220,27 +190,12 @@ Remember: Build rapport first, show you understand their struggle, then offer he
   async handleMessage(data) {
     try {
       const parsed = JSON.parse(data);
-      console.log('📥 Raw WebSocket Message:', JSON.stringify(parsed, null, 2));
       
-      // Extract metadata from WebSocket messages
-      if (parsed.call && parsed.call.metadata) {
-        console.log('📞 Extracting metadata from WebSocket');
-        const metadata = parsed.call.metadata;
-        
-        // Update connection data with any new information
-        this.connectionData.customerEmail = this.connectionData.customerEmail || metadata.customer_email || metadata.email;
-        this.connectionData.firstName = this.connectionData.firstName || metadata.first_name || metadata.firstName;
-        this.connectionData.lastName = this.connectionData.lastName || metadata.last_name || metadata.lastName;
-        this.connectionData.companyName = this.connectionData.companyName || metadata.company_name || metadata.companyName;
-        this.connectionData.painPoint = this.connectionData.painPoint || metadata.pain_point || metadata.struggle;
-      }
-
       if (parsed.interaction_type === 'response_required') {
         await this.processUserMessage(parsed);
       }
     } catch (error) {
       console.error('❌ Error handling message:', error.message);
-      await this.sendResponse("I missed that. Could you repeat it?", 9999);
     }
   }
 
@@ -250,71 +205,80 @@ Remember: Build rapport first, show you understand their struggle, then offer he
 
     console.log('🗣️ User said:', userMessage);
     console.log('📊 Current phase:', this.conversationFlow.phase);
-    console.log('👤 Customer:', this.connectionData.firstName || 'Unknown');
 
-    // Mark that user has spoken
-    if (!this.userHasSpoken) {
-      this.userHasSpoken = true;
-      console.log('👤 User spoke first - starting personalized flow');
+    // User has spoken
+    if (!this.conversationFlow.userHasSpoken) {
+      this.conversationFlow.userHasSpoken = true;
+      this.conversationFlow.phase = 'greeting';
+      console.log('👤 User spoke - starting greeting');
     }
 
-    // Check if appointment already booked
+    // Check if already booked
     if (this.appointmentBooked) {
-      console.log('✅ Appointment already booked - wrapping up');
-      await this.sendResponse("Perfect! You're all set. Is there anything else I can help you with today?", parsed.response_id);
+      await this.sendResponse("Perfect! You're all set. Is there anything else I can help you with?", parsed.response_id);
       return;
     }
 
-    // Add user message to conversation history
+    // Add to history
     this.conversationHistory.push({ role: 'user', content: userMessage });
 
-    // Handle conversation based on current phase
+    // Check for interruptions
+    if (this.isInterruption(userMessage) && this.conversationFlow.phase !== 'booking') {
+      await this.handleInterruption(userMessage, parsed.response_id);
+      return;
+    }
+
+    // Handle phases
     switch (this.conversationFlow.phase) {
       case 'greeting':
         await this.handleGreetingPhase(userMessage, parsed.response_id);
         break;
-      
       case 'rapport':
         await this.handleRapportPhase(userMessage, parsed.response_id);
         break;
-      
       case 'pain_point':
         await this.handlePainPointPhase(userMessage, parsed.response_id);
         break;
-      
       case 'solution':
         await this.handleSolutionPhase(userMessage, parsed.response_id);
         break;
-      
       case 'scheduling':
         await this.handleSchedulingPhase(userMessage, parsed.response_id);
         break;
-      
       case 'booking':
         await this.handleBookingPhase(userMessage, parsed.response_id);
         break;
-      
-      default:
-        // Use AI for general conversation
-        await this.generateAIResponse(userMessage, parsed.response_id);
     }
   }
 
-  async handleGreetingPhase(userMessage, responseId) {
-    console.log('👋 Handling greeting phase');
+  isInterruption(userMessage) {
+    const phrases = [
+      'wait', 'hold on', 'question', 'what do you', 'how does', 
+      'explain', 'tell me', 'what is', 'how much', 'pricing', 'cost'
+    ];
+    const lower = userMessage.toLowerCase();
+    return phrases.some(p => lower.includes(p));
+  }
+
+  async handleInterruption(userMessage, responseId) {
+    const messages = [...this.conversationHistory, {
+      role: 'system',
+      content: 'User interrupted with a question. Answer directly, then ask if they have other questions.'
+    }];
     
-    // Create personalized greeting
-    let greeting = "";
-    if (this.connectionData.firstName) {
-      greeting = `Hi ${this.connectionData.firstName}! This is Sarah from Nexella AI. How are you doing today?`;
-    } else {
-      greeting = "Hi there! This is Sarah from Nexella AI. How are you doing today?";
-    }
+    const response = await this.generateAIResponseWithMessages(messages);
+    this.conversationHistory.push({ role: 'assistant', content: response });
+    await this.sendResponse(response, responseId);
+  }
+
+  async handleGreetingPhase(userMessage, responseId) {
+    console.log('👋 Greeting phase');
+    
+    const greeting = `Hi ${this.connectionData.firstName}! This is Sarah from Nexella AI. How are you doing today?`;
     
     this.conversationHistory.push({ role: 'assistant', content: greeting });
     await this.sendResponse(greeting, responseId);
     
-    // Move to rapport phase
     this.conversationFlow.phase = 'rapport';
     this.conversationFlow.greetingCompleted = true;
   }
@@ -322,94 +286,65 @@ Remember: Build rapport first, show you understand their struggle, then offer he
   async handleRapportPhase(userMessage, responseId) {
     console.log('🤝 Building rapport');
     
-    // Generate natural response to their greeting
-    const messages = [...this.conversationHistory];
-    messages.push({
+    const messages = [...this.conversationHistory, {
       role: 'system',
-      content: 'Respond naturally to their greeting. Show genuine interest. After responding, naturally transition to mentioning you noticed they submitted a form about some challenges they\'re facing. Keep it conversational and warm.'
-    });
+      content: `Respond warmly to their greeting. Then mention you saw from their form they're struggling with "${this.connectionData.painPoint}". Show empathy.`
+    }];
     
-    try {
-      const response = await this.generateAIResponseWithMessages(messages);
-      this.conversationHistory.push({ role: 'assistant', content: response });
-      await this.sendResponse(response, responseId);
-      
-      // Move to pain point phase after rapport response
-      this.conversationFlow.phase = 'pain_point';
-      this.conversationFlow.rapportBuilt = true;
-      
-    } catch (error) {
-      // Fallback response
-      const fallback = "That's great to hear! I noticed you recently filled out our form about some challenges you're facing with your business. I'd love to hear more about what's been going on.";
-      this.conversationHistory.push({ role: 'assistant', content: fallback });
-      await this.sendResponse(fallback, responseId);
-      
-      this.conversationFlow.phase = 'pain_point';
-      this.conversationFlow.rapportBuilt = true;
-    }
+    const response = await this.generateAIResponseWithMessages(messages);
+    this.conversationHistory.push({ role: 'assistant', content: response });
+    await this.sendResponse(response, responseId);
+    
+    this.conversationFlow.phase = 'pain_point';
+    this.conversationFlow.rapportBuilt = true;
   }
 
   async handlePainPointPhase(userMessage, responseId) {
-    console.log('🎯 Discussing pain points');
+    console.log('🎯 Discussing pain point');
     
-    // Get specific pain point and create targeted response
     const painPointMap = {
-      "not generating enough leads": {
+      "we're not generating enough leads": {
         services: ["AI Texting", "SMS Revive", "Review Collector"],
         response: "I completely understand how frustrating it can be when you're not getting enough leads coming in. It's like having a great business but no one knows about it, right?"
       },
-      "not following up with leads quickly enough": {
+      "we're not following up with leads quickly enough": {
         services: ["AI Voice Calls", "SMS Follow-Ups", "Appointment Bookings"],
         response: "Oh, I hear this all the time! You get a lead but by the time you follow up, they've already moved on to someone else. Those first few minutes are so critical."
       },
-      "not speaking to qualified leads": {
+      "we're not speaking to qualified leads": {
         services: ["AI qualification system", "CRM Integration"],
         response: "That's so frustrating when you spend time talking to people who aren't even a good fit for your services. It's such a waste of valuable time."
       },
-      "miss calls too much": {
+      "we miss calls too much": {
         services: ["AI Voice Calls", "SMS Follow-Ups"],
         response: "Missing calls is literally missing opportunities, isn't it? Especially when you know that could have been your next big client."
       },
-      "can't handle the amount of leads": {
+      "we can't handle the amount of leads": {
         services: ["Complete automation suite", "CRM Integration"],
         response: "What a great problem to have, but also overwhelming! It's like being so successful that success becomes the challenge."
       },
-      "mix of everything above": {
+      "a mix of everything above": {
         services: ["Complete AI Revenue Rescue System"],
         response: "Wow, it sounds like you're dealing with the full spectrum of growth challenges. That must feel pretty overwhelming at times."
       }
     };
     
-    // Find the matching pain point
-    let painPointKey = null;
-    if (this.connectionData.painPoint) {
-      const painPointLower = this.connectionData.painPoint.toLowerCase();
-      for (const [key, value] of Object.entries(painPointMap)) {
-        if (painPointLower.includes(key) || key.includes(painPointLower)) {
-          painPointKey = key;
-          break;
-        }
+    const painLower = this.connectionData.painPoint.toLowerCase();
+    let matched = null;
+    
+    for (const [key, value] of Object.entries(painPointMap)) {
+      if (painLower.includes(key.replace("we're ", "").replace("we ", ""))) {
+        matched = value;
+        break;
       }
     }
     
-    if (painPointKey) {
-      const painData = painPointMap[painPointKey];
-      const response = `${painData.response} And from what you shared in your form about ${this.connectionData.painPoint}, I can see this is really impacting your business.`;
-      
-      this.conversationHistory.push({ role: 'assistant', content: response });
-      await this.sendResponse(response, responseId);
-      
-      // Store services for solution phase
-      this.recommendedServices = painData.services;
-      
-    } else {
-      // Generic response if no specific pain point
-      const response = "I'd love to understand more about the specific challenges you're facing. What's been the biggest frustration for you lately?";
-      this.conversationHistory.push({ role: 'assistant', content: response });
-      await this.sendResponse(response, responseId);
+    if (matched) {
+      this.recommendedServices = matched.services;
+      this.conversationHistory.push({ role: 'assistant', content: matched.response });
+      await this.sendResponse(matched.response, responseId);
     }
     
-    // Move to solution phase
     this.conversationFlow.phase = 'solution';
     this.conversationFlow.painPointDiscussed = true;
   }
@@ -417,100 +352,121 @@ Remember: Build rapport first, show you understand their struggle, then offer he
   async handleSolutionPhase(userMessage, responseId) {
     console.log('💡 Presenting solution');
     
-    let solutionResponse = "";
+    await new Promise(resolve => setTimeout(resolve, 1500));
     
-    if (this.recommendedServices && this.recommendedServices.length > 0) {
-      if (this.recommendedServices.includes("Complete AI Revenue Rescue System")) {
-        solutionResponse = `Here's the good news... Our AI Revenue Rescue System is designed to handle exactly what you're going through. We basically put your entire lead management on autopilot - from the moment someone shows interest to booking them for appointments. Our AI never sleeps, never misses a call, and follows up instantly. ${this.connectionData.companyName ? `For a company like ${this.connectionData.companyName}, ` : 'Many of our clients say '}this completely transforms how they handle leads.`;
-      } else {
-        solutionResponse = `So here's how we can help... We use ${this.recommendedServices.join(' and ')} to solve this exact problem. ${this.recommendedServices.includes('AI Voice Calls') ? 'Our AI can answer calls 24/7 so you never miss an opportunity. ' : ''}${this.recommendedServices.includes('SMS Revive') ? 'We can even revive those old leads that went cold. ' : ''}The best part? Everything is automated and integrated with your existing systems.`;
+    let solution = "";
+    
+    if (this.recommendedServices?.includes("Complete AI Revenue Rescue System")) {
+      solution = `So here's what we do... We basically put your entire lead management on autopilot. From the moment someone shows interest - whether they call, text, or fill out a form - our AI takes over. It responds instantly, has natural conversations just like I'm having with you now, qualifies them based on YOUR criteria, and books them directly into your calendar. ${this.connectionData.firstName}, imagine waking up to a calendar full of qualified appointments that happened while you were sleeping!`;
+    } else if (this.recommendedServices) {
+      solution = `Here's exactly how we solve this... `;
+      
+      if (this.recommendedServices.includes("AI Voice Calls")) {
+        solution += "Our AI answers every single call, 24/7, and sounds just like a real person. ";
       }
-    } else {
-      solutionResponse = "Based on what you've shared, I think our AI automation could really help streamline your lead management and ensure you're not leaving money on the table.";
+      if (this.recommendedServices.includes("SMS Follow-Ups")) {
+        solution += "We follow up with every lead instantly by text, so they never go cold. ";
+      }
+      if (this.recommendedServices.includes("SMS Revive")) {
+        solution += "We can even wake up all those old leads you thought were dead! ";
+      }
+      
+      solution += `Everything integrates with your current systems seamlessly.`;
     }
     
-    this.conversationHistory.push({ role: 'assistant', content: solutionResponse });
-    await this.sendResponse(solutionResponse, responseId);
+    this.conversationHistory.push({ role: 'assistant', content: solution });
+    await this.sendResponse(solution, responseId);
     
-    // Wait a moment then offer scheduling
     setTimeout(async () => {
-      const schedulingOffer = `I'd love to show you exactly how this would work for ${this.connectionData.companyName || 'your business'}. Our owner, Jaden, does free personalized demos where he can show you the system in action and create a custom plan for your specific situation. Would you be interested in scheduling a quick demo call?`;
+      const offer = `You know what? I'd love to show you exactly how this would work for ${this.connectionData.companyName || 'your business'}. Our owner, Jaden, does these personalized demo calls where he can show you the system live and create a custom solution just for you. It's completely free and super valuable. Would you be interested in seeing it in action?`;
       
-      this.conversationHistory.push({ role: 'assistant', content: schedulingOffer });
-      await this.sendResponse(schedulingOffer, responseId);
+      this.conversationHistory.push({ role: 'assistant', content: offer });
+      await this.sendResponse(offer, responseId);
       
       this.conversationFlow.phase = 'scheduling';
       this.conversationFlow.solutionPresented = true;
-    }, 2000);
+    }, 3000);
   }
 
   async handleSchedulingPhase(userMessage, responseId) {
-    console.log('📅 Handling scheduling response');
+    console.log('📅 Handling scheduling');
     
-    const userLower = userMessage.toLowerCase();
+    const lower = userMessage.toLowerCase();
     
-    // Check for positive intent
-    if (userLower.includes('yes') || userLower.includes('sure') || userLower.includes('interested') || 
-        userLower.includes('yeah') || userLower.includes('ok') || userLower.includes('sounds good') ||
-        userLower.includes('let\'s do it') || userLower.includes('schedule')) {
+    if (lower.includes('yes') || lower.includes('sure') || lower.includes('yeah') || 
+        lower.includes('ok') || lower.includes('sounds good')) {
       
-      // Move to booking phase
       this.conversationFlow.phase = 'booking';
       
-      const response = "Awesome! Let me check our calendar for available times. What day works best for you this week?";
+      const response = "Awesome! Let me check our calendar. What day works best for you this week?";
       this.conversationHistory.push({ role: 'assistant', content: response });
       await this.sendResponse(response, responseId);
       
-    } else if (userLower.includes('no') || userLower.includes('not') || userLower.includes('maybe later')) {
-      // Handle rejection gracefully
-      const response = `No problem at all, ${this.connectionData.firstName || 'I'} completely understand! If you change your mind or want to learn more, we're always here. Is there anything specific about our services you'd like to know more about?`;
+    } else if (lower.includes('no') || lower.includes('not')) {
+      
+      const response = `No problem at all, ${this.connectionData.firstName}! If you change your mind, we're always here. Is there anything specific you'd like to know more about?`;
       this.conversationHistory.push({ role: 'assistant', content: response });
       await this.sendResponse(response, responseId);
       
     } else {
-      // Unclear response - use AI to handle
-      await this.generateAIResponse(userMessage, responseId);
+      const response = "Would you like me to check some available times for a demo call with Jaden?";
+      this.conversationHistory.push({ role: 'assistant', content: response });
+      await this.sendResponse(response, responseId);
     }
   }
 
   async handleBookingPhase(userMessage, responseId) {
-    console.log('📅 Processing booking request');
+    console.log('📅 Processing booking');
     
-    // Check for specific appointment request
     const appointmentMatch = this.detectSpecificAppointmentRequest(userMessage);
     
     if (appointmentMatch) {
-      console.log('🎯 Specific appointment time detected:', appointmentMatch);
+      console.log('🎯 Detected:', appointmentMatch);
       await this.handleImmediateAppointmentBooking(appointmentMatch, responseId);
     } else {
-      // Check for day preference without specific time
       const dayMatch = userMessage.match(/\b(monday|tuesday|wednesday|thursday|friday|tomorrow|today)\b/i);
       
       if (dayMatch) {
-        // Get available times for that day
-        try {
-          const preferredDay = dayMatch[0];
-          const targetDate = this.calculateTargetDate(preferredDay, 10, 0);
-          const availableSlots = await getAvailableTimeSlots(targetDate);
+        const day = dayMatch[0];
+        this.calendarBookingState.selectedDay = day;
+        const targetDate = this.calculateTargetDate(day, 10, 0);
+        
+        const slots = await getAvailableTimeSlots(targetDate);
+        
+        if (slots.length > 0) {
+          this.calendarBookingState.offeredTimes = slots.slice(0, 3);
+          this.calendarBookingState.awaitingTimeSelection = true;
           
-          if (availableSlots.length > 0) {
-            const times = availableSlots.slice(0, 3).map(slot => slot.displayTime).join(', ');
-            const response = `Great! I have ${availableSlots[0].displayTime}${availableSlots.length > 1 ? `, ${availableSlots[1].displayTime}` : ''}${availableSlots.length > 2 ? `, or ${availableSlots[2].displayTime}` : ''} available on ${preferredDay}. Which time works best for you?`;
-            
-            this.conversationHistory.push({ role: 'assistant', content: response });
-            await this.sendResponse(response, responseId);
-          } else {
-            const response = `I don't have any openings on ${preferredDay}. How about ${this.getNextAvailableDay()}?`;
-            this.conversationHistory.push({ role: 'assistant', content: response });
-            await this.sendResponse(response, responseId);
+          const times = this.calendarBookingState.offeredTimes.map(s => s.displayTime);
+          const response = `Perfect! I have ${times.join(', or ')} available on ${day}. Which time works best?`;
+          
+          this.conversationHistory.push({ role: 'assistant', content: response });
+          await this.sendResponse(response, responseId);
+        }
+      } else if (this.calendarBookingState.awaitingTimeSelection) {
+        // Check time selection
+        const timeMatch = userMessage.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+        if (timeMatch) {
+          const hour = parseInt(timeMatch[1]);
+          const period = timeMatch[3] || (hour >= 8 && hour <= 11 ? 'am' : 'pm');
+          
+          const selected = this.calendarBookingState.offeredTimes.find(slot => 
+            slot.displayTime.toLowerCase().includes(`${hour}:00 ${period.toLowerCase()}`)
+          );
+          
+          if (selected) {
+            const appointment = {
+              dateTime: new Date(selected.startTime),
+              dayName: this.calendarBookingState.selectedDay,
+              timeString: selected.displayTime,
+              hour: hour,
+              isBusinessHours: true
+            };
+            await this.handleImmediateAppointmentBooking(appointment, responseId);
           }
-        } catch (error) {
-          console.error('Error getting available slots:', error);
-          await this.generateAIResponse(userMessage, responseId);
         }
       } else {
-        // No specific day mentioned - offer options
-        const response = "I have openings throughout the week. Would you prefer morning or afternoon? And what day works best - perhaps Tuesday or Thursday?";
+        const response = "What day works best - Tuesday or Thursday? I have mornings and afternoons available.";
         this.conversationHistory.push({ role: 'assistant', content: response });
         await this.sendResponse(response, responseId);
       }
@@ -518,178 +474,113 @@ Remember: Build rapport first, show you understand their struggle, then offer he
   }
 
   detectSpecificAppointmentRequest(userMessage) {
-    console.log('🎯 Checking for specific appointment request:', userMessage);
-    
     const patterns = [
-      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:at\s+)?(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?/i,
-      /\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
-      /\b(tomorrow|today)\s+(?:at\s+)?(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?/i
+      /\b(monday|tuesday|wednesday|thursday|friday)\s+(?:at\s+)?(\d{1,2}|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm)?/i,
+      /\b(\d{1,2}|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday)/i,
+      /\b(monday|tuesday|wednesday|thursday|friday)\s+(\d{1,2})\b/i
     ];
 
     for (let i = 0; i < patterns.length; i++) {
       const match = userMessage.match(patterns[i]);
       if (match) {
-        console.log('✅ Pattern matched:', match);
         return this.parseAppointmentMatch(match, i);
       }
     }
-    
     return null;
   }
 
   parseAppointmentMatch(match, patternIndex) {
     let day, hour, minutes = 0, period = null;
     
-    const wordToNum = {
-      'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
-      'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
-      'eleven': 11, 'twelve': 12
-    };
+    const wordToNum = { 'ten': 10, 'eleven': 11, 'twelve': 12 };
     
-    try {
-      switch (patternIndex) {
-        case 0: // "Thursday at 10am"
-          day = match[1];
-          hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
-          minutes = parseInt(match[3] || '0');
-          period = match[4];
-          break;
-        case 1: // "10am Thursday"
-          hour = wordToNum[match[1]?.toLowerCase()] || parseInt(match[1]);
-          minutes = parseInt(match[2] || '0');
-          period = match[3];
-          day = match[4];
-          break;
-        case 2: // "tomorrow at 10am"
-          day = match[1];
-          hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
-          minutes = parseInt(match[3] || '0');
-          period = match[4];
-          break;
-      }
-
-      // Default to business hours if no period specified
-      if (!period) {
+    switch (patternIndex) {
+      case 0: // "Tuesday at 10am"
+        day = match[1];
+        hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
+        minutes = parseInt(match[3] || '0');
+        period = match[4];
+        break;
+      case 1: // "10am Tuesday"
+        hour = wordToNum[match[1]?.toLowerCase()] || parseInt(match[1]);
+        minutes = parseInt(match[2] || '0');
+        period = match[3];
+        day = match[4];
+        break;
+      case 2: // "Tuesday 10"
+        day = match[1];
+        hour = parseInt(match[2]);
         period = (hour >= 8 && hour <= 11) ? 'am' : 'pm';
-      }
-
-      // Convert to 24-hour format
-      period = period.toLowerCase().replace(/[.\s]/g, '');
-      if (period.includes('p') && hour !== 12) {
-        hour += 12;
-      } else if (period.includes('a') && hour === 12) {
-        hour = 0;
-      }
-
-      const targetDate = this.calculateTargetDate(day, hour, minutes);
-      
-      const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
-      const displayPeriod = hour >= 12 ? 'PM' : 'AM';
-      
-      return {
-        dateTime: targetDate,
-        dayName: day,
-        timeString: `${displayHour}:${minutes.toString().padStart(2, '0')} ${displayPeriod}`,
-        originalMatch: match[0],
-        isBusinessHours: hour >= 8 && hour < 16,
-        hour: hour
-      };
-      
-    } catch (error) {
-      console.error('Error parsing appointment:', error);
-      return null;
+        break;
     }
+
+    if (period) {
+      period = period.toLowerCase().replace(/[.\s]/g, '');
+      if (period.includes('p') && hour !== 12) hour += 12;
+      else if (period.includes('a') && hour === 12) hour = 0;
+    }
+
+    const targetDate = this.calculateTargetDate(day, hour, minutes);
+    const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
+    const displayPeriod = hour >= 12 ? 'PM' : 'AM';
+    
+    return {
+      dateTime: targetDate,
+      dayName: day,
+      timeString: `${displayHour}:${minutes.toString().padStart(2, '0')} ${displayPeriod}`,
+      originalMatch: match[0],
+      isBusinessHours: hour >= 8 && hour < 16,
+      hour: hour
+    };
   }
 
   async handleImmediateAppointmentBooking(appointmentRequest, responseId) {
-    try {
-      console.log('🎯 Processing immediate appointment booking');
-      
-      // Validate business hours
-      if (!appointmentRequest.isBusinessHours) {
-        const response = `I'd love to schedule you for ${appointmentRequest.dayName} at ${appointmentRequest.timeString}, but our demo calls are available between 8 AM and 4 PM Arizona time. Would you like to choose a time in that window?`;
-        await this.sendResponse(response, responseId);
-        return;
-      }
-
-      // Validate customer email
-      if (!this.connectionData.customerEmail) {
-        const response = `Perfect timing! I just need your email address to send the calendar invitation.`;
-        await this.sendResponse(response, responseId);
-        return;
-      }
-
-      // Create discovery/form data for the appointment
-      const appointmentData = {
-        first_name: this.connectionData.firstName,
-        last_name: this.connectionData.lastName,
-        company_name: this.connectionData.companyName,
-        pain_point: this.connectionData.painPoint,
-        source: 'Typeform + AI Call',
-        call_type: 'Demo Call with Owner'
-      };
-
-      // Immediately confirm
-      const confirmationResponse = `Perfect! I'm booking your demo call with Jaden for ${appointmentRequest.dayName} at ${appointmentRequest.timeString} Arizona time. You'll receive a calendar invitation at ${this.connectionData.customerEmail} shortly!`;
-      await this.sendResponse(confirmationResponse, responseId);
-
-      // Mark as booked
-      this.appointmentBooked = true;
-      this.calendarBookingState.bookingConfirmed = true;
-      this.conversationFlow.phase = 'completed';
-
-      // Attempt real booking
-      setTimeout(async () => {
-        try {
-          const bookingResult = await autoBookAppointment(
-            this.connectionData.customerName || `${this.connectionData.firstName} ${this.connectionData.lastName}`,
-            this.connectionData.customerEmail,
-            this.connectionData.customerPhone,
-            appointmentRequest.dateTime,
-            appointmentData
-          );
-
-          if (bookingResult.success) {
-            console.log('✅ Calendar booking successful!');
-            await this.sendBookingWebhook(appointmentRequest, appointmentData, bookingResult, 'success');
-          } else {
-            console.log('❌ Calendar booking failed:', bookingResult.error);
-            await this.sendBookingWebhook(appointmentRequest, appointmentData, null, 'failed');
-          }
-        } catch (error) {
-          console.error('❌ Booking error:', error);
-        }
-      }, 1000);
-      
-    } catch (error) {
-      console.error('❌ Error in appointment booking:', error);
-      const fallbackResponse = `I'll get that scheduled for you right away. You'll receive the details at ${this.connectionData.customerEmail}.`;
-      await this.sendResponse(fallbackResponse, responseId);
-      this.appointmentBooked = true;
-    }
-  }
-
-  async generateAIResponse(userMessage, responseId) {
-    try {
-      const messages = [...this.conversationHistory];
-      const response = await this.generateAIResponseWithMessages(messages);
-      
-      this.conversationHistory.push({ role: 'assistant', content: response });
+    console.log('🎯 Booking appointment');
+    
+    if (!appointmentRequest.isBusinessHours) {
+      const response = `Our demo calls are available between 8 AM and 4 PM Arizona time. Would you prefer morning or afternoon?`;
       await this.sendResponse(response, responseId);
-      
-    } catch (error) {
-      console.error('AI response error:', error);
-      const fallback = "I understand. Let me know if you have any questions about how we can help your business.";
-      this.conversationHistory.push({ role: 'assistant', content: fallback });
-      await this.sendResponse(fallback, responseId);
+      return;
     }
+
+    const confirmResponse = `Perfect! I'm booking your demo with Jaden for ${appointmentRequest.dayName} at ${appointmentRequest.timeString} Arizona time. You'll receive a calendar invitation at ${this.connectionData.customerEmail} shortly!`;
+    await this.sendResponse(confirmResponse, responseId);
+
+    this.appointmentBooked = true;
+    this.calendarBookingState.bookingConfirmed = true;
+    this.conversationFlow.phase = 'completed';
+
+    // Book appointment
+    setTimeout(async () => {
+      const bookingResult = await autoBookAppointment(
+        this.connectionData.customerName || `${this.connectionData.firstName} ${this.connectionData.lastName}`,
+        this.connectionData.customerEmail,
+        this.connectionData.customerPhone,
+        appointmentRequest.dateTime,
+        {
+          first_name: this.connectionData.firstName,
+          last_name: this.connectionData.lastName,
+          company_name: this.connectionData.companyName,
+          pain_point: this.connectionData.painPoint,
+          source: 'Typeform + AI Call'
+        }
+      );
+
+      if (bookingResult.success) {
+        console.log('✅ Calendar booking successful!');
+        await this.sendBookingWebhook(appointmentRequest, bookingResult, 'success');
+      } else {
+        console.log('❌ Booking failed:', bookingResult.error);
+        await this.sendBookingWebhook(appointmentRequest, null, 'failed');
+      }
+    }, 1000);
   }
 
   async generateAIResponseWithMessages(messages) {
-    const openaiResponse = await axios.post(
+    const response = await axios.post(
       'https://api.openai.com/v1/chat/completions',
       {
-        model: 'gpt-4o',
+        model: 'gpt-4',
         messages: messages,
         temperature: 0.7,
         max_tokens: 150
@@ -698,26 +589,22 @@ Remember: Build rapport first, show you understand their struggle, then offer he
         headers: {
           Authorization: `Bearer ${config.OPENAI_API_KEY}`,
           'Content-Type': 'application/json'
-        },
-        timeout: 8000
+        }
       }
     );
-
-    return openaiResponse.data.choices[0].message.content;
+    return response.data.choices[0].message.content;
   }
 
   async sendResponse(content, responseId) {
     const now = Date.now();
     
-    // Anti-loop protection
     this.responsesSent = this.responsesSent.filter(time => now - time < 60000);
     
     if (this.responsesSent.length >= this.maxResponsesPerMinute) {
-      console.log('🚫 Response rate limit reached');
+      console.log('🚫 Rate limit reached');
       return;
     }
     
-    // Enforce minimum delay
     const timeSinceLastResponse = now - this.lastResponseTime;
     if (timeSinceLastResponse < this.minimumResponseDelay) {
       const waitTime = this.minimumResponseDelay - timeSinceLastResponse;
@@ -745,8 +632,8 @@ Remember: Build rapport first, show you understand their struggle, then offer he
     } else if (day === 'today') {
       // Keep today
     } else {
-      const daysOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-      const dayIndex = daysOfWeek.indexOf(day.toLowerCase());
+      const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+      const dayIndex = days.indexOf(day.toLowerCase());
       if (dayIndex !== -1) {
         const currentDay = targetDate.getDay();
         let daysToAdd = dayIndex - currentDay;
@@ -764,7 +651,6 @@ Remember: Build rapport first, show you understand their struggle, then offer he
     tomorrow.setDate(tomorrow.getDate() + 1);
     const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     
-    // Skip weekends
     while (tomorrow.getDay() === 0 || tomorrow.getDay() === 6) {
       tomorrow.setDate(tomorrow.getDate() + 1);
     }
@@ -772,69 +658,56 @@ Remember: Build rapport first, show you understand their struggle, then offer he
     return dayNames[tomorrow.getDay()];
   }
 
-  async sendBookingWebhook(appointmentRequest, discoveryData, bookingResult, status) {
-    try {
-      const webhookData = {
-        ...discoveryData,
-        appointment_requested: true,
-        requested_time: appointmentRequest.timeString,
-        requested_day: appointmentRequest.dayName,
-        booking_status: status,
-        calendar_status: status,
-        booking_confirmed_to_user: true
-      };
-      
-      if (bookingResult?.success) {
-        webhookData.appointment_booked = true;
-        webhookData.meeting_link = bookingResult.meetingLink || '';
-        webhookData.event_id = bookingResult.eventId || '';
-        webhookData.event_link = bookingResult.eventLink || '';
-      }
-      
-      await sendSchedulingPreference(
-        this.connectionData.customerName || `${this.connectionData.firstName} ${this.connectionData.lastName}`,
-        this.connectionData.customerEmail,
-        this.connectionData.customerPhone,
-        `${appointmentRequest.dayName} at ${appointmentRequest.timeString}`,
-        this.callId,
-        webhookData
-      );
-      
-      console.log(`✅ ${status} webhook sent`);
-      
-    } catch (error) {
-      console.error('❌ Webhook error:', error.message);
+  async sendBookingWebhook(appointmentRequest, bookingResult, status) {
+    const webhookData = {
+      first_name: this.connectionData.firstName,
+      last_name: this.connectionData.lastName,
+      company_name: this.connectionData.companyName,
+      pain_point: this.connectionData.painPoint,
+      appointment_requested: true,
+      requested_time: appointmentRequest.timeString,
+      requested_day: appointmentRequest.dayName,
+      booking_status: status
+    };
+    
+    if (bookingResult?.success) {
+      webhookData.meeting_link = bookingResult.meetingLink || '';
+      webhookData.event_id = bookingResult.eventId || '';
     }
+    
+    await sendSchedulingPreference(
+      this.connectionData.customerName || `${this.connectionData.firstName} ${this.connectionData.lastName}`,
+      this.connectionData.customerEmail,
+      this.connectionData.customerPhone,
+      `${appointmentRequest.dayName} at ${appointmentRequest.timeString}`,
+      this.callId,
+      webhookData
+    );
+    
+    console.log(`✅ ${status} webhook sent`);
   }
 
   async handleClose() {
     console.log('🔌 Connection closed.');
     
     if (!this.webhookSent && this.callId && this.conversationFlow.rapportBuilt) {
-      try {
-        const conversationData = {
-          first_name: this.connectionData.firstName,
-          last_name: this.connectionData.lastName,
-          company_name: this.connectionData.companyName,
-          pain_point: this.connectionData.painPoint,
-          conversation_phase: this.conversationFlow.phase,
-          scheduling_interest: this.conversationFlow.schedulingOffered,
-          appointment_booked: this.appointmentBooked
-        };
-        
-        await sendSchedulingPreference(
-          this.connectionData.customerName || `${this.connectionData.firstName} ${this.connectionData.lastName}`,
-          this.connectionData.customerEmail,
-          this.connectionData.customerPhone,
-          'Call ended',
-          this.callId,
-          conversationData
-        );
-        
-        console.log('✅ Final webhook sent on close');
-      } catch (error) {
-        console.error('❌ Final webhook failed:', error.message);
-      }
+      const conversationData = {
+        first_name: this.connectionData.firstName,
+        last_name: this.connectionData.lastName,
+        company_name: this.connectionData.companyName,
+        pain_point: this.connectionData.painPoint,
+        conversation_phase: this.conversationFlow.phase,
+        appointment_booked: this.appointmentBooked
+      };
+      
+      await sendSchedulingPreference(
+        this.connectionData.customerName || `${this.connectionData.firstName} ${this.connectionData.lastName}`,
+        this.connectionData.customerEmail,
+        this.connectionData.customerPhone,
+        'Call ended',
+        this.callId,
+        conversationData
+      );
     }
   }
 
