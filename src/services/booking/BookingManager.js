@@ -151,20 +151,25 @@ class BookingManager {
    * Parse time from user message
    */
   parseTimeFromMessage(message) {
+    console.log('🕐 Parsing time from:', message);
+    
     const patterns = [
       /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)\b/i,
       /\b(morning|afternoon)\b/i,
       /\b(\d{1,2})\s*o'?clock\b/i,
-      /\b(ten|eleven|twelve|one|two|three|four|five|six|seven|eight|nine)\s*(am|pm)?\b/i
+      /\b(ten|eleven|twelve|one|two|three|four|five|six|seven|eight|nine)\s*(am|pm)?\b/i,
+      /\b(nine|ten|eleven|twelve)\s*(?:am|a\.m\.|AM)\b/i // Added specific pattern for "nine am"
     ];
     
     for (const pattern of patterns) {
       const match = message.match(pattern);
       if (match) {
+        console.log('✅ Time pattern matched:', match[0]);
         return this.normalizeTimeMatch(match);
       }
     }
     
+    console.log('❌ No time pattern matched');
     return null;
   }
 
