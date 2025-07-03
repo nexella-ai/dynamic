@@ -1,4 +1,4 @@
-// src/services/calendar/CalendarHelpers.js - FIXED WITH ANTI-LOOP BOOKING SYSTEM
+// src/services/calendar/CalendarHelpers.js - FIXED WITH TIMEZONE SUPPORT AND ANTI-LOOP BOOKING SYSTEM
 const GoogleCalendarService = require('./GoogleCalendarService');
 
 // Initialize calendar service
@@ -515,28 +515,22 @@ function parseAppointmentMatch(match, patternIndex) {
   }
 }
 
-// Calculate target date for appointment
+// FIXED: Calculate target date for appointment with proper timezone handling
 function calculateTargetDate(day, hour, minutes) {
-  // CRITICAL: Create date in Arizona timezone context
   const now = new Date();
-  
-  // Get current time in Arizona
-  const arizonaNow = new Date(now.toLocaleString("en-US", {timeZone: "America/Phoenix"}));
-  
-  let targetDate = new Date(arizonaNow);
+  let targetDate = new Date(now);
   
   if (day === 'tomorrow') {
     targetDate.setDate(targetDate.getDate() + 1);
   } else if (day === 'today') {
     // Keep today
   } else {
-    // Handle day names
     const daysOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
     const dayIndex = daysOfWeek.indexOf(day.toLowerCase());
     if (dayIndex !== -1) {
       const currentDay = targetDate.getDay();
       let daysToAdd = dayIndex - currentDay;
-      if (daysToAdd <= 0) daysToAdd += 7; // Next week
+      if (daysToAdd <= 0) daysToAdd += 7;
       targetDate.setDate(targetDate.getDate() + daysToAdd);
     }
   }
@@ -544,11 +538,8 @@ function calculateTargetDate(day, hour, minutes) {
   // Set the time
   targetDate.setHours(hour, minutes, 0, 0);
   
-  console.log('📅 Target date calculation:');
-  console.log('   Day requested:', day);
-  console.log('   Time requested:', `${hour}:${minutes.toString().padStart(2, '0')}`);
-  console.log('   Arizona time:', targetDate.toLocaleString('en-US', { timeZone: 'America/Phoenix' }));
-  console.log('   UTC time:', targetDate.toISOString());
+  console.log('📅 Target date (local):', targetDate.toString());
+  console.log('📅 Target date (ISO/UTC):', targetDate.toISOString());
   
   return targetDate;
 }
