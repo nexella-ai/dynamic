@@ -62,6 +62,7 @@ class TypeformWebhookHandler {
    */
   extractCustomerData(formResponse) {
     const answers = formResponse.answers || [];
+    const fields = formResponse.definition?.fields || [];
     const customerData = {
       formId: formResponse.form_id,
       submittedAt: formResponse.submitted_at,
@@ -69,143 +70,76 @@ class TypeformWebhookHandler {
     };
 
     console.log('📋 Processing answers:', answers.length);
+    console.log('📋 Available fields:', fields.length);
+
+    // Create a map of field IDs to field titles for easy lookup
+    const fieldMap = {};
+    fields.forEach(field => {
+      fieldMap[field.id] = field.title;
+      console.log(`📋 Field mapping: ${field.id} -> "${field.title}"`);
+    });
 
     // Process each answer
     answers.forEach((answer, index) => {
-      console.log(`📋 Answer ${index}:`, {
-        field_id: answer.field?.id,
-        field_ref: answer.field?.ref,
-        field_title: answer.field?.title,
-        type: answer.type,
-        value: answer.text || answer.email || answer.phone_number || answer.choice?.label
-      });
-
+      // Get the field title from the field map
+      const fieldTitle = fieldMap[answer.field?.id] || '';
+      const fieldTitleLower = fieldTitle.toLowerCase();
       const fieldRef = answer.field?.ref?.toLowerCase() || '';
-      const fieldTitle = answer.field?.title?.toLowerCase() || '';
       const fieldId = answer.field?.id || '';
       
-      // Log exact field title for debugging
-      console.log(`🔍 Checking field: "${answer.field?.title}" (lowercase: "${fieldTitle}")`);
+      console.log(`📋 Answer ${index}:`, {
+        field_id: fieldId,
+        field_ref: fieldRef,
+        field_title: fieldTitle,
+        type: answer.type,
+        value: answer.text || answer.email || answer.phone_number || answer.choice?.label || answer.choices?.labels?.join(', ')
+      });
       
-      // ENHANCED EXTRACTION LOGIC - Check multiple patterns
-      
-      // First Name
-      if (fieldRef.includes('first_name') || 
-          fieldRef.includes('firstname') || 
-          fieldRef === 'first' ||
-          fieldTitle.includes('first name') ||
-          fieldTitle === 'first name' ||
-          fieldTitle === 'what is your first name?' ||
-          fieldTitle === "what's your first name?") {
+      // First Name (field id: BNaewCMGayfP)
+      if (fieldId === 'BNaewCMGayfP' || fieldTitleLower === 'first name') {
         customerData.first_name = answer.text;
         console.log('✅ Found first name:', answer.text);
       } 
-      // Last Name
-      else if (fieldRef.includes('last_name') || 
-               fieldRef.includes('lastname') || 
-               fieldRef === 'last' ||
-               fieldTitle.includes('last name') ||
-               fieldTitle === 'last name' ||
-               fieldTitle === 'what is your last name?' ||
-               fieldTitle === "what's your last name?") {
+      // Last Name (field id: 17ftE77Besjh)
+      else if (fieldId === '17ftE77Besjh' || fieldTitleLower === 'last name') {
         customerData.last_name = answer.text;
         console.log('✅ Found last name:', answer.text);
       }
-      // Email
-      else if (answer.type === 'email' || 
-               fieldRef.includes('email') || 
-               fieldTitle.includes('email')) {
+      // Email (field id: UKLrClOAmyvT)
+      else if (fieldId === 'UKLrClOAmyvT' || answer.type === 'email') {
         customerData.email = answer.email;
         console.log('✅ Found email:', answer.email);
       }
-      // Phone
-      else if (answer.type === 'phone_number' || 
-               fieldRef.includes('phone') || 
-               fieldTitle.includes('phone')) {
+      // Phone (field id: m2rLIJQqZJcH)
+      else if (fieldId === 'm2rLIJQqZJcH' || answer.type === 'phone_number') {
         customerData.phone = answer.phone_number;
         console.log('✅ Found phone:', answer.phone_number);
       }
-      // Company/Business Type - EXACT MATCH FOR YOUR TYPEFORM
-      else if (fieldTitle === 'what type of business do you run?' || 
-               fieldTitle.includes('what type of business') || 
-               fieldTitle.includes('business do you run') || 
-               fieldTitle.includes('type of business') ||
-               fieldTitle.includes('company name') ||
-               fieldTitle.includes('business name') ||
-               fieldRef.includes('business_type') || 
-               fieldRef.includes('company') ||
-               fieldRef.includes('business')) {
+      // Company (field id: It59o2twkQkQ)
+      else if (fieldId === 'It59o2twkQkQ' || fieldTitleLower === 'company') {
         customerData.company_name = answer.text;
-        customerData.business_type = answer.text;
-        console.log('✅ Found company/business:', answer.text);
+        console.log('✅ Found company:', answer.text);
       }
-      // Pain Point - EXACT MATCH FOR YOUR TYPEFORM
-      else if (fieldTitle === 'what are you struggling the most with?' ||
-               fieldTitle.includes('what are you struggling') || 
-               fieldTitle.includes('struggling the most with') ||
-               fieldTitle.includes('struggling with') ||
-               fieldTitle.includes('biggest challenge') ||
-               fieldTitle.includes('pain point') ||
-               fieldRef.includes('struggle') || 
-               fieldRef.includes('pain_point') ||
-               fieldRef.includes('pain') ||
-               fieldRef.includes('challenge')) {
+      // Business Type (field id: TMZdwl3MIETt - "What type of business do you run?")
+      else if (fieldId === 'TMZdwl3MIETt' || fieldTitleLower === 'what type of business do you run?') {
         if (answer.type === 'choice' && answer.choice) {
-          customerData.pain_point = answer.choice.label;
-          console.log('✅ Found pain point (choice):', answer.choice.label);
-        } else if (answer.type === 'text') {
-          customerData.pain_point = answer.text;
-          console.log('✅ Found pain point (text):', answer.text);
+          customerData.business_type = answer.choice.label;
+          console.log('✅ Found business type:', answer.choice.label);
         }
       }
-      // Fallback: Try to detect by question position if nothing else works
-      else if (!customerData.first_name && index === 0 && answer.type === 'text') {
-        customerData.first_name = answer.text;
-        console.log('⚠️ Assuming first field is first name:', answer.text);
-      }
-      else if (!customerData.last_name && index === 1 && answer.type === 'text') {
-        customerData.last_name = answer.text;
-        console.log('⚠️ Assuming second field is last name:', answer.text);
+      // Pain Point (field id: XQ39O5KVKBvn - "What are you struggling the most with?")
+      else if (fieldId === 'XQ39O5KVKBvn' || fieldTitleLower === 'what are you struggling the most with?') {
+        if (answer.type === 'choices' && answer.choices) {
+          // Multiple choice with multiple selections
+          customerData.pain_point = answer.choices.labels.join(', ');
+          console.log('✅ Found pain points (multiple):', customerData.pain_point);
+        } else if (answer.type === 'choice' && answer.choice) {
+          // Single choice
+          customerData.pain_point = answer.choice.label;
+          console.log('✅ Found pain point (single):', customerData.pain_point);
+        }
       }
     });
-
-    // CRITICAL: If still missing data, try alternative extraction
-    if (!customerData.first_name || !customerData.last_name || !customerData.company_name || !customerData.pain_point) {
-      console.log('⚠️ Missing critical data, attempting alternative extraction...');
-      
-      // Look through all answers again with looser matching
-      answers.forEach((answer, index) => {
-        const value = answer.text || answer.email || answer.phone_number || answer.choice?.label;
-        
-        // If we're missing first name and this looks like a name
-        if (!customerData.first_name && answer.type === 'text' && value && 
-            !value.includes('@') && !value.match(/^\+?\d+$/) && 
-            value.length < 30 && index < 3) {
-          if (!customerData.last_name) {
-            // Might be first name
-            customerData.first_name = value;
-            console.log('⚠️ Guessing first name:', value);
-          }
-        }
-        
-        // If we're missing company and this is a longer text answer
-        if (!customerData.company_name && answer.type === 'text' && value && 
-            value.length > 3 && !value.includes('@') && index > 2) {
-          // Check if it's not already assigned
-          if (value !== customerData.first_name && value !== customerData.last_name) {
-            customerData.company_name = value;
-            customerData.business_type = value;
-            console.log('⚠️ Guessing company:', value);
-          }
-        }
-        
-        // If we're missing pain point and this is a choice
-        if (!customerData.pain_point && answer.type === 'choice' && answer.choice?.label) {
-          customerData.pain_point = answer.choice.label;
-          console.log('⚠️ Found pain point in choice:', answer.choice.label);
-        }
-      });
-    }
 
     // Extract hidden fields if present
     if (formResponse.hidden) {
@@ -227,13 +161,6 @@ class TypeformWebhookHandler {
       business_type: customerData.business_type || 'MISSING',
       pain_point: customerData.pain_point || 'MISSING'
     });
-
-    // Log warning if critical data is missing
-    if (!customerData.first_name || !customerData.pain_point) {
-      console.error('⚠️ WARNING: Critical data missing!');
-      console.error('⚠️ Please check Typeform field configuration');
-      console.error('⚠️ Expected fields: first_name, last_name, email, phone, business type, pain point');
-    }
 
     return customerData;
   }
@@ -343,38 +270,38 @@ Submitted: ${new Date(customerData.submittedAt).toLocaleString()}`;
     const recommendations = [];
     
     // Check for exact matches from your Typeform options
-    if (painPointLower === "we're not generating enough leads" || 
+    if (painPoint === "We're not generating enough leads." || 
         painPointLower.includes('not generating enough leads') ||
-        painPointLower.includes('generating') && painPointLower.includes('leads')) {
+        (painPointLower.includes('generating') && painPointLower.includes('leads'))) {
       recommendations.push('AI Texting', 'SMS Revive', 'Review Collector');
     }
     
-    if (painPointLower === "we're not following up with leads quickly enough" ||
+    if (painPoint === "We're not following up with leads quickly enough." ||
         painPointLower.includes('not following up') || 
-        painPointLower.includes('follow') && painPointLower.includes('quickly')) {
+        (painPointLower.includes('follow') && painPointLower.includes('quickly'))) {
       recommendations.push('AI Voice Calls', 'SMS Follow-Ups', 'Appointment Bookings');
     }
     
-    if (painPointLower === "we're not speaking to qualified leads" ||
+    if (painPoint === "We're not speaking to qualified leads." ||
         painPointLower.includes('qualified leads') || 
         painPointLower.includes('qualified')) {
       recommendations.push('AI Qualification System', 'CRM Integration');
     }
     
-    if (painPointLower === "we miss calls too much" ||
+    if (painPoint === "We miss calls too much." ||
         painPointLower.includes('miss calls') || 
         painPointLower.includes('missing')) {
       recommendations.push('AI Voice Calls', 'SMS Follow-Ups');
     }
     
-    if (painPointLower === "we can't handle the amount of leads" ||
+    if (painPoint === "We can't handle the amount of leads." ||
         painPointLower.includes("can't handle") || 
-        painPointLower.includes('amount') && painPointLower.includes('leads')) {
+        (painPointLower.includes('amount') && painPointLower.includes('leads'))) {
       recommendations.push('Complete Automation Suite', 'CRM Integration');
     }
     
-    if (painPointLower === "a mix of everything above" ||
-        painPointLower.includes('mix') && painPointLower.includes('everything')) {
+    if (painPoint === "A mix of everything above." ||
+        (painPointLower.includes('mix') && painPointLower.includes('everything'))) {
       return ['Complete AI Revenue Rescue System'];
     }
     
