@@ -782,25 +782,32 @@ USE MEMORY: Reference any previous interactions or context naturally.`
 
   async handleBookingPhase(userMessage, responseId) {
     console.log('📅 Processing booking with memory enhancement');
+    console.log('📝 User message:', userMessage);
     
-    // Check for specific appointment request
+    // First, check for specific appointment request
     const appointmentMatch = this.detectSpecificAppointmentRequest(userMessage);
     
     if (appointmentMatch) {
+      console.log('🎯 Detected specific appointment request:', appointmentMatch);
       await this.handleImmediateAppointmentBooking(appointmentMatch, responseId);
     } else {
-      // Check for day preference
+      // Check for day preference only
       const dayMatch = userMessage.match(/\b(monday|tuesday|wednesday|thursday|friday|tomorrow|today)\b/i);
       
       if (dayMatch) {
-        const preferredDay = dayMatch[0];
+        const preferredDay = dayMatch[0].toLowerCase();
+        this.calendarBookingState.selectedDay = preferredDay; // Store for later use
         const targetDate = this.calculateTargetDate(preferredDay, 10, 0);
         
         try {
           const availableSlots = await getAvailableTimeSlots(targetDate);
           
           if (availableSlots.length > 0) {
-            const times = availableSlots.slice(0, 3).map(slot => slot.displayTime);
+            // Store offered times for reference
+            this.calendarBookingState.offeredTimes = availableSlots.slice(0, 3);
+            this.calendarBookingState.awaitingTimeSelection = true;
+            
+            const times = this.calendarBookingState.offeredTimes.map(slot => slot.displayTime);
             let response = `Perfect! I have `;
             if (times.length === 1) {
               response += `${times[0]} available`;
@@ -809,7 +816,7 @@ USE MEMORY: Reference any previous interactions or context naturally.`
             } else {
               response += `${times[0]}, ${times[1]}, or ${times[2]} available`;
             }
-            response += ` on ${preferredDay}. Which time works best for you?`;
+            response += ` on ${preferredDay.charAt(0).toUpperCase() + preferredDay.slice(1)}. Which time works best for you?`;
             
             this.conversationHistory.push({ role: 'assistant', content: response });
             await this.sendResponse(response, responseId);
@@ -822,8 +829,43 @@ USE MEMORY: Reference any previous interactions or context naturally.`
           console.error('Error checking availability:', error);
           await this.generateMemoryEnhancedResponse(userMessage, responseId);
         }
+      } else if (this.calendarBookingState.awaitingTimeSelection) {
+        // User might be responding with just a time after we offered times
+        const timeMatch = userMessage.match(/\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?/i);
+        
+        if (timeMatch) {
+          console.log('🕐 User selected time:', timeMatch[0]);
+          
+          // Check if this matches one of our offered times
+          const requestedHour = this.parseTimeFromMatch(timeMatch);
+          const matchedSlot = this.calendarBookingState.offeredTimes.find(slot => {
+            const slotHour = new Date(slot.startTime).getHours();
+            return slotHour === requestedHour;
+          });
+          
+          if (matchedSlot) {
+            const appointment = {
+              dateTime: new Date(matchedSlot.startTime),
+              dayName: this.calendarBookingState.selectedDay.charAt(0).toUpperCase() + this.calendarBookingState.selectedDay.slice(1),
+              timeString: matchedSlot.displayTime,
+              hour: requestedHour,
+              isBusinessHours: true
+            };
+            await this.handleImmediateAppointmentBooking(appointment, responseId);
+          } else {
+            // Time doesn't match offered slots
+            const response = `I don't have ${timeMatch[0]} available. Would any of the times I mentioned work for you?`;
+            this.conversationHistory.push({ role: 'assistant', content: response });
+            await this.sendResponse(response, responseId);
+          }
+        } else {
+          // Can't parse time, ask again
+          const response = "I didn't catch that. Could you please specify which time works best for you from the options I mentioned?";
+          this.conversationHistory.push({ role: 'assistant', content: response });
+          await this.sendResponse(response, responseId);
+        }
       } else {
-        // No specific day - offer suggestions
+        // No specific day or time mentioned - offer suggestions
         const response = "I have good availability this week! Do you prefer mornings or afternoons? And what days generally work best for you - maybe Tuesday or Thursday?";
         this.conversationHistory.push({ role: 'assistant', content: response });
         await this.sendResponse(response, responseId);
@@ -833,14 +875,20 @@ USE MEMORY: Reference any previous interactions or context naturally.`
 
   detectSpecificAppointmentRequest(userMessage) {
     const patterns = [
+      // "Tuesday at 10am" or "Tuesday at ten"
       /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:at\s+)?(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?/i,
-      /\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
-      /\b(tomorrow|today)\s+(?:at\s+)?(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?/i
+      // "10am Tuesday" or "ten AM Tuesday"
+      /\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?\s*(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
+      // "tomorrow at 10am"
+      /\b(tomorrow|today)\s+(?:at\s+)?(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?/i,
+      // Just "10am" or "ten AM" when day is already known
+      /^(?:.*?)(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)(?:\s|$)/i
     ];
 
     for (let i = 0; i < patterns.length; i++) {
       const match = userMessage.match(patterns[i]);
       if (match) {
+        console.log(`🎯 Pattern ${i} matched:`, match[0]);
         return this.parseAppointmentMatch(match, i);
       }
     }
@@ -859,26 +907,35 @@ USE MEMORY: Reference any previous interactions or context naturally.`
     
     try {
       switch (patternIndex) {
-        case 0:
+        case 0: // "Tuesday at 10am"
           day = match[1];
           hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
           minutes = parseInt(match[3] || '0');
           period = match[4];
           break;
-        case 1:
+        case 1: // "10am Tuesday"
           hour = wordToNum[match[1]?.toLowerCase()] || parseInt(match[1]);
           minutes = parseInt(match[2] || '0');
           period = match[3];
           day = match[4];
           break;
-        case 2:
+        case 2: // "tomorrow at 10am"
           day = match[1];
           hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
           minutes = parseInt(match[3] || '0');
           period = match[4];
           break;
+        case 3: // Just "10am" - use selected day from state
+          hour = wordToNum[match[1]?.toLowerCase()] || parseInt(match[1]);
+          minutes = parseInt(match[2] || '0');
+          period = match[3];
+          day = this.calendarBookingState?.selectedDay || 'tuesday'; // Use previously mentioned day
+          break;
       }
 
+      console.log(`📅 Parsed: day=${day}, hour=${hour}, minutes=${minutes}, period=${period}`);
+
+      // Handle period
       if (!period) {
         period = (hour >= 8 && hour <= 11) ? 'am' : 'pm';
       }
@@ -896,7 +953,7 @@ USE MEMORY: Reference any previous interactions or context naturally.`
       
       return {
         dateTime: targetDate,
-        dayName: day,
+        dayName: day.charAt(0).toUpperCase() + day.slice(1),
         timeString: `${displayHour}:${minutes.toString().padStart(2, '0')} ${displayPeriod}`,
         originalMatch: match[0],
         isBusinessHours: hour >= 8 && hour < 16,
@@ -1178,6 +1235,29 @@ USE MEMORY: Reference any previous interactions or context naturally.`
     } catch (error) {
       console.error('Error storing successful booking:', error);
     }
+  }
+
+  parseTimeFromMatch(timeMatch) {
+    const wordToNum = {
+      'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+      'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+      'eleven': 11, 'twelve': 12
+    };
+    
+    let hour = wordToNum[timeMatch[1]?.toLowerCase()] || parseInt(timeMatch[1]);
+    const period = timeMatch[3] || '';
+    
+    // Convert to 24-hour format
+    if (period.toLowerCase().includes('p') && hour !== 12) {
+      hour += 12;
+    } else if (period.toLowerCase().includes('a') && hour === 12) {
+      hour = 0;
+    } else if (!period && hour < 8) {
+      // Assume PM for hours less than 8 without AM/PM
+      hour += 12;
+    }
+    
+    return hour;
   }
 
   calculateTargetDate(day, hour, minutes) {
