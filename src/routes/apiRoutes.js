@@ -959,6 +959,35 @@ router.post('/webhook/typeform', express.json(), async (req, res) => {
   }
 });
 
+// Debug endpoint to see raw Typeform webhook data
+router.post('/webhook/typeform/debug', express.json(), async (req, res) => {
+  console.log('🔍 DEBUG: Raw Typeform webhook received');
+  console.log('🔍 Headers:', req.headers);
+  console.log('🔍 Body:', JSON.stringify(req.body, null, 2));
+  
+  if (req.body.form_response && req.body.form_response.answers) {
+    console.log('🔍 Answers array:');
+    req.body.form_response.answers.forEach((answer, index) => {
+      console.log(`Answer ${index}:`, {
+        field_id: answer.field?.id,
+        field_ref: answer.field?.ref,
+        field_title: answer.field?.title,
+        type: answer.type,
+        text: answer.text,
+        email: answer.email,
+        phone_number: answer.phone_number,
+        choice: answer.choice
+      });
+    });
+  }
+  
+  res.json({ 
+    success: true, 
+    message: 'Debug data logged to console',
+    answersCount: req.body.form_response?.answers?.length || 0
+  });
+});
+
 // Get Typeform data by email (for testing/debugging)
 router.get('/typeform/customer/:email', async (req, res) => {
   try {
