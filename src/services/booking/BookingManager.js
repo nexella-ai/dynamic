@@ -88,9 +88,9 @@ class BookingManager {
     }
     
     // Initialize timezone if needed
-    if (!this.bookingState.userTimezone && !this.bookingState.timezoneConfirmed) {
+    if (!this.bookingState.userTimezone) {
       const timezoneMessage = this.initializeTimezone();
-      if (timezoneMessage) {
+      if (timezoneMessage && !this.bookingState.timezoneConfirmed) {
         return timezoneMessage;
       }
     }
@@ -121,6 +121,13 @@ class BookingManager {
     const appointmentMatch = this.parseAppointmentFromMessage(userMessage);
     if (appointmentMatch) {
       return await this.handleDirectBooking(appointmentMatch);
+    }
+    
+    // If no specific pattern matched but we're in booking phase
+    if (!this.bookingState.selectedDay) {
+      return "What day works best for you this week?";
+    } else if (this.bookingState.awaitingTimeSelection) {
+      return "What time works best for you?";
     }
     
     return null;
