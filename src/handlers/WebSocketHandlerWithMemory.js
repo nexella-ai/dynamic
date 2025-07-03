@@ -69,6 +69,18 @@ class WebSocketHandlerWithMemory {
     this.responsesSent = [];
     this.maxResponsesPerMinute = 10;
     
+    // Calendar booking state
+    this.calendarBookingState = {
+      hasDetectedBookingRequest: false,
+      bookingConfirmed: false,
+      lastBookingResponse: null,
+      bookingResponseSent: false,
+      lastAppointmentMatch: null,
+      awaitingTimeSelection: false,
+      offeredTimes: [],
+      selectedDay: null
+    };
+    
     // Phase tracking flags to prevent loops
     this.transitionPhraseSent = false;
     this.lastProcessedMessageId = null;
@@ -392,7 +404,11 @@ USE MEMORY: Reference any previous interactions or context naturally.`
       }
     } catch (error) {
       console.error('❌ Error handling message:', error.message);
-      await this.sendResponse("I missed that. Could you repeat it?", 9999);
+      console.error('Stack:', error.stack);
+      // Don't send error response if it's a processing error
+      if (!error.message.includes('Cannot set properties') && !error.message.includes('Cannot read properties')) {
+        await this.sendResponse("I missed that. Could you repeat it?", 9999);
+      }
     }
   }
 
@@ -679,7 +695,21 @@ USE MEMORY: Reference any previous interactions or context naturally.`
     
     // CRITICAL: Check if we've already presented the solution
     if (this.conversationFlow.solutionPresented) {
-      console.log('⚠️ Solution already presented, skipping to avoid loops');
+      console.log('⚠️ Solution already presented, moving to scheduling');
+      // If user is responding to solution, check if they're ready for scheduling
+      const userLower = userMessage.toLowerCase();
+      if (userLower.includes('yes') || userLower.includes('yep') || userLower.includes('sure') || 
+          userLower.includes('ok') || userLower.includes('sounds good')) {
+        // They're showing interest, offer the demo
+        if (!this.conversationFlow.schedulingOffered) {
+          const demoOffer = `You know what? I'd love to show you exactly how this would work for ${this.connectionData.companyName || 'your specific business'}. Our owner, Jaden, does these personalized demo calls where he can show you the system live and create a custom solution just for you. It's completely free and super valuable - even if you decide not to move forward. Would you be interested in seeing it in action?`;
+          
+          this.conversationHistory.push({ role: 'assistant', content: demoOffer });
+          await this.sendResponse(demoOffer, responseId);
+          this.conversationFlow.schedulingOffered = true;
+        }
+        this.conversationFlow.phase = 'scheduling';
+      }
       return;
     }
     
@@ -714,6 +744,9 @@ USE MEMORY: Reference any previous interactions or context naturally.`
       }
       if (this.recommendedServices.includes("Review Collector")) {
         solutionResponse += "Plus, we automatically collect reviews from happy customers to boost your online reputation and attract even more leads organically. ";
+      }
+      if (this.recommendedServices.includes("Appointment Bookings")) {
+        solutionResponse += "And our appointment booking system schedules meetings automatically without any manual work. ";
       }
       
       solutionResponse += `The best part? Everything integrates with your current systems, and we handle all the tech stuff for you.`;
