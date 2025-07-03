@@ -3,14 +3,14 @@ require('dotenv').config();
 const express = require('express');
 const WebSocket = require('ws');
 const http = require('http');
-const config = require('./config/environment');
-const apiRoutes = require('./routes/apiRoutes');
+const config = require('./src/config/environment');
+const apiRoutes = require('./src/routes/apiRoutes');
 
 // Handlers
-const WebSocketHandler = require('./handlers/WebSocketHandler');
+const WebSocketHandler = require('./src/handlers/WebSocketHandler');
 let WebSocketHandlerWithMemory = null;
 try {
-  WebSocketHandlerWithMemory = require('./handlers/WebSocketHandlerWithMemory');
+  WebSocketHandlerWithMemory = require('./src/handlers/WebSocketHandlerWithMemory');
   console.log('✅ Memory-enhanced handler available');
 } catch (error) {
   console.log('⚠️ Memory-enhanced handler not available');
@@ -96,7 +96,7 @@ async function initializeKnowledgeBase() {
   }
 
   try {
-    const RAGMemoryService = require('./services/memory/RAGMemoryService');
+    const RAGMemoryService = require('./src/services/memory/RAGMemoryService');
     const memoryService = new RAGMemoryService();
     
     // Check if knowledge base has industry data
@@ -143,7 +143,7 @@ server.listen(PORT, async () => {
   
   // Initialize calendar if credentials are available
   try {
-    const { initializeCalendarService } = require('./services/calendar/CalendarHelpers');
+    const { initializeCalendarService } = require('./src/services/calendar/CalendarHelpers');
     const initialized = await initializeCalendarService();
     
     if (initialized) {
