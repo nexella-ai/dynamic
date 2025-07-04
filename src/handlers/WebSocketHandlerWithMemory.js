@@ -185,6 +185,50 @@ class WebSocketHandlerWithMemory {
       if (parsed.interaction_type === 'response_required') {
         // Queue message for processing
         this.messageQueue.push(parsed);
+
+        // Partial fix for WebSocketHandlerWithMemory.js - processUserMessage method
+
+async processUserMessage(parsed) {
+  // Prevent duplicate processing
+  const messageId = parsed.response_id || Date.now();
+  if (this.lastProcessedMessageId === messageId) {
+    console.log('🚫 Duplicate message ignored');
+    return;
+  }
+  this.lastProcessedMessageId = messageId;
+  
+  const userMessage = parsed.transcript[parsed.transcript.length - 1]?.content || "";
+  console.log('🗣️ User said:', userMessage);
+  
+  // CRITICAL: Prevent responses if one is in progress
+  if (this.responseInProgress) {
+    console.log('🚫 Response already in progress');
+    return;
+  }
+  
+  // Check if already booked
+  if (this.appointmentBooked) {
+    await this.sendSingleResponse("Your appointment is all set! You'll receive a calendar invitation shortly.", parsed.response_id);
+    return;
+  }
+  
+  // Use simplified conversation manager
+  const response = await this.conversationManager.getResponse(userMessage);
+  
+  if (response) {
+    await this.sendSingleResponse(response, parsed.response_id);
+    
+    // CRITICAL: Don't queue additional responses
+    // The conversation manager will handle the flow
+  }
+  
+  // Check if we should transition to booking
+  const state = this.conversationManager.getState();
+  if (state.isBooking && !this.bookingManager.getState().bookingInProgress) {
+    // Let booking manager take over
+    this.bookingManager.bookingState.bookingInProgress = true;
+  }
+}
         
         // Process queue if not already processing
         if (!this.isProcessingMessage) {
