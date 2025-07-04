@@ -1,4 +1,4 @@
-// src/services/calendar/GoogleCalendarService.js - COMPLETE FILE WITH TIMEZONE SUPPORT
+// src/services/calendar/GoogleCalendarService.js - SIMPLIFIED ARIZONA TIME ONLY
 const { google } = require('googleapis');
 const config = require('../../config/environment');
 
@@ -11,16 +11,15 @@ class GoogleCalendarService {
     // Arizona timezone - MST year-round (no DST)
     this.timezone = 'America/Phoenix';
     
-    // Your business hours in Arizona MST
+    // Business hours in Arizona
     this.businessHours = {
-      start: 8,   // 8 AM Arizona time
-      end: 16,    // 4 PM Arizona time (16:00 in 24-hour format)
-      days: [1, 2, 3, 4, 5], // Monday to Friday only
-      slotDuration: 60, // 1 hour appointments
-      availableHours: [8, 9, 10, 11, 13, 14, 15] // 8AM-11AM, 1PM-3PM (skip 12PM for lunch)
+      start: 8,   // 8 AM
+      end: 16,    // 4 PM
+      days: [1, 2, 3, 4, 5], // Monday to Friday
+      availableHours: [8, 9, 10, 11, 13, 14, 15] // Skip noon for lunch
     };
     
-    console.log('🔧 GoogleCalendarService initialized for Arizona MST');
+    console.log('🔧 GoogleCalendarService initialized');
     console.log('📅 Calendar ID:', this.calendarId);
     console.log('🌍 Timezone:', this.timezone);
   }
@@ -28,10 +27,6 @@ class GoogleCalendarService {
   async initialize() {
     try {
       console.log('🔧 Initializing Google Calendar service...');
-      console.log('🔍 Environment Check:');
-      console.log('   GOOGLE_PROJECT_ID:', config.GOOGLE_PROJECT_ID ? '✅ SET' : '❌ MISSING');
-      console.log('   GOOGLE_PRIVATE_KEY:', config.GOOGLE_PRIVATE_KEY ? `✅ SET (${config.GOOGLE_PRIVATE_KEY.length} chars)` : '❌ MISSING');
-      console.log('   GOOGLE_CLIENT_EMAIL:', config.GOOGLE_CLIENT_EMAIL ? '✅ SET' : '❌ MISSING');
       
       if (!config.GOOGLE_PROJECT_ID || !config.GOOGLE_PRIVATE_KEY || !config.GOOGLE_CLIENT_EMAIL) {
         throw new Error('Missing required Google Calendar environment variables');
@@ -43,7 +38,6 @@ class GoogleCalendarService {
         this.calendar = google.calendar({ version: 'v3', auth: this.auth });
         console.log('✅ Google Calendar service initialized successfully');
         
-        // Test the connection
         const testResult = await this.testConnection();
         if (!testResult) {
           console.warn('⚠️ Calendar connection test had issues but continuing...');
@@ -54,7 +48,6 @@ class GoogleCalendarService {
       }
     } catch (error) {
       console.error('❌ Failed to initialize Google Calendar service:', error.message);
-      console.error('Stack:', error.stack);
       throw error;
     }
   }
@@ -63,96 +56,35 @@ class GoogleCalendarService {
     try {
       console.log('🔐 Setting up Google Calendar authentication...');
       
-      // Process the private key properly
       let privateKey = config.GOOGLE_PRIVATE_KEY;
-      
-      // Handle different private key formats
       if (privateKey.includes('\\n')) {
         privateKey = privateKey.replace(/\\n/g, '\n');
       }
       
-      // Ensure proper formatting
-      if (!privateKey.includes('-----BEGIN PRIVATE KEY-----')) {
-        console.error('❌ Private key format invalid - missing BEGIN marker');
-        throw new Error('Invalid private key format');
-      }
-      
-      console.log('🔑 Private key format check:', 
-        privateKey.includes('-----BEGIN PRIVATE KEY-----') && 
-        privateKey.includes('-----END PRIVATE KEY-----') ? '✅ Valid' : '❌ Invalid'
-      );
-      
-      // Try domain-wide delegation first
-      try {
-        console.log('🔄 Attempting domain-wide delegation...');
-        
-        // Create service account credentials object
-        const serviceAccountCredentials = {
-          type: 'service_account',
+      const authClient = new google.auth.GoogleAuth({
+        credentials: {
+          type: "service_account",
           project_id: config.GOOGLE_PROJECT_ID,
-          private_key_id: config.GOOGLE_PRIVATE_KEY_ID || 'private_key_id',
+          private_key_id: config.GOOGLE_PRIVATE_KEY_ID || "key_id",
           private_key: privateKey,
           client_email: config.GOOGLE_CLIENT_EMAIL,
-          client_id: '117919119573919029172', // Your OAuth2 Client ID
-          auth_uri: 'https://accounts.google.com/o/oauth2/auth',
-          token_uri: 'https://oauth2.googleapis.com/token',
-          auth_provider_x509_cert_url: 'https://www.googleapis.com/oauth2/v1/certs',
+          client_id: config.GOOGLE_CLIENT_ID || "client_id",
+          auth_uri: "https://accounts.google.com/o/oauth2/auth",
+          token_uri: "https://oauth2.googleapis.com/token",
+          auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
           client_x509_cert_url: `https://www.googleapis.com/oauth2/v1/certs/${encodeURIComponent(config.GOOGLE_CLIENT_EMAIL)}`
-        };
-        
-        // Create JWT client with impersonation
-        const jwtClient = new google.auth.JWT({
-          email: serviceAccountCredentials.client_email,
-          key: serviceAccountCredentials.private_key,
-          scopes: [
-            'https://www.googleapis.com/auth/calendar',
-            'https://www.googleapis.com/auth/calendar.events'
-          ],
-          subject: config.GOOGLE_SUBJECT_EMAIL || 'jaden@nexellaai.com' // The user to impersonate
-        });
-        
-        // Test authorization
-        await jwtClient.authorize();
-        this.auth = jwtClient;
-        
-        console.log('✅ Domain-wide delegation successful!');
-        console.log('📧 Service account:', config.GOOGLE_CLIENT_EMAIL);
-        console.log('👤 Impersonating:', config.GOOGLE_SUBJECT_EMAIL || 'jaden@nexellaai.com');
-        
-      } catch (delegationError) {
-        console.log('⚠️ Domain-wide delegation failed:', delegationError.message);
-        console.log('🔄 Falling back to regular service account access...');
-        
-        // Fallback to regular authentication
-        const authClient = new google.auth.GoogleAuth({
-          credentials: {
-            type: "service_account",
-            project_id: config.GOOGLE_PROJECT_ID,
-            private_key_id: config.GOOGLE_PRIVATE_KEY_ID || "key_id",
-            private_key: privateKey,
-            client_email: config.GOOGLE_CLIENT_EMAIL,
-            client_id: config.GOOGLE_CLIENT_ID || "client_id",
-            auth_uri: "https://accounts.google.com/o/oauth2/auth",
-            token_uri: "https://oauth2.googleapis.com/token",
-            auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-            client_x509_cert_url: `https://www.googleapis.com/oauth2/v1/certs/${encodeURIComponent(config.GOOGLE_CLIENT_EMAIL)}`
-          },
-          scopes: [
-            'https://www.googleapis.com/auth/calendar',
-            'https://www.googleapis.com/auth/calendar.events'
-          ]
-        });
-        
-        this.auth = await authClient.getClient();
-        console.log('✅ Using regular service account authentication');
-      }
+        },
+        scopes: [
+          'https://www.googleapis.com/auth/calendar',
+          'https://www.googleapis.com/auth/calendar.events'
+        ]
+      });
       
-      this.calendarId = config.GOOGLE_CALENDAR_ID || 'jaden@nexellaai.com';
-      console.log('📅 Using calendar:', this.calendarId);
+      this.auth = await authClient.getClient();
+      console.log('✅ Authentication configured successfully');
       
     } catch (error) {
       console.error('❌ Authentication setup failed:', error.message);
-      console.error('Stack:', error.stack);
       throw error;
     }
   }
@@ -160,116 +92,30 @@ class GoogleCalendarService {
   async testConnection() {
     try {
       console.log('🧪 Testing Google Calendar connection...');
-      console.log('📅 Target calendar ID:', this.calendarId);
       
-      // CRITICAL: List all calendars the service account can see
-      try {
-        console.log('📋 Listing all accessible calendars...');
-        const calendarList = await this.calendar.calendarList.list({
-          maxResults: 50,
-          showHidden: true,
-          minAccessRole: 'writer' // Only show calendars we can write to
-        });
-        
-        console.log(`✅ Service account has access to ${calendarList.data.items?.length || 0} calendars:`);
-        
-        if (calendarList.data.items) {
-          calendarList.data.items.forEach(cal => {
-            console.log(`   📅 ${cal.id} (${cal.summary || 'No name'}) - Role: ${cal.accessRole}`);
-            if (cal.id === this.calendarId) {
-              console.log('      ✅ TARGET CALENDAR FOUND WITH WRITE ACCESS');
-            }
-          });
-          
-          // Check if our target calendar is in the list
-          const hasTargetCalendar = calendarList.data.items.some(cal => cal.id === this.calendarId);
-          if (!hasTargetCalendar) {
-            console.error('❌ TARGET CALENDAR NOT FOUND IN SERVICE ACCOUNT\'S CALENDAR LIST');
-            console.error(`❌ The service account cannot see calendar: ${this.calendarId}`);
-            console.error('🔧 SOLUTION: Share the calendar with the service account email');
-            console.error(`🔧 Share with: ${config.GOOGLE_CLIENT_EMAIL}`);
-            console.error('🔧 Permission needed: "Make changes to events"');
-          }
-        }
-      } catch (listError) {
-        console.error('⚠️ Cannot list calendars:', listError.message);
-      }
+      const response = await this.calendar.calendars.get({
+        calendarId: this.calendarId
+      });
       
-      // Try to get the specific calendar
-      try {
-        const calendarResponse = await this.calendar.calendars.get({
-          calendarId: this.calendarId
-        });
-        
-        console.log(`✅ Connected to calendar: ${calendarResponse.data.summary || this.calendarId}`);
-        console.log(`📅 Calendar timezone: ${calendarResponse.data.timeZone || 'Not set'}`);
-        console.log(`📅 Calendar description: ${calendarResponse.data.description || 'No description'}`);
-        
-        // Test event list permission
-        const testEventList = await this.calendar.events.list({
-          calendarId: this.calendarId,
-          maxResults: 1,
-          timeMin: new Date().toISOString()
-        });
-        
-        console.log('✅ Can list events from calendar');
-        
-        // Test event creation permission (dry run - create and immediately delete)
-        try {
-          const testEvent = await this.calendar.events.insert({
-            calendarId: this.calendarId,
-            resource: {
-              summary: 'Test Event - Delete Me',
-              start: { dateTime: new Date(Date.now() + 86400000).toISOString() },
-              end: { dateTime: new Date(Date.now() + 90000000).toISOString() }
-            }
-          });
-          
-          // Immediately delete the test event
-          await this.calendar.events.delete({
-            calendarId: this.calendarId,
-            eventId: testEvent.data.id
-          });
-          
-          console.log('✅ Can create and delete events in calendar');
-        } catch (eventError) {
-          console.log('⚠️ Cannot create events:', eventError.message);
-        }
-        
-      } catch (calendarError) {
-        console.error('❌ Cannot access calendar:', this.calendarId);
-        console.error('Error:', calendarError.message);
-        
-        if (calendarError.response?.status === 404) {
-          console.log('💡 Calendar not found. Possible issues:');
-          console.log('   1. Calendar ID is incorrect');
-          console.log('   2. Calendar is not shared with:', config.GOOGLE_CLIENT_EMAIL);
-          console.log('   3. Using wrong authentication method');
-        }
-        
-        // Don't fail initialization, just warn
-        console.log('⚠️ Continuing with initialization despite calendar access issues');
-      }
-      
+      console.log(`✅ Connected to calendar: ${response.data.summary || this.calendarId}`);
       return true;
+      
     } catch (error) {
       console.error('❌ Calendar connection test failed:', error.message);
-      console.error('Details:', error.response?.data || error);
-      // Don't fail completely, just return false
       return false;
     }
   }
 
   async getAvailableSlots(date) {
     try {
-      console.log(`📅 Getting available slots for: ${date} (Arizona MST)`);
+      console.log('📅 Getting available slots for:', date);
       
       const targetDate = new Date(date);
       const dayOfWeek = targetDate.getDay();
       
       // Check if it's a business day
       if (!this.businessHours.days.includes(dayOfWeek)) {
-        console.log('📅 Not a business day, no slots available');
+        console.log('📅 Not a business day');
         return [];
       }
 
@@ -277,18 +123,18 @@ class GoogleCalendarService {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       if (targetDate < today) {
-        console.log('📅 Date is in the past, no slots available');
+        console.log('📅 Date is in the past');
         return [];
       }
 
-      // Get start and end of day in Arizona time
+      // Get start and end of day
       const startOfDay = new Date(targetDate);
       startOfDay.setHours(0, 0, 0, 0);
       
       const endOfDay = new Date(targetDate);
       endOfDay.setHours(23, 59, 59, 999);
 
-      // Get existing events for the day
+      // Get existing events
       const response = await this.calendar.events.list({
         calendarId: this.calendarId,
         timeMin: startOfDay.toISOString(),
@@ -302,24 +148,19 @@ class GoogleCalendarService {
 
       // Generate available slots
       const availableSlots = [];
+      const now = new Date();
       
       for (const hour of this.businessHours.availableHours) {
-        // Create slot time properly
         const slotStart = new Date(targetDate);
         slotStart.setHours(hour, 0, 0, 0);
         
         const slotEnd = new Date(targetDate);
         slotEnd.setHours(hour + 1, 0, 0, 0);
         
-        // If it's today, only show future slots
-        if (targetDate.toDateString() === today.toDateString()) {
-          const now = new Date();
-          const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
-          
-          if (slotStart <= oneHourFromNow) {
-            console.log(`⏰ Skipping past/too-soon slot: ${hour}:00 MST`);
-            continue;
-          }
+        // Skip if in the past
+        if (slotStart <= now) {
+          console.log(`⏰ Skipping past time: ${hour}:00`);
+          continue;
         }
         
         // Check for conflicts
@@ -336,10 +177,9 @@ class GoogleCalendarService {
             endTime: slotEnd.toISOString(),
             displayTime: `${hour > 12 ? hour - 12 : hour}:00 ${hour >= 12 ? 'PM' : 'AM'}`
           });
-          
-          console.log(`✅ Available slot: ${hour}:00 MST`);
+          console.log(`✅ Available slot: ${hour}:00`);
         } else {
-          console.log(`❌ Slot conflict at ${hour}:00 MST`);
+          console.log(`❌ Slot conflict at ${hour}:00`);
         }
       }
 
@@ -348,7 +188,6 @@ class GoogleCalendarService {
 
     } catch (error) {
       console.error('❌ Error getting calendar slots:', error.message);
-      console.error('Details:', error.response?.data || error);
       throw error;
     }
   }
@@ -372,83 +211,51 @@ class GoogleCalendarService {
 
     } catch (error) {
       console.error('❌ Error checking slot availability:', error.message);
-      // Return true to allow booking attempt anyway
-      return true;
+      return true; // Assume available if can't check
     }
   }
 
   async createEvent(eventDetails) {
     try {
       console.log('📅 Creating calendar event:', eventDetails.summary);
-      console.log('📅 Using calendar ID:', this.calendarId);
-      console.log('🕐 Start time (UTC):', eventDetails.startTime);
-      console.log('🕐 End time (UTC):', eventDetails.endTime);
+      console.log('🕐 Start time:', eventDetails.startTime);
+      console.log('🕐 End time:', eventDetails.endTime);
       console.log('📧 Attendee:', eventDetails.attendeeEmail);
-      console.log('🌍 Customer timezone:', eventDetails.customerTimezone || 'Not specified');
 
       // Validate inputs
       if (!eventDetails.attendeeEmail || eventDetails.attendeeEmail === 'prospect@example.com') {
         throw new Error('Valid attendee email required');
       }
 
-      // First, check if the slot is still available
+      // Check availability first
       const isAvailable = await this.isSlotAvailable(eventDetails.startTime, eventDetails.endTime);
       if (!isAvailable) {
-        console.log('❌ Slot no longer available');
         return {
           success: false,
           error: 'Slot no longer available',
-          message: 'That time slot has been booked by someone else'
+          message: 'That time slot has been booked'
         };
       }
 
-      // Parse the UTC time and create proper timezone-aware event
-      const startDateTime = new Date(eventDetails.startTime);
-      const endDateTime = new Date(eventDetails.endTime);
-      
-      // Add customer timezone info to description if different from Arizona
-      let timezoneNote = '';
-      if (eventDetails.customerTimezone && eventDetails.customerTimezone !== 'America/Phoenix') {
-        const customerTimeStart = startDateTime.toLocaleString('en-US', {
-          timeZone: eventDetails.customerTimezone,
-          weekday: 'long',
-          month: 'long',
-          day: 'numeric',
-          hour: 'numeric',
-          minute: '2-digit',
-          hour12: true
-        });
-        timezoneNote = `\n\nCustomer's Local Time: ${customerTimeStart} (${eventDetails.customerTimezone})`;
-      }
-      
-      // Create the event object WITH attendees
+      // Create the event
       const event = {
         summary: eventDetails.summary || 'Nexella AI Consultation Call',
-        description: `${eventDetails.description || 'Discovery call scheduled via Nexella AI'}\n\n` +
-                     `Customer Information:\n` +
-                     `Name: ${eventDetails.attendeeName || 'Not provided'}\n` +
-                     `Email: ${eventDetails.attendeeEmail}\n` +
-                     `Phone: ${eventDetails.attendeePhone || 'Not provided'}` +
-                     timezoneNote,
+        description: eventDetails.description || 'Discovery call scheduled via Nexella AI',
         location: 'Phone Call / Video Conference',
         start: {
           dateTime: eventDetails.startTime,
-          timeZone: this.timezone  // Always use Arizona timezone for the calendar
+          timeZone: this.timezone
         },
         end: {
           dateTime: eventDetails.endTime,
-          timeZone: this.timezone  // Always use Arizona timezone for the calendar
+          timeZone: this.timezone
         },
-        // Add attendees for invitations
         attendees: [
           {
             email: eventDetails.attendeeEmail,
-            displayName: eventDetails.attendeeName || 'Guest',
-            responseStatus: 'needsAction',
-            comment: eventDetails.customerTimezone ? `Timezone: ${eventDetails.customerTimezone}` : undefined
+            displayName: eventDetails.attendeeName || 'Guest'
           }
         ],
-        // Request conference data
         conferenceData: {
           createRequest: {
             requestId: `nexella_${Date.now()}`,
@@ -460,94 +267,61 @@ class GoogleCalendarService {
         reminders: {
           useDefault: false,
           overrides: [
-            { method: 'email', minutes: 24 * 60 }, // 24 hours before
-            { method: 'email', minutes: 60 },      // 1 hour before
-            { method: 'popup', minutes: 30 }       // 30 minutes before
+            { method: 'email', minutes: 24 * 60 },
+            { method: 'email', minutes: 60 },
+            { method: 'popup', minutes: 30 }
           ]
-        },
-        guestsCanModify: false,
-        guestsCanInviteOthers: false,
-        guestsCanSeeOtherGuests: false,
-        colorId: '2'  // Green color for consultation calls
+        }
       };
 
-      console.log('📅 Creating event with timezone:', this.timezone);
-      console.log('📅 Event start in Arizona:', startDateTime.toLocaleString('en-US', { timeZone: this.timezone }));
-      console.log('📅 Event end in Arizona:', endDateTime.toLocaleString('en-US', { timeZone: this.timezone }));
-      console.log('📧 Sending invitation to:', eventDetails.attendeeEmail);
+      console.log('📅 Creating event...');
       
       const response = await this.calendar.events.insert({
         calendarId: this.calendarId,
         resource: event,
         conferenceDataVersion: 1,
-        sendUpdates: 'all' // Send invitations to all attendees
+        sendUpdates: 'all'
       });
 
       const createdEvent = response.data;
       console.log('✅ Event created successfully!');
       console.log('📅 Event ID:', createdEvent.id);
-      console.log('🔗 Event Link:', createdEvent.htmlLink);
-      console.log('📧 Invitation sent to:', eventDetails.attendeeEmail);
       
-      // Check if Google automatically added a meeting link
-      let meetingLink = '';
-      if (createdEvent.hangoutLink) {
-        meetingLink = createdEvent.hangoutLink;
-        console.log('🎥 Google Meet Link:', meetingLink);
-      } else if (createdEvent.conferenceData?.entryPoints?.[0]?.uri) {
-        meetingLink = createdEvent.conferenceData.entryPoints[0].uri;
-        console.log('🎥 Conference Link:', meetingLink);
-      }
-
-      // Format display time IN ARIZONA TIMEZONE
-      const startDate = new Date(eventDetails.startTime);
-      const displayTime = startDate.toLocaleString('en-US', {
-        weekday: 'long',
-        month: 'long',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-        timeZone: this.timezone  // Use Arizona timezone for display
-      });
+      const meetingLink = createdEvent.hangoutLink || 
+                         createdEvent.conferenceData?.entryPoints?.[0]?.uri || '';
 
       return {
         success: true,
         eventId: createdEvent.id,
         meetingLink: meetingLink,
         eventLink: createdEvent.htmlLink,
-        message: 'Appointment created successfully with calendar invitation',
+        message: 'Appointment created successfully',
         customerEmail: eventDetails.attendeeEmail,
         customerName: eventDetails.attendeeName,
         startTime: eventDetails.startTime,
-        endTime: eventDetails.endTime,
-        displayTime: displayTime,
-        invitationSent: true,
-        customerTimezone: eventDetails.customerTimezone
+        endTime: eventDetails.endTime
       };
 
     } catch (error) {
       console.error('❌ Error creating calendar event:', error.message);
-      console.error('Error details:', error.response?.data || error);
       
-      // Provide specific error messages
       if (error.response?.status === 401) {
         return {
           success: false,
           error: 'Authentication failed',
-          message: 'Calendar authentication failed - check service account credentials'
+          message: 'Calendar authentication failed'
         };
       } else if (error.response?.status === 403) {
         return {
           success: false,
           error: 'Permission denied',
-          message: 'Calendar permissions insufficient - ensure calendar is shared with service account'
+          message: 'Calendar permissions insufficient'
         };
       } else if (error.response?.status === 404) {
         return {
           success: false,
           error: 'Calendar not found',
-          message: `Calendar '${this.calendarId}' not found or not accessible`
+          message: 'Calendar not found or not accessible'
         };
       } else {
         return {
@@ -570,41 +344,7 @@ class GoogleCalendarService {
       businessHours: this.businessHours,
       initialized: this.isInitialized(),
       hasAuth: !!this.auth,
-      hasCalendar: !!this.calendar,
-      serviceAccount: config.GOOGLE_CLIENT_EMAIL
-    };
-  }
-
-  /**
-   * Parse time preference from user input
-   */
-  parseTimePreference(userMessage, preferredDay) {
-    const today = new Date();
-    let targetDate = new Date();
-    
-    if (preferredDay.toLowerCase() === 'tomorrow') {
-      targetDate.setDate(today.getDate() + 1);
-    } else if (preferredDay.toLowerCase() === 'today') {
-      // Keep today
-    } else {
-      // Parse day of week
-      const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-      const dayIndex = days.findIndex(d => preferredDay.toLowerCase().includes(d));
-      
-      if (dayIndex !== -1) {
-        const currentDay = today.getDay();
-        let daysToAdd = dayIndex - currentDay;
-        if (daysToAdd <= 0) daysToAdd += 7;
-        targetDate.setDate(today.getDate() + daysToAdd);
-      }
-    }
-    
-    // Set default time to 10 AM
-    targetDate.setHours(10, 0, 0, 0);
-    
-    return {
-      preferredDateTime: targetDate,
-      preferredDay: preferredDay
+      hasCalendar: !!this.calendar
     };
   }
 }
