@@ -1,12 +1,11 @@
-// src/handlers/WebSocketHandlerWithMemory.js - STREAMLINED VERSION
+// src/handlers/WebSocketHandlerWithMemory.js - FIXED MODULAR VERSION
 const axios = require('axios');
 const config = require('../config/environment');
 const { sendSchedulingPreference } = require('../services/webhooks/WebhookService');
 
-// Import new managers
+// Import managers
 const ConversationFlowManager = require('../services/conversation/ConversationFlowManager');
 const BookingManager = require('../services/booking/BookingManager');
-const TimezoneHandler = require('../services/timezone/TimezoneHandler');
 
 // Import Memory Service
 let RAGMemoryService = null;
@@ -51,24 +50,27 @@ class WebSocketHandlerWithMemory {
     // Initialize managers (will be set after loading customer data)
     this.conversationManager = null;
     this.bookingManager = null;
-    this.timezoneHandler = new TimezoneHandler();
     
-    // Response control
+    // CRITICAL: Response control to prevent multiple responses
     this.lastResponseTime = 0;
-    this.minimumResponseDelay = 1000; // 1 second minimum between responses
-    this.greetingSent = false;
+    this.minimumResponseDelay = 2000; // 2 seconds minimum between responses
+    this.responseInProgress = false;
     this.connectionStartTime = Date.now();
     
-    // Message tracking
+    // Message tracking to prevent duplicates
     this.lastProcessedMessageId = null;
     this.messageQueue = [];
     this.isProcessingMessage = false;
     
+    // Booking state tracking
+    this.appointmentBooked = false;
+    
+    // Initialize
     this.initialize();
   }
 
   async initialize() {
-    console.log('🚀 Initializing streamlined handler...');
+    console.log('🚀 Initializing handler...');
     
     // Load customer data
     await this.loadCustomerData();
@@ -83,13 +85,6 @@ class WebSocketHandlerWithMemory {
     }
     
     this.setupEventHandlers();
-    
-    // Send greeting immediately (within 500ms)
-    setTimeout(async () => {
-      if (!this.greetingSent) {
-        await this.sendGreeting();
-      }
-    }, 500);
     
     console.log('✅ Initialization complete');
     console.log('👤 Customer:', this.connectionData.firstName || 'Unknown');
@@ -211,6 +206,9 @@ class WebSocketHandlerWithMemory {
     while (this.messageQueue.length > 0) {
       const message = this.messageQueue.shift();
       await this.processUserMessage(message);
+      
+      // Add delay between processing messages
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
     
     this.isProcessingMessage = false;
@@ -229,15 +227,21 @@ class WebSocketHandlerWithMemory {
     
     console.log('🗣️ User said:', userMessage);
     
-    // Send greeting if not sent yet
-    if (!this.greetingSent && userMessage) {
-      await this.sendGreeting(parsed.response_id);
-      return;
-    }
-    
     // Get conversation state
     const conversationState = this.conversationManager.getState();
     console.log('📊 Conversation state:', conversationState);
+    
+    // CRITICAL: Prevent responses if one is already in progress
+    if (this.responseInProgress) {
+      console.log('🚫 Response already in progress, queuing message');
+      return;
+    }
+    
+    // Check if appointment is already booked
+    if (this.appointmentBooked) {
+      await this.sendSingleResponse("Your appointment is all set! You'll receive a calendar invitation shortly.", parsed.response_id);
+      return;
+    }
     
     // Handle based on phase
     if (conversationState.bookingInProgress) {
@@ -256,55 +260,24 @@ class WebSocketHandlerWithMemory {
       // Normal conversation flow
       await this.handleConversationPhase(userMessage, parsed.response_id);
     }
-  }
-
-  async sendGreeting(responseId = null) {
-    if (this.greetingSent) return;
     
-    this.greetingSent = true;
-    const greeting = await this.conversationManager.generateQuickGreeting();
-    await this.sendResponse(greeting, responseId || Date.now());
+    // Check for queued responses after a delay
+    setTimeout(async () => {
+      if (!this.responseInProgress) {
+        const queuedResponse = this.conversationManager.getQueuedResponse();
+        if (queuedResponse) {
+          await this.sendSingleResponse(queuedResponse, Date.now());
+        }
+      }
+    }, 3000);
   }
 
   async handleConversationPhase(userMessage, responseId) {
-    // Check if we need a scripted response
-    const scriptedResponse = await this.conversationManager.getNextResponse(userMessage);
+    // Get next response from conversation manager
+    const response = await this.conversationManager.getNextResponse(userMessage);
     
-    if (scriptedResponse) {
-      await this.sendResponse(scriptedResponse, responseId);
-      
-      // Process any queued responses
-      this.processQueuedResponses();
-    } else if (this.conversationManager.needsAIResponse(userMessage)) {
-      // Generate AI response for complex questions
-      const messages = [
-        { role: 'system', content: this.getSystemPrompt() },
-        { role: 'user', content: userMessage }
-      ];
-      
-      const aiResponse = await this.conversationManager.generateAIResponse(messages);
-      await this.sendResponse(aiResponse, responseId);
-    }
-  }
-  
-  async processQueuedResponses() {
-    // Check for queued responses periodically
-    if (this.conversationManager.responseQueue.length > 0) {
-      // Get the first queued response
-      const queuedResponse = this.conversationManager.responseQueue.shift();
-      
-      // Wait a moment before sending
-      setTimeout(async () => {
-        if (typeof queuedResponse === 'function') {
-          const response = await queuedResponse();
-          await this.sendResponse(response, Date.now());
-        } else {
-          await this.sendResponse(queuedResponse, Date.now());
-        }
-        
-        // Check for more queued responses
-        this.processQueuedResponses();
-      }, 2000);
+    if (response) {
+      await this.sendSingleResponse(response, responseId);
     }
   }
 
@@ -315,52 +288,58 @@ class WebSocketHandlerWithMemory {
     const bookingResponse = await this.bookingManager.processBookingRequest(userMessage);
     
     if (bookingResponse) {
-      await this.sendResponse(bookingResponse, responseId);
+      await this.sendSingleResponse(bookingResponse, responseId);
       
       // Check if booking is complete
       const bookingState = this.bookingManager.getState();
       if (bookingState.bookingCompleted) {
+        this.appointmentBooked = true;
         this.conversationManager.markBookingComplete();
         
         // Send webhook
         await this.sendBookingWebhook();
       }
-    } else {
-      // Couldn't parse booking request, ask for clarification
-      const response = "What day and time work best for you?";
-      await this.sendResponse(response, responseId);
     }
   }
 
-  getSystemPrompt() {
-    return `You are Sarah from Nexella AI. 
-Customer: ${this.connectionData.firstName || 'Guest'}
-Company: ${this.connectionData.companyName || 'Unknown'}
-Pain Point: ${this.connectionData.painPoint || 'Unknown'}
-
-Keep responses under 25 words. Be conversational and helpful.`;
-  }
-
-  async sendResponse(content, responseId) {
+  async sendSingleResponse(content, responseId) {
+    // CRITICAL: Prevent multiple responses
+    if (this.responseInProgress) {
+      console.log('🚫 Response already in progress, skipping');
+      return;
+    }
+    
     // Apply rate limiting
     const now = Date.now();
     const timeSinceLastResponse = now - this.lastResponseTime;
     
     if (timeSinceLastResponse < this.minimumResponseDelay) {
       const waitTime = this.minimumResponseDelay - timeSinceLastResponse;
+      console.log(`⏳ Waiting ${waitTime}ms before sending response`);
       await new Promise(resolve => setTimeout(resolve, waitTime));
     }
     
-    console.log('🤖 Sending:', content);
+    this.responseInProgress = true;
     
-    this.ws.send(JSON.stringify({
-      content: content,
-      content_complete: true,
-      actions: [],
-      response_id: responseId || Date.now()
-    }));
-    
-    this.lastResponseTime = Date.now();
+    try {
+      console.log('🤖 Sending:', content);
+      
+      this.ws.send(JSON.stringify({
+        content: content,
+        content_complete: true,
+        actions: [],
+        response_id: responseId || Date.now()
+      }));
+      
+      this.lastResponseTime = Date.now();
+      this.conversationManager.updateResponseTime();
+      
+    } finally {
+      // Always clear the response lock after a short delay
+      setTimeout(() => {
+        this.responseInProgress = false;
+      }, 500);
+    }
   }
 
   async storeTypeformDataInMemory() {
@@ -404,7 +383,6 @@ Keep responses under 25 words. Be conversational and helpful.`;
         company_name: this.connectionData.companyName,
         pain_point: this.connectionData.painPoint,
         appointment_booked: bookingState.bookingCompleted,
-        user_timezone: this.timezoneHandler.getTimezoneName(this.bookingManager.bookingState.userTimezone),
         conversation_phase: conversationState.phase,
         booking_confirmed: bookingState.bookingCompleted
       };
@@ -427,12 +405,19 @@ Keep responses under 25 words. Be conversational and helpful.`;
   async handleClose() {
     console.log('🔌 Connection closed');
     
+    // CRITICAL: Don't book anything on close unless explicitly confirmed
+    if (this.appointmentBooked) {
+      console.log('✅ Appointment was booked during call');
+    } else {
+      console.log('📅 No appointment booked during call');
+    }
+    
     try {
       // Save conversation to memory if available
       if (this.memoryService && this.connectionData.customerEmail) {
         const conversationData = {
           duration: Math.round((Date.now() - this.connectionStartTime) / 60000),
-          appointmentBooked: this.bookingManager?.getState().bookingCompleted || false,
+          appointmentBooked: this.appointmentBooked,
           conversationPhase: this.conversationManager?.getState().phase || 'unknown'
         };
         
@@ -454,7 +439,8 @@ Keep responses under 25 words. Be conversational and helpful.`;
           this.callId,
           {
             conversation_phase: this.conversationManager?.getState().phase || 'unknown',
-            appointment_booked: this.bookingManager?.getState().bookingCompleted || false
+            appointment_booked: this.appointmentBooked,
+            booking_completed: this.bookingManager?.getState().bookingCompleted || false
           }
         );
       }
