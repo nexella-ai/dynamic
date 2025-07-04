@@ -60,18 +60,34 @@ class ConversationFlowManager {
     if (!this.memoryService) return null;
     
     try {
-      // Search for relevant memories
-      const results = await this.memoryService.retrieveRelevantMemories(
-        this.connectionData.customerEmail,
-        query,
-        3
-      );
+      // Check if we have a valid customer email before searching
+      const customerEmail = this.connectionData.customerEmail;
       
-      // Also search Nexella knowledge base
-      const nexellaContext = await this.memoryService.generateEnhancedConversationContext(
-        this.connectionData.customerEmail,
-        query
-      );
+      // Only search for customer-specific memories if we have a valid email
+      let results = [];
+      let nexellaContext = null;
+      
+      if (customerEmail && customerEmail !== 'prospect@example.com' && customerEmail !== '') {
+        // Search for relevant memories
+        results = await this.memoryService.retrieveRelevantMemories(
+          customerEmail,
+          query,
+          3
+        );
+        
+        // Also search Nexella knowledge base
+        nexellaContext = await this.memoryService.generateEnhancedConversationContext(
+          customerEmail,
+          query
+        );
+      } else {
+        // If no customer email, just search general Nexella knowledge
+        console.log('🔍 No customer email, searching general knowledge only');
+        nexellaContext = await this.memoryService.generateEnhancedConversationContext(
+          null,
+          query
+        );
+      }
       
       return {
         memories: results,
