@@ -1,5 +1,8 @@
-// src/services/webhooks/TypeformWebhookHandler.js - FIXED WITH BETTER FIELD EXTRACTION
+// src/services/webhooks/TypeformWebhookHandler.js - Updated with deduplication
 const RAGMemoryService = require('../memory/RAGMemoryService');
+const callDeduplicationService = require('./CallDeduplicationService');
+const axios = require('axios');
+const config = require('../../config/environment');
 
 class TypeformWebhookHandler {
   constructor() {
@@ -17,7 +20,7 @@ class TypeformWebhookHandler {
    */
   async processTypeformWebhook(webhookData) {
     console.log('📋 Processing Typeform webhook data...');
-    console.log('📋 Raw webhook data:', JSON.stringify(webhookData, null, 2));
+    console.log('📋 Event ID:', webhookData.event_id);
     
     try {
       // Extract form response data
@@ -32,6 +35,18 @@ class TypeformWebhookHandler {
       
       console.log('📋 Extracted customer data:', customerData);
       
+      // CRITICAL: Check for duplicate calls
+      if (!callDeduplicationService.shouldAllowCall(customerData.email, customerData.responseId)) {
+        console.log('🚫 DUPLICATE PREVENTION: Call already made for this submission');
+        return {
+          success: true,
+          customerData: customerData,
+          callMetadata: this.prepareCallMetadata(customerData),
+          duplicate: true,
+          message: 'Call already initiated for this form submission'
+        };
+      }
+      
       // Store in global for immediate access
       this.storeGlobally(customerData);
       
@@ -43,12 +58,26 @@ class TypeformWebhookHandler {
       // Prepare call metadata
       const callMetadata = this.prepareCallMetadata(customerData);
       
+      // Trigger the call through Retell
+      const callResult = await this.triggerRetellCall(customerData);
+      
+      if (callResult.success) {
+        // Record the call attempt
+        callDeduplicationService.recordCallAttempt(
+          customerData.email,
+          customerData.responseId,
+          callResult.callId
+        );
+      }
+      
       console.log('✅ Typeform data processed successfully:', customerData);
       
       return {
         success: true,
         customerData: customerData,
-        callMetadata: callMetadata
+        callMetadata: callMetadata,
+        callInitiated: callResult.success,
+        callId: callResult.callId
       };
       
     } catch (error) {
@@ -58,8 +87,63 @@ class TypeformWebhookHandler {
   }
 
   /**
-   * Extract customer data from Typeform response
+   * Trigger outbound call through Retell
    */
+  async triggerRetellCall(customerData) {
+    try {
+      console.log('📞 Triggering Retell call to:', customerData.phone);
+      
+      // Check if we have all required data
+      if (!customerData.phone || !customerData.email) {
+        console.error('❌ Missing required data for call');
+        return { success: false, error: 'Missing phone or email' };
+      }
+      
+      // Make API call to Retell
+      const response = await axios.post(
+        'https://api.retellai.com/v2/calls/create',
+        {
+          agent_id: config.RETELL_AGENT_ID,
+          to_number: customerData.phone,
+          from_number: process.env.RETELL_FROM_NUMBER || '+1234567890', // Your Retell phone number
+          metadata: {
+            customer_email: customerData.email,
+            customer_name: customerData.full_name,
+            first_name: customerData.first_name,
+            last_name: customerData.last_name,
+            company_name: customerData.company_name,
+            business_type: customerData.business_type,
+            pain_point: customerData.pain_point,
+            source: 'typeform',
+            response_id: customerData.responseId
+          }
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${config.RETELL_API_KEY}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
+      console.log('✅ Retell call initiated:', response.data.call_id);
+      
+      return {
+        success: true,
+        callId: response.data.call_id
+      };
+      
+    } catch (error) {
+      console.error('❌ Error triggering Retell call:', error.response?.data || error.message);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  // ... rest of your existing methods (extractCustomerData, storeGlobally, etc.) remain the same ...
+  
   extractCustomerData(formResponse) {
     const answers = formResponse.answers || [];
     const fields = formResponse.definition?.fields || [];
@@ -165,9 +249,6 @@ class TypeformWebhookHandler {
     return customerData;
   }
 
-  /**
-   * Store customer data globally for immediate access
-   */
   storeGlobally(customerData) {
     global.lastTypeformSubmission = {
       timestamp: new Date().toISOString(),
@@ -186,9 +267,6 @@ class TypeformWebhookHandler {
     console.log('💾 Stored Typeform data globally:', global.lastTypeformSubmission);
   }
 
-  /**
-   * Store customer data in RAG memory
-   */
   async storeInMemory(customerData, formResponse) {
     if (!this.memoryService || !customerData.email) {
       return;
@@ -260,57 +338,6 @@ Submitted: ${new Date(customerData.submittedAt).toLocaleString()}`;
     }
   }
 
-  /**
-   * Analyze pain point and recommend services
-   */
-  analyzePainPoint(painPoint) {
-    if (!painPoint) return [];
-    
-    const painPointLower = painPoint.toLowerCase();
-    const recommendations = [];
-    
-    // Check for exact matches from your Typeform options
-    if (painPoint === "We're not generating enough leads." || 
-        painPointLower.includes('not generating enough leads') ||
-        (painPointLower.includes('generating') && painPointLower.includes('leads'))) {
-      recommendations.push('AI Texting', 'SMS Revive', 'Review Collector');
-    }
-    
-    if (painPoint === "We're not following up with leads quickly enough." ||
-        painPointLower.includes('not following up') || 
-        (painPointLower.includes('follow') && painPointLower.includes('quickly'))) {
-      recommendations.push('AI Voice Calls', 'SMS Follow-Ups', 'Appointment Bookings');
-    }
-    
-    if (painPoint === "We're not speaking to qualified leads." ||
-        painPointLower.includes('qualified leads') || 
-        painPointLower.includes('qualified')) {
-      recommendations.push('AI Qualification System', 'CRM Integration');
-    }
-    
-    if (painPoint === "We miss calls too much." ||
-        painPointLower.includes('miss calls') || 
-        painPointLower.includes('missing')) {
-      recommendations.push('AI Voice Calls', 'SMS Follow-Ups');
-    }
-    
-    if (painPoint === "We can't handle the amount of leads." ||
-        painPointLower.includes("can't handle") || 
-        (painPointLower.includes('amount') && painPointLower.includes('leads'))) {
-      recommendations.push('Complete Automation Suite', 'CRM Integration');
-    }
-    
-    if (painPoint === "A mix of everything above." ||
-        (painPointLower.includes('mix') && painPointLower.includes('everything'))) {
-      return ['Complete AI Revenue Rescue System'];
-    }
-    
-    return [...new Set(recommendations)];
-  }
-
-  /**
-   * Prepare call metadata for AI agent
-   */
   prepareCallMetadata(customerData) {
     return {
       customer_email: customerData.email,
@@ -327,9 +354,6 @@ Submitted: ${new Date(customerData.submittedAt).toLocaleString()}`;
     };
   }
 
-  /**
-   * Get customer data from memory by email
-   */
   async getCustomerFromMemory(email) {
     if (!this.memoryService || !email) {
       return null;
