@@ -6,15 +6,9 @@ const http = require('http');
 const config = require('./src/config/environment');
 const apiRoutes = require('./src/routes/apiRoutes');
 
-// Handlers
-const WebSocketHandler = require('./src/handlers/WebSocketHandler');
-let WebSocketHandlerWithMemory = null;
-try {
-  WebSocketHandlerWithMemory = require('./src/handlers/WebSocketHandlerWithMemory');
-  console.log('✅ Memory-enhanced handler available');
-} catch (error) {
-  console.log('⚠️ Memory-enhanced handler not available');
-}
+// Handler - Always use WebSocketHandlerWithMemory
+const WebSocketHandlerWithMemory = require('./src/handlers/WebSocketHandlerWithMemory');
+console.log('✅ Memory-enhanced handler loaded');
 
 const app = express();
 const server = http.createServer(app);
@@ -44,48 +38,16 @@ app.get('/health', (req, res) => {
     status: 'healthy', 
     timestamp: new Date().toISOString(),
     memoryEnabled: config.ENABLE_MEMORY,
-    calendarConfigured: !!(config.GOOGLE_PROJECT_ID && config.GOOGLE_PRIVATE_KEY && config.GOOGLE_CLIENT_EMAIL)
+    calendarConfigured: !!(config.GOOGLE_PROJECT_ID && config.GOOGLE_PRIVATE_KEY && config.GOOGLE_CLIENT_EMAIL),
+    handler: 'WebSocketHandlerWithMemory'
   });
 });
 
 // WebSocket connection handler
 wss.on('connection', (ws, req) => {
   console.log('🔗 NEW WEBSOCKET CONNECTION ATTEMPT');
-  
-  // Determine which handler to use based on configuration
-  let useMemoryHandler = false;
-  
-  if (config.ENABLE_MEMORY && WebSocketHandlerWithMemory) {
-    // Check if this is a test customer
-    if (config.MEMORY_TEST_MODE) {
-      console.log('🧪 Memory test mode active - using memory handler');
-      useMemoryHandler = true;
-    }
-    // Check beta customers
-    else if (config.MEMORY_BETA_CUSTOMERS.length > 0) {
-      // This would need the customer email, which we get later
-      console.log('🌟 Beta customer check will happen after identification');
-    }
-    // Check rollout percentage
-    else if (config.MEMORY_ROLLOUT_PERCENTAGE > 0) {
-      const randomValue = Math.random() * 100;
-      if (randomValue < config.MEMORY_ROLLOUT_PERCENTAGE) {
-        console.log(`🎲 Percentage rollout (${config.MEMORY_ROLLOUT_PERCENTAGE}%) - using memory handler`);
-        useMemoryHandler = true;
-      } else {
-        console.log(`🎲 Percentage rollout (${config.MEMORY_ROLLOUT_PERCENTAGE}%) - using standard handler`);
-      }
-    }
-  }
-  
-  // Create appropriate handler
-  if (useMemoryHandler && WebSocketHandlerWithMemory) {
-    console.log('🧠 Initializing MEMORY-ENHANCED WebSocket handler');
-    new WebSocketHandlerWithMemory(ws, req);
-  } else {
-    console.log('📞 Initializing REGULAR WebSocket handler');
-    new WebSocketHandler(ws, req);
-  }
+  console.log('🧠 Initializing MEMORY-ENHANCED WebSocket handler');
+  new WebSocketHandlerWithMemory(ws, req);
 });
 
 // Knowledge base initialization function
