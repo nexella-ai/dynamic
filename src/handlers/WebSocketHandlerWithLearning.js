@@ -10,6 +10,98 @@ class WebSocketHandlerWithLearning extends WebSocketHandlerWithMemory {
     // Initialize learning components
     this.learningModule = new SelfScoringLearningModule();
     this.adaptiveGenerator = new AdaptiveResponseGenerator(this.memoryService);
+
+    // Add this method to your WebSocketHandlerWithLearning class
+
+/**
+ * Detect if the message is from a voicemail system
+ */
+isVoicemailMessage(userMessage) {
+  const voicemailPhrases = [
+    'at the tone',
+    'please record your message',
+    'when you\'ve finished recording',
+    'simply hang up',
+    'press pound',
+    'further options',
+    'leave a message',
+    'voicemail',
+    'the person you are trying to reach',
+    'is not available',
+    'mailbox',
+    'beep'
+  ];
+  
+  const messageLower = userMessage.toLowerCase();
+  return voicemailPhrases.some(phrase => messageLower.includes(phrase));
+}
+
+/**
+ * Detect if we're connected to a voicemail system
+ */
+detectVoicemailConnection(recentMessages) {
+  // Check last 3 messages for voicemail patterns
+  const voicemailCount = recentMessages
+    .slice(-3)
+    .filter(msg => this.isVoicemailMessage(msg))
+    .length;
+  
+  return voicemailCount >= 2; // If 2 out of last 3 messages are voicemail-related
+}
+
+/**
+ * Updated processUserMessage to handle voicemail detection
+ */
+async processUserMessage(parsed) {
+  // Prevent duplicate processing
+  const messageId = parsed.response_id || Date.now();
+  if (this.lastProcessedMessageId === messageId) {
+    return;
+  }
+  this.lastProcessedMessageId = messageId;
+  
+  const userMessage = parsed.transcript[parsed.transcript.length - 1]?.content || "";
+  
+  console.log('🗣️ User said:', userMessage);
+  
+  // CRITICAL: Check for voicemail
+  if (this.isVoicemailMessage(userMessage)) {
+    console.log('📞 VOICEMAIL DETECTED - Ignoring message');
+    
+    // Track voicemail messages
+    if (!this.voicemailMessages) {
+      this.voicemailMessages = [];
+    }
+    this.voicemailMessages.push(userMessage);
+    
+    // If we detect consistent voicemail messages, we might want to end the call
+    if (this.voicemailMessages.length >= 3) {
+      console.log('📞 VOICEMAIL SYSTEM DETECTED - Consider ending call');
+      // You could trigger a call end here or send a specific response
+      await this.sendSingleResponse("It seems I've reached your voicemail. I'll try calling back later. Have a great day!", parsed.response_id);
+      
+      // Optional: Trigger call end
+      // this.ws.close();
+    }
+    
+    return; // Don't process voicemail messages
+  }
+  
+  // Also ignore phone number recitations (common in voicemail)
+  if (userMessage.match(/^(telephone number|phone number)?\s*[\d\s]+$/i)) {
+    console.log('📞 Phone number recitation detected - likely voicemail');
+    return;
+  }
+  
+  // Rest of your existing processUserMessage code...
+  // Mark that user has spoken
+  if (!this.userHasSpoken && userMessage.trim()) {
+    this.userHasSpoken = true;
+    console.log('✅ User has spoken - starting conversation');
+  }
+  
+  // Continue with normal processing...
+}
     
     // Enhanced tracking for learning
     this.conversationMetrics = {
