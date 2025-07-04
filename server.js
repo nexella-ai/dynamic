@@ -1,4 +1,4 @@
-// server.js - COMPLETE FILE WITH LEARNING SYSTEM
+// server.js - FIXED (Remove duplicate WebSocket handler)
 require('dotenv').config();
 const express = require('express');
 const WebSocket = require('ws');
@@ -30,13 +30,11 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// Add this to your server.js file to track and prevent duplicate connections
-
 // Track active connections
 const activeConnections = new Map();
 const connectionCooldown = 5000; // 5 seconds between connections from same source
 
-// WebSocket connection handler with duplicate prevention
+// SINGLE WebSocket connection handler (FIXED - removed duplicate)
 wss.on('connection', (ws, req) => {
   console.log('🔗 NEW WEBSOCKET CONNECTION ATTEMPT');
   
@@ -74,7 +72,6 @@ wss.on('connection', (ws, req) => {
     });
   }
   
-  // Continue with normal connection handling...
   // Determine which handler to use based on configuration
   let useMemoryHandler = false;
   let useLearningHandler = false;
@@ -84,16 +81,11 @@ wss.on('connection', (ws, req) => {
     if (config.LEARNING_TEST_MODE) {
       console.log('🧠 Learning test mode active - using learning handler');
       useLearningHandler = true;
-    } else if (config.LEARNING_BETA_CUSTOMERS && config.LEARNING_BETA_CUSTOMERS.length > 0) {
-      // This would need the customer email, which we get later
-      console.log('🌟 Beta customer check will happen after identification');
     } else if (config.LEARNING_ROLLOUT_PERCENTAGE > 0) {
       const randomValue = Math.random() * 100;
       if (randomValue < config.LEARNING_ROLLOUT_PERCENTAGE) {
         console.log(`🎲 Learning rollout (${config.LEARNING_ROLLOUT_PERCENTAGE}%) - using learning handler`);
         useLearningHandler = true;
-      } else {
-        console.log(`🎲 Learning rollout (${config.LEARNING_ROLLOUT_PERCENTAGE}%) - using standard handler`);
       }
     }
   }
@@ -103,15 +95,11 @@ wss.on('connection', (ws, req) => {
     if (config.MEMORY_TEST_MODE) {
       console.log('🧪 Memory test mode active - using memory handler');
       useMemoryHandler = true;
-    } else if (config.MEMORY_BETA_CUSTOMERS.length > 0) {
-      console.log('🌟 Beta customer check will happen after identification');
     } else if (config.MEMORY_ROLLOUT_PERCENTAGE > 0) {
       const randomValue = Math.random() * 100;
       if (randomValue < config.MEMORY_ROLLOUT_PERCENTAGE) {
-        console.log(`🎲 Percentage rollout (${config.MEMORY_ROLLOUT_PERCENTAGE}%) - using memory handler`);
+        console.log(`🎲 Memory rollout (${config.MEMORY_ROLLOUT_PERCENTAGE}%) - using memory handler`);
         useMemoryHandler = true;
-      } else {
-        console.log(`🎲 Percentage rollout (${config.MEMORY_ROLLOUT_PERCENTAGE}%) - using standard handler`);
       }
     }
   }
@@ -173,64 +161,6 @@ app.get('/health', (req, res) => {
     learningEnabled: config.ENABLE_LEARNING,
     calendarConfigured: !!(config.GOOGLE_PROJECT_ID && config.GOOGLE_PRIVATE_KEY && config.GOOGLE_CLIENT_EMAIL)
   });
-});
-
-// WebSocket connection handler
-wss.on('connection', (ws, req) => {
-  console.log('🔗 NEW WEBSOCKET CONNECTION ATTEMPT');
-  
-  // Determine which handler to use based on configuration
-  let useMemoryHandler = false;
-  let useLearningHandler = false;
-  
-  // Check if learning mode is enabled (highest priority)
-  if (config.ENABLE_LEARNING && WebSocketHandlerWithLearning) {
-    if (config.LEARNING_TEST_MODE) {
-      console.log('🧠 Learning test mode active - using learning handler');
-      useLearningHandler = true;
-    } else if (config.LEARNING_BETA_CUSTOMERS && config.LEARNING_BETA_CUSTOMERS.length > 0) {
-      // This would need the customer email, which we get later
-      console.log('🌟 Beta customer check will happen after identification');
-    } else if (config.LEARNING_ROLLOUT_PERCENTAGE > 0) {
-      const randomValue = Math.random() * 100;
-      if (randomValue < config.LEARNING_ROLLOUT_PERCENTAGE) {
-        console.log(`🎲 Learning rollout (${config.LEARNING_ROLLOUT_PERCENTAGE}%) - using learning handler`);
-        useLearningHandler = true;
-      } else {
-        console.log(`🎲 Learning rollout (${config.LEARNING_ROLLOUT_PERCENTAGE}%) - using standard handler`);
-      }
-    }
-  }
-  
-  // If not using learning, check memory handler
-  if (!useLearningHandler && config.ENABLE_MEMORY && WebSocketHandlerWithMemory) {
-    if (config.MEMORY_TEST_MODE) {
-      console.log('🧪 Memory test mode active - using memory handler');
-      useMemoryHandler = true;
-    } else if (config.MEMORY_BETA_CUSTOMERS.length > 0) {
-      console.log('🌟 Beta customer check will happen after identification');
-    } else if (config.MEMORY_ROLLOUT_PERCENTAGE > 0) {
-      const randomValue = Math.random() * 100;
-      if (randomValue < config.MEMORY_ROLLOUT_PERCENTAGE) {
-        console.log(`🎲 Percentage rollout (${config.MEMORY_ROLLOUT_PERCENTAGE}%) - using memory handler`);
-        useMemoryHandler = true;
-      } else {
-        console.log(`🎲 Percentage rollout (${config.MEMORY_ROLLOUT_PERCENTAGE}%) - using standard handler`);
-      }
-    }
-  }
-  
-  // Create appropriate handler
-  if (useLearningHandler && WebSocketHandlerWithLearning) {
-    console.log('🧠 Initializing LEARNING-ENHANCED WebSocket handler');
-    new WebSocketHandlerWithLearning(ws, req);
-  } else if (useMemoryHandler && WebSocketHandlerWithMemory) {
-    console.log('🧠 Initializing MEMORY-ENHANCED WebSocket handler');
-    new WebSocketHandlerWithMemory(ws, req);
-  } else {
-    console.log('📞 Initializing REGULAR WebSocket handler');
-    new WebSocketHandler(ws, req);
-  }
 });
 
 // Knowledge base initialization function
@@ -296,7 +226,6 @@ if (config.ENABLE_LEARNING && config.AUTO_LEARNING_ENABLED) {
         console.log(`   Average score: ${results.insights.averageScore?.toFixed(1) || 0}`);
         console.log(`   Success rate: ${results.insights.successRate?.toFixed(1) || 0}%`);
         console.log(`   Calls analyzed: ${results.callsAnalyzed || 0}`);
-        console.log(`   New strategies: ${results.strategies?.length || 0}`);
       }
     } catch (error) {
       console.error('❌ Automatic learning failed:', error.message);
