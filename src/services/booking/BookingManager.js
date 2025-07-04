@@ -1,4 +1,4 @@
-// src/services/booking/BookingManager.js - FIXED VERSION
+// src/services/booking/BookingManager.js - FIXED VERSION WITH ANTI-LOOP PROTECTION
 const { 
   getAvailableTimeSlots, 
   autoBookAppointment 
@@ -17,17 +17,34 @@ class BookingManager {
       awaitingTimeSelection: false,
       bookingInProgress: false,
       bookingCompleted: false,
-      lastAttemptTime: 0
+      lastAttemptTime: 0,
+      // CRITICAL: Track processing to prevent loops
+      isProcessingResponse: false,
+      lastProcessedMessage: null,
+      lastResponseSent: null
     };
     
     // Anti-duplicate booking
     this.bookingCooldown = 5000; // 5 seconds
+    this.responseCooldown = 2000; // 2 seconds between responses
   }
 
   /**
-   * Process booking request - SIMPLIFIED
+   * Process booking request - FIXED WITH ANTI-LOOP
    */
   async processBookingRequest(userMessage) {
+    // CRITICAL: Prevent duplicate processing
+    if (this.bookingState.isProcessingResponse) {
+      console.log('🚫 Already processing a response, skipping');
+      return null;
+    }
+    
+    // CRITICAL: Don't process same message twice
+    if (this.bookingState.lastProcessedMessage === userMessage) {
+      console.log('🚫 Already processed this message:', userMessage);
+      return null;
+    }
+    
     // Prevent duplicate bookings
     const now = Date.now();
     if (this.bookingState.bookingCompleted) {
@@ -40,34 +57,53 @@ class BookingManager {
       return null;
     }
     
-    // Parse appointment from message (day + time together)
-    const appointmentMatch = this.parseAppointmentFromMessage(userMessage);
-    if (appointmentMatch) {
-      return await this.handleDirectBooking(appointmentMatch);
-    }
+    // Mark as processing
+    this.bookingState.isProcessingResponse = true;
+    this.bookingState.lastProcessedMessage = userMessage;
     
-    // Parse day selection
-    const dayMatch = this.parseDayFromMessage(userMessage);
-    if (dayMatch && !this.bookingState.selectedDay) {
-      return await this.handleDaySelection(dayMatch);
-    }
-    
-    // Parse time selection (if we're waiting for it)
-    if (this.bookingState.awaitingTimeSelection && this.bookingState.selectedDay) {
-      const timeMatch = this.parseTimeFromMessage(userMessage);
-      if (timeMatch) {
-        return await this.handleTimeSelection(timeMatch);
+    try {
+      // Parse appointment from message (day + time together)
+      const appointmentMatch = this.parseAppointmentFromMessage(userMessage);
+      if (appointmentMatch) {
+        return await this.handleDirectBooking(appointmentMatch);
       }
+      
+      // Parse day selection
+      const dayMatch = this.parseDayFromMessage(userMessage);
+      if (dayMatch && !this.bookingState.selectedDay) {
+        return await this.handleDaySelection(dayMatch);
+      }
+      
+      // Parse time selection (if we're waiting for it)
+      if (this.bookingState.awaitingTimeSelection && this.bookingState.selectedDay) {
+        const timeMatch = this.parseTimeFromMessage(userMessage);
+        if (timeMatch) {
+          return await this.handleTimeSelection(timeMatch);
+        }
+      }
+      
+      // Default prompts - but check cooldown
+      if (now - this.bookingState.lastAttemptTime < this.responseCooldown) {
+        return null;
+      }
+      
+      if (!this.bookingState.selectedDay) {
+        return "What day works best for you this week?";
+      } else if (this.bookingState.awaitingTimeSelection) {
+        // Don't keep asking for time if we just asked
+        if (this.bookingState.lastResponseSent?.includes('Which time works best')) {
+          return null;
+        }
+        return "What time works best for you?";
+      }
+      
+      return null;
+    } finally {
+      // Always clear processing flag
+      setTimeout(() => {
+        this.bookingState.isProcessingResponse = false;
+      }, 500);
     }
-    
-    // Default prompts
-    if (!this.bookingState.selectedDay) {
-      return "What day works best for you this week?";
-    } else if (this.bookingState.awaitingTimeSelection) {
-      return "What time works best for you?";
-    }
-    
-    return null;
   }
 
   /**
@@ -175,6 +211,12 @@ class BookingManager {
    * Handle day selection
    */
   async handleDaySelection(day) {
+    // CRITICAL: Prevent duplicate responses
+    if (this.bookingState.selectedDay === day) {
+      console.log('🚫 Day already selected:', day);
+      return null;
+    }
+    
     this.bookingState.selectedDay = day;
     this.bookingState.awaitingDaySelection = false;
     this.bookingState.awaitingTimeSelection = true;
@@ -198,13 +240,18 @@ class BookingManager {
       // Format response
       const times = this.bookingState.offeredSlots.map(s => s.displayTime);
       
+      let response;
       if (times.length === 1) {
-        return `I have ${times[0]} available on ${day}. Does that work?`;
+        response = `I have ${times[0]} available on ${day}. Does that work?`;
       } else if (times.length === 2) {
-        return `Perfect! I have ${times[0]} or ${times[1]} available on ${day}. Which works best?`;
+        response = `Perfect! I have ${times[0]} or ${times[1]} available on ${day}. Which works best?`;
       } else {
-        return `Perfect! I have ${times[0]}, ${times[1]}, or ${times[2]} available on ${day}. Which time works best?`;
+        response = `Perfect! I have ${times[0]}, ${times[1]}, or ${times[2]} available on ${day}. Which time works best?`;
       }
+      
+      this.bookingState.lastResponseSent = response;
+      this.bookingState.lastAttemptTime = Date.now();
+      return response;
       
     } catch (error) {
       console.error('Error getting slots:', error);
@@ -218,6 +265,12 @@ class BookingManager {
   async handleTimeSelection(timeInfo) {
     if (!this.bookingState.selectedDay || this.bookingState.offeredSlots.length === 0) {
       return "What day did you want to meet?";
+    }
+    
+    // CRITICAL: Prevent booking if already in progress
+    if (this.bookingState.bookingInProgress) {
+      console.log('🚫 Booking already in progress');
+      return null;
     }
     
     // Find matching slot
@@ -285,14 +338,21 @@ class BookingManager {
   }
 
   /**
-   * Book the appointment - SIMPLIFIED
+   * Book the appointment - SIMPLIFIED WITH LOCK
    */
   async bookAppointment(appointment) {
-    // Prevent duplicate bookings
-    if (this.bookingState.bookingInProgress || this.bookingState.bookingCompleted) {
-      return "I'm already working on your booking!";
+    // CRITICAL: Prevent duplicate bookings
+    if (this.bookingState.bookingInProgress) {
+      console.log('🚫 Booking already in progress');
+      return null;
     }
     
+    if (this.bookingState.bookingCompleted) {
+      console.log('🚫 Booking already completed');
+      return "I've already booked your appointment!";
+    }
+    
+    // Set multiple locks
     this.bookingState.bookingInProgress = true;
     this.bookingState.lastAttemptTime = Date.now();
     
@@ -300,9 +360,8 @@ class BookingManager {
       // Format confirmation message
       const confirmMessage = `Perfect! I'm booking your appointment for ${appointment.dayName} at ${appointment.timeString} Arizona time. You'll get a calendar invite at ${this.connectionData.customerEmail}!`;
       
-      // Set booking as completed BEFORE the actual API call
+      // CRITICAL: Set booking as completed IMMEDIATELY
       this.bookingState.bookingCompleted = true;
-      this.bookingState.bookingInProgress = false;
       
       // Book in calendar asynchronously (don't wait for it)
       setTimeout(async () => {
@@ -326,6 +385,8 @@ class BookingManager {
           }
         } catch (error) {
           console.error('❌ Booking error:', error);
+        } finally {
+          this.bookingState.bookingInProgress = false;
         }
       }, 100);
       
@@ -334,6 +395,7 @@ class BookingManager {
     } catch (error) {
       console.error('Booking error:', error);
       this.bookingState.bookingInProgress = false;
+      this.bookingState.bookingCompleted = false;
       return "I had trouble booking that. Let me try another time - what else works?";
     }
   }
@@ -354,16 +416,22 @@ class BookingManager {
       requestedHour = 0;
     }
     
+    console.log('🔍 Looking for slot at hour:', requestedHour);
+    
     // Check each offered slot
     for (const slot of this.bookingState.offeredSlots) {
       const slotDate = new Date(slot.startTime);
       const slotHour = slotDate.getHours();
       
+      console.log(`Comparing slot hour ${slotHour} with requested ${requestedHour}`);
+      
       if (slotHour === requestedHour) {
+        console.log('✅ Found matching slot!');
         return slot;
       }
     }
     
+    console.log('❌ No matching slot found');
     return null;
   }
 
@@ -426,12 +494,16 @@ class BookingManager {
     const wordMatch = Object.keys(wordToNum).find(word => fullMatch.includes(word));
     if (wordMatch) {
       hour = wordToNum[wordMatch];
-      period = match[2] || (hour >= 8 && hour <= 11 ? 'am' : 'pm');
+      // Extract period if present
+      const periodMatch = fullMatch.match(/(am|pm)/i);
+      period = periodMatch ? periodMatch[1] : (hour >= 8 && hour <= 11 ? 'am' : 'pm');
     } else {
       hour = parseInt(match[1]);
       minutes = parseInt(match[2] || '0');
       period = match[3] || null;
     }
+    
+    console.log('📊 Normalized time:', { hour, minutes, period });
     
     return {
       hour: hour,
@@ -467,8 +539,17 @@ class BookingManager {
       selectedDay: this.bookingState.selectedDay,
       awaitingTimeSelection: this.bookingState.awaitingTimeSelection,
       bookingCompleted: this.bookingState.bookingCompleted,
-      bookingInProgress: this.bookingState.bookingInProgress
+      bookingInProgress: this.bookingState.bookingInProgress,
+      isProcessingResponse: this.bookingState.isProcessingResponse
     };
+  }
+
+  /**
+   * Reset processing flag (safety method)
+   */
+  resetProcessing() {
+    this.bookingState.isProcessingResponse = false;
+    this.bookingState.lastProcessedMessage = null;
   }
 }
 
