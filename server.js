@@ -1,19 +1,29 @@
-// src/server.js
+// server.js - COMPLETE FILE WITH LEARNING SYSTEM
 require('dotenv').config();
 const express = require('express');
 const WebSocket = require('ws');
 const http = require('http');
 const config = require('./src/config/environment');
 const apiRoutes = require('./src/routes/apiRoutes');
+const learningRoutes = require('./src/routes/learningRoutes');
 
 // Handlers
 const WebSocketHandler = require('./src/handlers/WebSocketHandler');
 let WebSocketHandlerWithMemory = null;
+let WebSocketHandlerWithLearning = null;
+
 try {
   WebSocketHandlerWithMemory = require('./src/handlers/WebSocketHandlerWithMemory');
   console.log('✅ Memory-enhanced handler available');
 } catch (error) {
   console.log('⚠️ Memory-enhanced handler not available');
+}
+
+try {
+  WebSocketHandlerWithLearning = require('./src/handlers/WebSocketHandlerWithLearning');
+  console.log('✅ Learning-enhanced handler available');
+} catch (error) {
+  console.log('⚠️ Learning-enhanced handler not available');
 }
 
 const app = express();
@@ -37,6 +47,7 @@ app.use((req, res, next) => {
 
 // Routes
 app.use('/', apiRoutes);
+app.use('/api/learning', learningRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -44,6 +55,7 @@ app.get('/health', (req, res) => {
     status: 'healthy', 
     timestamp: new Date().toISOString(),
     memoryEnabled: config.ENABLE_MEMORY,
+    learningEnabled: config.ENABLE_LEARNING,
     calendarConfigured: !!(config.GOOGLE_PROJECT_ID && config.GOOGLE_PRIVATE_KEY && config.GOOGLE_CLIENT_EMAIL)
   });
 });
@@ -54,20 +66,35 @@ wss.on('connection', (ws, req) => {
   
   // Determine which handler to use based on configuration
   let useMemoryHandler = false;
+  let useLearningHandler = false;
   
-  if (config.ENABLE_MEMORY && WebSocketHandlerWithMemory) {
-    // Check if this is a test customer
+  // Check if learning mode is enabled (highest priority)
+  if (config.ENABLE_LEARNING && WebSocketHandlerWithLearning) {
+    if (config.LEARNING_TEST_MODE) {
+      console.log('🧠 Learning test mode active - using learning handler');
+      useLearningHandler = true;
+    } else if (config.LEARNING_BETA_CUSTOMERS && config.LEARNING_BETA_CUSTOMERS.length > 0) {
+      // This would need the customer email, which we get later
+      console.log('🌟 Beta customer check will happen after identification');
+    } else if (config.LEARNING_ROLLOUT_PERCENTAGE > 0) {
+      const randomValue = Math.random() * 100;
+      if (randomValue < config.LEARNING_ROLLOUT_PERCENTAGE) {
+        console.log(`🎲 Learning rollout (${config.LEARNING_ROLLOUT_PERCENTAGE}%) - using learning handler`);
+        useLearningHandler = true;
+      } else {
+        console.log(`🎲 Learning rollout (${config.LEARNING_ROLLOUT_PERCENTAGE}%) - using standard handler`);
+      }
+    }
+  }
+  
+  // If not using learning, check memory handler
+  if (!useLearningHandler && config.ENABLE_MEMORY && WebSocketHandlerWithMemory) {
     if (config.MEMORY_TEST_MODE) {
       console.log('🧪 Memory test mode active - using memory handler');
       useMemoryHandler = true;
-    }
-    // Check beta customers
-    else if (config.MEMORY_BETA_CUSTOMERS.length > 0) {
-      // This would need the customer email, which we get later
+    } else if (config.MEMORY_BETA_CUSTOMERS.length > 0) {
       console.log('🌟 Beta customer check will happen after identification');
-    }
-    // Check rollout percentage
-    else if (config.MEMORY_ROLLOUT_PERCENTAGE > 0) {
+    } else if (config.MEMORY_ROLLOUT_PERCENTAGE > 0) {
       const randomValue = Math.random() * 100;
       if (randomValue < config.MEMORY_ROLLOUT_PERCENTAGE) {
         console.log(`🎲 Percentage rollout (${config.MEMORY_ROLLOUT_PERCENTAGE}%) - using memory handler`);
@@ -79,7 +106,10 @@ wss.on('connection', (ws, req) => {
   }
   
   // Create appropriate handler
-  if (useMemoryHandler && WebSocketHandlerWithMemory) {
+  if (useLearningHandler && WebSocketHandlerWithLearning) {
+    console.log('🧠 Initializing LEARNING-ENHANCED WebSocket handler');
+    new WebSocketHandlerWithLearning(ws, req);
+  } else if (useMemoryHandler && WebSocketHandlerWithMemory) {
     console.log('🧠 Initializing MEMORY-ENHANCED WebSocket handler');
     new WebSocketHandlerWithMemory(ws, req);
   } else {
@@ -136,6 +166,31 @@ async function initializeKnowledgeBase() {
   }
 }
 
+// Automatic learning job
+let learningInterval = null;
+if (config.ENABLE_LEARNING && config.AUTO_LEARNING_ENABLED) {
+  learningInterval = setInterval(async () => {
+    try {
+      console.log('🧠 Running automatic learning cycle...');
+      const SelfScoringLearningModule = require('./src/services/learning/SelfScoringLearningModule');
+      const learningModule = new SelfScoringLearningModule();
+      const results = await learningModule.learnFromHistory(config.LEARNING_MAX_HISTORY_CALLS);
+      
+      if (results && results.insights) {
+        console.log('✅ Automatic learning completed:');
+        console.log(`   Average score: ${results.insights.averageScore?.toFixed(1) || 0}`);
+        console.log(`   Success rate: ${results.insights.successRate?.toFixed(1) || 0}%`);
+        console.log(`   Calls analyzed: ${results.callsAnalyzed || 0}`);
+        console.log(`   New strategies: ${results.strategies?.length || 0}`);
+      }
+    } catch (error) {
+      console.error('❌ Automatic learning failed:', error.message);
+    }
+  }, config.LEARNING_INTERVAL);
+  
+  console.log(`🕐 Automatic learning scheduled every ${config.LEARNING_INTERVAL / 60000} minutes`);
+}
+
 // Start server
 const PORT = process.env.PORT || config.PORT || 3000;
 server.listen(PORT, async () => {
@@ -158,15 +213,56 @@ server.listen(PORT, async () => {
   
   // Initialize knowledge base
   await initializeKnowledgeBase();
+  
+  // Log system configuration
+  console.log('\n🔧 SYSTEM CONFIGURATION:');
+  console.log('   Memory System:', config.ENABLE_MEMORY ? 'ENABLED' : 'DISABLED');
+  console.log('   Learning System:', config.ENABLE_LEARNING ? 'ENABLED' : 'DISABLED');
+  
+  if (config.ENABLE_LEARNING) {
+    console.log('   - Test Mode:', config.LEARNING_TEST_MODE);
+    console.log('   - Rollout:', config.LEARNING_ROLLOUT_PERCENTAGE + '%');
+    console.log('   - Auto-learning:', config.AUTO_LEARNING_ENABLED);
+    console.log('   - Min Score Threshold:', config.LEARNING_MIN_SCORE_THRESHOLD);
+  }
+  
+  console.log('\n🚀 Nexella AI WebSocket Server Ready!\n');
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('🔄 SIGTERM received. Shutting down gracefully...');
+  
+  // Clear learning interval
+  if (learningInterval) {
+    clearInterval(learningInterval);
+    console.log('✅ Cleared learning interval');
+  }
+  
   server.close(() => {
     console.log('✅ Server closed');
     process.exit(0);
   });
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  // Don't exit the process in production
+  if (process.env.NODE_ENV === 'production') {
+    console.error('Continuing despite uncaught exception...');
+  } else {
+    process.exit(1);
+  }
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit the process in production
+  if (process.env.NODE_ENV === 'production') {
+    console.error('Continuing despite unhandled rejection...');
+  }
 });
 
 module.exports = { app, server };
