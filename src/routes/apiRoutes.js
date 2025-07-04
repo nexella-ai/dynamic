@@ -14,8 +14,12 @@ try {
 }
 
 // Import WebSocketHandlerWithMemory for health check
-const WebSocketHandlerWithMemory = require('../handlers/WebSocketHandlerWithMemory');
-console.log('✅ WebSocketHandlerWithMemory available for health checks');
+let WebSocketHandlerWithMemory = null;
+try {
+  WebSocketHandlerWithMemory = require('../handlers/WebSocketHandlerWithMemory');
+} catch (error) {
+  console.log('⚠️ WebSocketHandlerWithMemory not available');
+}
 
 // Import memory services
 let RAGMemoryService = null;
@@ -1263,7 +1267,7 @@ router.get('/admin/search/booking-pattern', async (req, res) => {
 // Memory System Health Check Endpoint
 router.get('/health/memory', async (req, res) => {
   try {
-    if (config.ENABLE_MEMORY) {
+    if (config.ENABLE_MEMORY && WebSocketHandlerWithMemory) {
       try {
         const memoryService = new RAGMemoryService();
         const stats = await memoryService.getMemoryStats();
@@ -1275,7 +1279,6 @@ router.get('/health/memory', async (req, res) => {
           betaCustomers: config.MEMORY_BETA_CUSTOMERS.length,
           rolloutPercentage: config.MEMORY_ROLLOUT_PERCENTAGE,
           knowledgeSystemAvailable: !!DocumentIngestionService,
-          handlerAvailable: true,
           stats: stats
         });
       } catch (memoryError) {
@@ -1289,8 +1292,8 @@ router.get('/health/memory', async (req, res) => {
     } else {
       res.json({
         memoryEnabled: false,
-        message: 'Memory system is disabled',
-        reason: 'ENABLE_MEMORY is false'
+        message: 'Memory system is disabled or not available',
+        reason: !config.ENABLE_MEMORY ? 'ENABLE_MEMORY is false' : 'Handler not found'
       });
     }
   } catch (error) {
