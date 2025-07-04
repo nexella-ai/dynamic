@@ -1,74 +1,48 @@
-// src/services/booking/BookingManager.js
+// src/services/booking/BookingManager.js - FIXED VERSION
 const { 
   getAvailableTimeSlots, 
   autoBookAppointment 
 } = require('../calendar/CalendarHelpers');
-const TimezoneHandler = require('../timezone/TimezoneHandler');
 
 class BookingManager {
   constructor(connectionData) {
     this.connectionData = connectionData;
-    this.timezoneHandler = new TimezoneHandler();
     
-    // Booking state
+    // Simplified booking state
     this.bookingState = {
-      userTimezone: null,
-      timezoneConfirmed: false,
       selectedDay: null,
       selectedTime: null,
       offeredSlots: [],
       awaitingDaySelection: false,
       awaitingTimeSelection: false,
-      awaitingTimezoneConfirmation: false,
       bookingInProgress: false,
-      bookingCompleted: false
+      bookingCompleted: false,
+      lastAttemptTime: 0
     };
     
     // Anti-duplicate booking
-    this.lastBookingAttempt = 0;
     this.bookingCooldown = 5000; // 5 seconds
-    
-    // Initialize timezone from phone immediately
-    this.initializeTimezoneFromPhone();
   }
 
   /**
-   * Initialize timezone from phone number on construction
-   */
-  initializeTimezoneFromPhone() {
-    if (this.connectionData.customerPhone && !this.bookingState.userTimezone) {
-      const detectedTimezone = this.timezoneHandler.detectTimezoneFromPhone(
-        this.connectionData.customerPhone
-      );
-      
-      if (detectedTimezone) {
-        this.bookingState.userTimezone = detectedTimezone;
-        const timezoneName = this.timezoneHandler.getTimezoneName(detectedTimezone);
-        console.log(`🌍 Auto-detected timezone: ${timezoneName} from phone ${this.connectionData.customerPhone}`);
-      }
-    }
-  }
-
-  /**
-   * Process booking request
+   * Process booking request - SIMPLIFIED
    */
   async processBookingRequest(userMessage) {
     // Prevent duplicate bookings
     const now = Date.now();
-    if (now - this.lastBookingAttempt < this.bookingCooldown) {
+    if (this.bookingState.bookingCompleted) {
+      console.log('✅ Booking already completed');
+      return "Your appointment is already booked! You'll receive a calendar invitation shortly.";
+    }
+    
+    if (now - this.bookingState.lastAttemptTime < this.bookingCooldown) {
       console.log('🚫 Booking cooldown active');
       return null;
     }
     
-    // If awaiting timezone confirmation
-    if (this.bookingState.awaitingTimezoneConfirmation) {
-      return await this.handleTimezoneConfirmation(userMessage);
-    }
-    
-    // Parse appointment from message (day + time)
+    // Parse appointment from message (day + time together)
     const appointmentMatch = this.parseAppointmentFromMessage(userMessage);
     if (appointmentMatch) {
-      // Direct booking with timezone check
       return await this.handleDirectBooking(appointmentMatch);
     }
     
@@ -78,15 +52,15 @@ class BookingManager {
       return await this.handleDaySelection(dayMatch);
     }
     
-    // Parse time selection
-    if (this.bookingState.awaitingTimeSelection) {
+    // Parse time selection (if we're waiting for it)
+    if (this.bookingState.awaitingTimeSelection && this.bookingState.selectedDay) {
       const timeMatch = this.parseTimeFromMessage(userMessage);
       if (timeMatch) {
         return await this.handleTimeSelection(timeMatch);
       }
     }
     
-    // If no specific pattern matched but we're in booking phase
+    // Default prompts
     if (!this.bookingState.selectedDay) {
       return "What day works best for you this week?";
     } else if (this.bookingState.awaitingTimeSelection) {
@@ -94,48 +68,6 @@ class BookingManager {
     }
     
     return null;
-  }
-
-  /**
-   * Handle timezone confirmation
-   */
-  async handleTimezoneConfirmation(userMessage) {
-    const lower = userMessage.toLowerCase();
-    
-    if (lower.includes('yes') || lower.includes('correct') || lower.includes('right') || 
-        lower.includes('yeah') || lower.includes('yep') || lower.includes('sounds good')) {
-      this.bookingState.timezoneConfirmed = true;
-      this.bookingState.awaitingTimezoneConfirmation = false;
-      
-      // Continue with the booking that was interrupted
-      if (this.bookingState.pendingBooking) {
-        return await this.completePendingBooking();
-      }
-      
-      return "Great! What day works best for you this week?";
-    } else if (lower.includes('no') || lower.includes('wrong') || lower.includes('different')) {
-      this.bookingState.awaitingTimezoneConfirmation = false;
-      return "What timezone are you in? I can adjust the times for you.";
-    }
-    
-    // Check if they specified a different timezone
-    const specifiedTimezone = this.timezoneHandler.parseTimezoneFromInput(userMessage);
-    if (specifiedTimezone) {
-      this.bookingState.userTimezone = specifiedTimezone;
-      this.bookingState.timezoneConfirmed = true;
-      this.bookingState.awaitingTimezoneConfirmation = false;
-      const timezoneName = this.timezoneHandler.getTimezoneName(specifiedTimezone);
-      
-      // Continue with pending booking
-      if (this.bookingState.pendingBooking) {
-        return await this.completePendingBooking();
-      }
-      
-      return `Got it! I'll show times in ${timezoneName}. What day works best?`;
-    }
-    
-    // They didn't clearly confirm or deny
-    return "Just to confirm - are you in " + this.timezoneHandler.getTimezoneName(this.bookingState.userTimezone) + "? (yes/no)";
   }
 
   /**
@@ -148,17 +80,18 @@ class BookingManager {
   }
 
   /**
-   * Parse time from user message
+   * Parse time from user message - FIXED
    */
   parseTimeFromMessage(message) {
     console.log('🕐 Parsing time from:', message);
     
     const patterns = [
+      // "10 AM" or "10:30 AM"
       /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)\b/i,
-      /\b(morning|afternoon)\b/i,
-      /\b(\d{1,2})\s*o'?clock\b/i,
+      // "ten AM"
       /\b(ten|eleven|twelve|one|two|three|four|five|six|seven|eight|nine)\s*(am|pm)?\b/i,
-      /\b(nine|ten|eleven|twelve)\s*(?:am|a\.m\.|AM)\b/i // Added specific pattern for "nine am"
+      // Just "10" or "ten"
+      /^(\d{1,2}|ten|eleven|twelve|one|two|three|four|five|six|seven|eight|nine)$/i
     ];
     
     for (const pattern of patterns) {
@@ -178,9 +111,10 @@ class BookingManager {
    */
   parseAppointmentFromMessage(message) {
     const patterns = [
-      /\b(monday|tuesday|wednesday|thursday|friday|tomorrow|today)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?\b/i,
-      /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|tomorrow|today)\b/i,
-      /\b(ten|eleven|twelve|one|two|three|four|five|six|seven|eight|nine)\s*(am|pm)?\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|tomorrow|today)\b/i
+      // "Tuesday at 10 AM"
+      /\b(monday|tuesday|wednesday|thursday|friday|tomorrow|today)\s+(?:at\s+)?(\d{1,2}|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm)?\b/i,
+      // "10 AM Tuesday"
+      /\b(\d{1,2}|ten|eleven|twelve)(?::(\d{2}))?\s*(am|pm)\s+(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|tomorrow|today)\b/i
     ];
     
     for (const pattern of patterns) {
@@ -206,35 +140,27 @@ class BookingManager {
     };
     
     // Determine format based on match
-    if (match[0].match(/^\d/)) {
-      // Starts with number
-      hour = parseInt(match[1]);
-      minutes = parseInt(match[2] || '0');
-      period = match[3];
-      day = match[4] || match[1];
-    } else if (wordToNum[match[1]?.toLowerCase()]) {
-      // Word number
-      hour = wordToNum[match[1].toLowerCase()];
-      period = match[2];
-      day = match[3];
-    } else {
-      // Day first
+    if (match[0].match(/^(monday|tuesday|wednesday|thursday|friday|tomorrow|today)/i)) {
+      // Day first format
       day = match[1];
       hour = wordToNum[match[2]?.toLowerCase()] || parseInt(match[2]);
       minutes = parseInt(match[3] || '0');
-      period = match[4] || match[2];
-    }
-    
-    // Normalize period
-    if (period) {
-      period = period.toLowerCase().replace(/[.\s]/g, '');
+      period = match[4];
+    } else {
+      // Time first format
+      hour = wordToNum[match[1]?.toLowerCase()] || parseInt(match[1]);
+      minutes = parseInt(match[2] || '0');
+      period = match[3];
+      day = match[4];
     }
     
     // Default AM/PM logic for business hours
-    if (!period && hour >= 8 && hour <= 11) {
-      period = 'am';
-    } else if (!period && hour >= 1 && hour <= 5) {
-      period = 'pm';
+    if (!period) {
+      if (hour >= 8 && hour <= 11) {
+        period = 'am';
+      } else if (hour >= 1 && hour <= 4) {
+        period = 'pm';
+      }
     }
     
     return {
@@ -257,42 +183,27 @@ class BookingManager {
     const targetDate = this.calculateTargetDate(day);
     
     try {
-      // Get available slots (these are in Arizona time from the calendar)
-      const slotsInArizona = await getAvailableTimeSlots(targetDate);
+      // Get available slots
+      const slots = await getAvailableTimeSlots(targetDate);
       
-      if (slotsInArizona.length === 0) {
+      if (slots.length === 0) {
         this.bookingState.selectedDay = null;
+        this.bookingState.awaitingTimeSelection = false;
         return `I don't have any openings on ${day}. How about ${this.getNextAvailableDay()}?`;
       }
       
-      // Store original Arizona slots
-      this.bookingState.offeredSlots = slotsInArizona.slice(0, 3);
+      // Store slots
+      this.bookingState.offeredSlots = slots.slice(0, 3);
       
-      // Convert slots to user's timezone if needed
-      let displaySlots;
-      if (this.bookingState.userTimezone && this.bookingState.userTimezone !== 'America/Phoenix') {
-        displaySlots = this.convertSlotsToUserTimezone(this.bookingState.offeredSlots);
-        const timezoneName = this.timezoneHandler.getTimezoneName(this.bookingState.userTimezone);
-        
-        // Format response with timezone info
-        if (displaySlots.length === 1) {
-          return `I have ${displaySlots[0].displayTime} ${timezoneName} available on ${day}. Does that work?`;
-        } else if (displaySlots.length === 2) {
-          return `On ${day}, I have ${displaySlots[0].displayTime} or ${displaySlots[1].displayTime} ${timezoneName}. Which works better?`;
-        } else {
-          return `I have ${displaySlots[0].displayTime}, ${displaySlots[1].displayTime}, or ${displaySlots[2].displayTime} ${timezoneName} on ${day}. What's best for you?`;
-        }
+      // Format response
+      const times = this.bookingState.offeredSlots.map(s => s.displayTime);
+      
+      if (times.length === 1) {
+        return `I have ${times[0]} available on ${day}. Does that work?`;
+      } else if (times.length === 2) {
+        return `Perfect! I have ${times[0]} or ${times[1]} available on ${day}. Which works best?`;
       } else {
-        // No timezone detected or same as Arizona
-        displaySlots = this.bookingState.offeredSlots;
-        
-        if (displaySlots.length === 1) {
-          return `I have ${displaySlots[0].displayTime} available on ${day}. Does that work?`;
-        } else if (displaySlots.length === 2) {
-          return `On ${day}, I have ${displaySlots[0].displayTime} or ${displaySlots[1].displayTime}. Which works better?`;
-        } else {
-          return `I have ${displaySlots[0].displayTime}, ${displaySlots[1].displayTime}, or ${displaySlots[2].displayTime} on ${day}. What's best for you?`;
-        }
+        return `Perfect! I have ${times[0]}, ${times[1]}, or ${times[2]} available on ${day}. Which time works best?`;
       }
       
     } catch (error) {
@@ -302,7 +213,7 @@ class BookingManager {
   }
 
   /**
-   * Handle time selection
+   * Handle time selection - FIXED
    */
   async handleTimeSelection(timeInfo) {
     if (!this.bookingState.selectedDay || this.bookingState.offeredSlots.length === 0) {
@@ -313,15 +224,26 @@ class BookingManager {
     const matchedSlot = this.findMatchingSlot(timeInfo);
     
     if (!matchedSlot) {
-      return "I don't have that time available. Would any of the times I mentioned work?";
+      // Try to be more flexible with matching
+      const requestedHour = timeInfo.hour;
+      const nearbySlot = this.bookingState.offeredSlots.find(slot => {
+        const slotHour = new Date(slot.startTime).getHours();
+        return Math.abs(slotHour - requestedHour) <= 1; // Within 1 hour
+      });
+      
+      if (nearbySlot) {
+        return `I don't have ${this.formatTimeString(timeInfo)}, but I do have ${nearbySlot.displayTime}. Would that work?`;
+      }
+      
+      return "I don't have that time available. Would any of the times I mentioned work for you?";
     }
     
     // Create appointment object
     const appointment = {
       dateTime: new Date(matchedSlot.startTime),
       dayName: this.bookingState.selectedDay,
-      hour: new Date(matchedSlot.startTime).getHours(),
-      slotInfo: matchedSlot
+      timeString: matchedSlot.displayTime,
+      hour: new Date(matchedSlot.startTime).getHours()
     };
     
     // Book the appointment
@@ -332,35 +254,7 @@ class BookingManager {
    * Handle direct booking (day + time)
    */
   async handleDirectBooking(appointmentInfo) {
-    // Check if we have timezone, if not, need to confirm first
-    if (!this.bookingState.userTimezone) {
-      // Try to detect from phone
-      this.initializeTimezoneFromPhone();
-      
-      if (!this.bookingState.userTimezone) {
-        // Can't detect, need to ask
-        this.bookingState.pendingBooking = appointmentInfo;
-        return "What timezone are you in? I want to make sure I book the right time for you.";
-      }
-    }
-    
-    // If timezone not confirmed, confirm it first
-    if (!this.bookingState.timezoneConfirmed && this.bookingState.userTimezone) {
-      this.bookingState.pendingBooking = appointmentInfo;
-      this.bookingState.awaitingTimezoneConfirmation = true;
-      const timezoneName = this.timezoneHandler.getTimezoneName(this.bookingState.userTimezone);
-      return `I see you're calling from ${timezoneName}. I'll book ${appointmentInfo.day} at ${appointmentInfo.hour}:${appointmentInfo.minutes.toString().padStart(2, '0')} ${appointmentInfo.period || ''} in your timezone. Is that correct?`;
-    }
-    
-    // Process the booking
-    return await this.processDirectBooking(appointmentInfo);
-  }
-
-  /**
-   * Process direct booking with timezone conversion
-   */
-  async processDirectBooking(appointmentInfo) {
-    // Calculate the date in user's timezone
+    // Calculate the date
     const targetDate = this.calculateTargetDate(appointmentInfo.day);
     
     // Convert hour to 24-hour format
@@ -371,57 +265,27 @@ class BookingManager {
       hour24 = 0;
     }
     
-    // Set the time in the target date
+    // Set the time
     targetDate.setHours(hour24, appointmentInfo.minutes, 0, 0);
     
-    // If user has different timezone, we need to convert to Arizona time
-    let bookingDateInArizona = targetDate;
-    if (this.bookingState.userTimezone && this.bookingState.userTimezone !== 'America/Phoenix') {
-      // This is the user's local time, convert to Arizona time for booking
-      bookingDateInArizona = this.timezoneHandler.convertToArizonaTime(
-        targetDate, 
-        this.bookingState.userTimezone
-      );
-      
-      console.log(`🕐 User requested: ${targetDate.toLocaleString()} in ${this.bookingState.userTimezone}`);
-      console.log(`🕐 Booking in Arizona: ${bookingDateInArizona.toLocaleString()} MST`);
+    // Check if it's within business hours
+    if (hour24 < 8 || hour24 >= 16) {
+      return `Our demo calls are available between 8 AM and 4 PM Arizona time. Would you prefer morning or afternoon?`;
     }
     
-    // Check if it's within business hours (in Arizona time)
-    const arizonaHour = bookingDateInArizona.getHours();
-    if (arizonaHour < 8 || arizonaHour >= 16) {
-      const userTimezoneName = this.timezoneHandler.getTimezoneName(this.bookingState.userTimezone);
-      return `That time would be outside our business hours (8 AM - 4 PM Mountain Time). What other time works for you?`;
-    }
-    
-    // Create appointment object with Arizona time for booking
+    // Create appointment object
     const appointment = {
-      dateTime: bookingDateInArizona,
+      dateTime: targetDate,
       dayName: appointmentInfo.day,
-      hour: arizonaHour,
-      userRequestedTime: targetDate,
-      userTimezone: this.bookingState.userTimezone
+      timeString: this.formatTimeFromDate(targetDate),
+      hour: hour24
     };
     
     return await this.bookAppointment(appointment);
   }
 
   /**
-   * Complete pending booking after timezone confirmation
-   */
-  async completePendingBooking() {
-    if (!this.bookingState.pendingBooking) {
-      return "Great! What day and time work best for you?";
-    }
-    
-    const pending = this.bookingState.pendingBooking;
-    this.bookingState.pendingBooking = null;
-    
-    return await this.processDirectBooking(pending);
-  }
-
-  /**
-   * Book the appointment with timezone confirmation
+   * Book the appointment - SIMPLIFIED
    */
   async bookAppointment(appointment) {
     // Prevent duplicate bookings
@@ -430,114 +294,48 @@ class BookingManager {
     }
     
     this.bookingState.bookingInProgress = true;
-    this.lastBookingAttempt = Date.now();
+    this.bookingState.lastAttemptTime = Date.now();
     
     try {
-      // Format confirmation message based on timezone
-      let confirmMessage = "";
+      // Format confirmation message
+      const confirmMessage = `Perfect! I'm booking your appointment for ${appointment.dayName} at ${appointment.timeString} Arizona time. You'll get a calendar invite at ${this.connectionData.customerEmail}!`;
       
-      if (this.bookingState.userTimezone && this.bookingState.userTimezone !== 'America/Phoenix') {
-        // User has different timezone - show both times
-        const userTimezoneName = this.timezoneHandler.getTimezoneName(this.bookingState.userTimezone);
-        const userDateTime = appointment.userRequestedTime || 
-          this.timezoneHandler.convertFromArizonaTime(appointment.dateTime, this.bookingState.userTimezone);
-        
-        const userTimeString = userDateTime.toLocaleString('en-US', {
-          weekday: 'long',
-          month: 'long',
-          day: 'numeric',
-          hour: 'numeric',
-          minute: '2-digit',
-          hour12: true,
-          timeZone: this.bookingState.userTimezone
-        });
-        
-        const arizonaTimeString = appointment.dateTime.toLocaleString('en-US', {
-          hour: 'numeric',
-          minute: '2-digit',
-          hour12: true,
-          timeZone: 'America/Phoenix'
-        });
-        
-        confirmMessage = `Perfect! I'm booking your appointment for ${userTimeString} ${userTimezoneName} (that's ${arizonaTimeString} Mountain Time). You'll get a calendar invite at ${this.connectionData.customerEmail}!`;
-      } else {
-        // Same timezone or no timezone detected
-        const displayTime = appointment.dateTime.toLocaleString('en-US', {
-          weekday: 'long',
-          month: 'long',
-          day: 'numeric',
-          hour: 'numeric',
-          minute: '2-digit',
-          hour12: true
-        });
-        confirmMessage = `Perfect! I'm booking your appointment for ${displayTime}. You'll get a calendar invite at ${this.connectionData.customerEmail}!`;
-      }
+      // Set booking as completed BEFORE the actual API call
+      this.bookingState.bookingCompleted = true;
+      this.bookingState.bookingInProgress = false;
       
-      // Book in calendar (using Arizona time)
-      const bookingResult = await autoBookAppointment(
-        this.connectionData.customerName || `${this.connectionData.firstName} ${this.connectionData.lastName}`,
-        this.connectionData.customerEmail,
-        this.connectionData.customerPhone,
-        appointment.dateTime, // This is already in Arizona time
-        {
-          timezone: this.bookingState.userTimezone || 'America/Phoenix',
-          timezoneConfirmed: this.bookingState.timezoneConfirmed,
-          company: this.connectionData.companyName,
-          painPoint: this.connectionData.painPoint,
-          userLocalTime: appointment.userRequestedTime?.toISOString()
+      // Book in calendar asynchronously (don't wait for it)
+      setTimeout(async () => {
+        try {
+          const bookingResult = await autoBookAppointment(
+            this.connectionData.customerName || `${this.connectionData.firstName} ${this.connectionData.lastName}`,
+            this.connectionData.customerEmail,
+            this.connectionData.customerPhone,
+            appointment.dateTime,
+            {
+              company: this.connectionData.companyName,
+              painPoint: this.connectionData.painPoint,
+              source: 'AI Voice Assistant'
+            }
+          );
+          
+          if (bookingResult.success) {
+            console.log('✅ Calendar booking successful!');
+          } else {
+            console.log('❌ Calendar booking failed:', bookingResult.error);
+          }
+        } catch (error) {
+          console.error('❌ Booking error:', error);
         }
-      );
+      }, 100);
       
-      if (bookingResult.success) {
-        this.bookingState.bookingCompleted = true;
-        this.bookingState.bookingInProgress = false;
-        
-        // Add timezone confirmation to the message if different from Mountain Time
-        if (this.bookingState.userTimezone && this.bookingState.userTimezone !== 'America/Phoenix') {
-          const timezoneName = this.timezoneHandler.getTimezoneName(this.bookingState.userTimezone);
-          return confirmMessage + ` Just to confirm - that's in your ${timezoneName} timezone.`;
-        }
-        
-        return confirmMessage;
-      } else {
-        this.bookingState.bookingInProgress = false;
-        return "That time just became unavailable. Let me show you other options.";
-      }
+      return confirmMessage;
       
     } catch (error) {
       console.error('Booking error:', error);
       this.bookingState.bookingInProgress = false;
       return "I had trouble booking that. Let me try another time - what else works?";
     }
-  }
-
-  /**
-   * Convert slots to user's timezone
-   */
-  convertSlotsToUserTimezone(slots) {
-    if (!this.bookingState.userTimezone || this.bookingState.userTimezone === 'America/Phoenix') {
-      return slots;
-    }
-    
-    return slots.map(slot => {
-      // slot.startTime is in UTC format from the calendar
-      const slotDateUTC = new Date(slot.startTime);
-      
-      // Convert to user's timezone for display
-      const userTimeString = slotDateUTC.toLocaleTimeString('en-US', {
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-        timeZone: this.bookingState.userTimezone
-      });
-      
-      return {
-        ...slot,
-        displayTime: userTimeString,
-        originalDisplayTime: slot.displayTime, // Keep Arizona time for reference
-        userTimezoneStart: slotDateUTC.toISOString()
-      };
-    });
   }
 
   /**
@@ -559,24 +357,10 @@ class BookingManager {
     // Check each offered slot
     for (const slot of this.bookingState.offeredSlots) {
       const slotDate = new Date(slot.startTime);
+      const slotHour = slotDate.getHours();
       
-      // If user has different timezone, we need to check in their timezone
-      if (this.bookingState.userTimezone && this.bookingState.userTimezone !== 'America/Phoenix') {
-        const slotHourInUserTZ = parseInt(slotDate.toLocaleTimeString('en-US', {
-          hour: 'numeric',
-          hour12: false,
-          timeZone: this.bookingState.userTimezone
-        }));
-        
-        if (slotHourInUserTZ === requestedHour) {
-          return slot;
-        }
-      } else {
-        // Check in Arizona time
-        const slotHour = slotDate.getHours();
-        if (slotHour === requestedHour) {
-          return slot;
-        }
+      if (slotHour === requestedHour) {
+        return slot;
       }
     }
     
@@ -629,12 +413,6 @@ class BookingManager {
   normalizeTimeMatch(match) {
     const fullMatch = match[0].toLowerCase();
     
-    if (fullMatch.includes('morning')) {
-      return { hour: 9, minutes: 0, period: 'am' };
-    } else if (fullMatch.includes('afternoon')) {
-      return { hour: 2, minutes: 0, period: 'pm' };
-    }
-    
     // Word to number conversion
     const wordToNum = {
       'ten': 10, 'eleven': 11, 'twelve': 12,
@@ -642,22 +420,43 @@ class BookingManager {
       'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9
     };
     
+    let hour, minutes = 0, period = null;
+    
     // Check if it's a word number
-    for (const [word, num] of Object.entries(wordToNum)) {
-      if (fullMatch.includes(word)) {
-        return {
-          hour: num,
-          minutes: 0,
-          period: match[2] || (num >= 8 && num <= 11 ? 'am' : 'pm')
-        };
-      }
+    const wordMatch = Object.keys(wordToNum).find(word => fullMatch.includes(word));
+    if (wordMatch) {
+      hour = wordToNum[wordMatch];
+      period = match[2] || (hour >= 8 && hour <= 11 ? 'am' : 'pm');
+    } else {
+      hour = parseInt(match[1]);
+      minutes = parseInt(match[2] || '0');
+      period = match[3] || null;
     }
     
     return {
-      hour: parseInt(match[1]),
-      minutes: parseInt(match[2] || '0'),
-      period: match[3] || null
+      hour: hour,
+      minutes: minutes,
+      period: period
     };
+  }
+
+  /**
+   * Format time string from time info
+   */
+  formatTimeString(timeInfo) {
+    const displayHour = timeInfo.hour > 12 ? timeInfo.hour - 12 : timeInfo.hour === 0 ? 12 : timeInfo.hour;
+    const displayPeriod = timeInfo.hour >= 12 ? 'PM' : 'AM';
+    return `${displayHour}:${timeInfo.minutes.toString().padStart(2, '0')} ${displayPeriod}`;
+  }
+
+  /**
+   * Format time from date
+   */
+  formatTimeFromDate(date) {
+    const hour = date.getHours();
+    const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
+    const displayPeriod = hour >= 12 ? 'PM' : 'AM';
+    return `${displayHour}:00 ${displayPeriod}`;
   }
 
   /**
@@ -665,15 +464,10 @@ class BookingManager {
    */
   getState() {
     return {
-      hasTimezone: !!this.bookingState.userTimezone,
-      timezoneConfirmed: this.bookingState.timezoneConfirmed,
-      userTimezone: this.bookingState.userTimezone,
-      userTimezoneName: this.bookingState.userTimezone ? 
-        this.timezoneHandler.getTimezoneName(this.bookingState.userTimezone) : null,
       selectedDay: this.bookingState.selectedDay,
       awaitingTimeSelection: this.bookingState.awaitingTimeSelection,
-      awaitingTimezoneConfirmation: this.bookingState.awaitingTimezoneConfirmation,
-      bookingCompleted: this.bookingState.bookingCompleted
+      bookingCompleted: this.bookingState.bookingCompleted,
+      bookingInProgress: this.bookingState.bookingInProgress
     };
   }
 }
