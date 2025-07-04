@@ -67,12 +67,18 @@ class RAGMemoryService {
       // Generate embedding for current query
       const queryEmbedding = await this.createEmbedding(currentQuery);
       
+      // Build filter based on whether we have a customer email
+      let filter = {};
+      if (customerEmail && customerEmail !== 'prospect@example.com' && customerEmail !== '') {
+        filter = {
+          customer_email: { $eq: customerEmail }
+        };
+      }
+      
       // Search for relevant memories
       const searchResults = await this.index.query({
         vector: queryEmbedding,
-        filter: {
-          customer_email: { $eq: customerEmail }
-        },
+        filter: filter,
         topK: limit,
         includeMetadata: true
       });
@@ -445,8 +451,8 @@ class RAGMemoryService {
     try {
       let context = '';
       
-      // Get customer history
-      if (customerEmail && customerEmail !== 'prospect@example.com') {
+      // Get customer history only if we have a valid email
+      if (customerEmail && customerEmail !== 'prospect@example.com' && customerEmail !== '') {
         const customerMemories = await this.retrieveRelevantMemories(customerEmail, currentQuery, 2);
         
         if (customerMemories.length > 0) {
@@ -483,7 +489,7 @@ class RAGMemoryService {
       
     } catch (error) {
       console.error('❌ Error generating enhanced context:', error.message);
-      return this.generateConversationContext(customerEmail, currentQuery); // Fallback to original method
+      return '';
     }
   }
 
