@@ -1,347 +1,204 @@
-// src/services/conversation/ConversationFlowManager.js - FIXED VERSION
+// src/services/conversation/SimplifiedConversationManager.js
 const axios = require('axios');
 const config = require('../../config/environment');
 
-class ConversationFlowManager {
-  constructor(connectionData, memoryService = null) {
+class SimplifiedConversationManager {
+  constructor(connectionData) {
     this.connectionData = connectionData;
-    this.memoryService = memoryService;
     
-    // Conversation flow state
-    this.conversationFlow = {
-      phase: 'greeting',
-      greetingCompleted: false,
-      rapportBuilt: false,
-      painPointMentioned: false,
-      painPointAcknowledged: false,
-      solutionPresented: false,
-      schedulingOffered: false,
-      bookingInProgress: false
+    // Simple state tracking
+    this.state = {
+      hasGreeted: false,
+      hasBuiltRapport: false,
+      hasAcknowledgedPainPoint: false,
+      hasPresentedSolution: false,
+      hasOfferedDemo: false,
+      isBooking: false
     };
     
-    // Context storage
-    this.industryContext = null;
-    this.painPointContext = null;
-    this.solutionContext = null;
-    
-    // CRITICAL FIX: Remove response queue to prevent multiple responses
-    // Responses should be handled synchronously by the WebSocketHandler
-    this.pendingResponses = [];
-    this.lastResponseTime = 0;
+    // Track what we're waiting for
+    this.waitingFor = null;
+    this.lastBotMessage = null;
   }
 
   /**
-   * Initialize context from RAG memory
+   * Get appropriate response based on user message and current state
    */
-  async initializeContext() {
-    if (!this.memoryService) return;
+  async getResponse(userMessage) {
+    const userLower = userMessage.toLowerCase();
     
-    try {
-      // Get industry-specific context
-      const industryQuery = `${this.connectionData.business_type || this.connectionData.companyName} industry challenges pain points`;
-      this.industryContext = await this.getRAGContext(industryQuery);
-      
-      // Get pain point specific context
-      if (this.connectionData.painPoint) {
-        const painPointQuery = `${this.connectionData.business_type} ${this.connectionData.painPoint} solutions`;
-        this.painPointContext = await this.getRAGContext(painPointQuery);
-      }
-      
-      console.log('✅ Initialized RAG context for', this.connectionData.business_type);
-    } catch (error) {
-      console.error('❌ Error initializing context:', error.message);
+    // ALWAYS respond to direct questions first
+    if (this.isUserAskingQuestion(userMessage)) {
+      return this.handleUserQuestion(userMessage);
     }
-  }
-
-  /**
-   * Get context from RAG memory
-   */
-  async getRAGContext(query) {
-    if (!this.memoryService) return null;
     
-    try {
-      // Check if we have a valid customer email before searching
-      const customerEmail = this.connectionData.customerEmail;
-      
-      // Only search for customer-specific memories if we have a valid email
-      let results = [];
-      let nexellaContext = null;
-      
-      if (customerEmail && customerEmail !== 'prospect@example.com' && customerEmail !== '') {
-        // Search for relevant memories
-        results = await this.memoryService.retrieveRelevantMemories(
-          customerEmail,
-          query,
-          3
-        );
-        
-        // Also search Nexella knowledge base
-        nexellaContext = await this.memoryService.generateEnhancedConversationContext(
-          customerEmail,
-          query
-        );
-      } else {
-        // If no customer email, just search general Nexella knowledge
-        console.log('🔍 No customer email, searching general knowledge only');
-        nexellaContext = await this.memoryService.generateEnhancedConversationContext(
-          null,
-          query
-        );
-      }
-      
-      return {
-        memories: results,
-        nexellaContext: nexellaContext
-      };
-    } catch (error) {
-      console.error('❌ Error getting RAG context:', error.message);
-      return null;
+    // Then follow conversation flow
+    if (!this.state.hasGreeted) {
+      return this.generateGreeting();
     }
+    
+    if (!this.state.hasBuiltRapport) {
+      return this.buildRapport(userMessage);
+    }
+    
+    if (!this.state.hasAcknowledgedPainPoint) {
+      return this.acknowledgePainPoint(userMessage);
+    }
+    
+    if (!this.state.hasPresentedSolution) {
+      return this.presentSolution(userMessage);
+    }
+    
+    if (!this.state.hasOfferedDemo) {
+      return this.offerDemo();
+    }
+    
+    // Check for scheduling intent
+    if (this.isSchedulingIntent(userMessage)) {
+      this.state.isBooking = true;
+      return "Awesome! Let me check our calendar. What day works best for you this week?";
+    }
+    
+    return null;
   }
 
   /**
-   * Generate personalized greeting
+   * Check if user is asking a question
    */
-  async generateQuickGreeting() {
+  isUserAskingQuestion(userMessage) {
+    const questions = [
+      'how are you', 'how\'s it going', 'how about you',
+      'what about you', 'and you?', 'you?',
+      'what is', 'what\'s', 'how does', 'how do',
+      'can you', 'will you', 'do you'
+    ];
+    
+    const lower = userMessage.toLowerCase();
+    return questions.some(q => lower.includes(q)) || userMessage.includes('?');
+  }
+
+  /**
+   * Handle user questions appropriately
+   */
+  handleUserQuestion(userMessage) {
+    const lower = userMessage.toLowerCase();
+    
+    // How are you?
+    if (lower.includes('how are you') || lower.includes('how about you')) {
+      this.waitingFor = null; // Clear any waiting state
+      return "I'm doing great, thanks for asking! I'm excited to help you solve your lead follow-up challenges.";
+    }
+    
+    // What is Nexella?
+    if (lower.includes('what is nexella') || lower.includes('what do you do')) {
+      return "Nexella AI helps businesses like yours never miss another lead. We use AI to instantly respond to every inquiry, qualify leads, and book appointments automatically - 24/7.";
+    }
+    
+    // How does it work?
+    if (lower.includes('how does') || lower.includes('how do')) {
+      return "Great question! Our AI handles all your customer interactions - phone calls, texts, and web chats. It responds instantly, asks your qualifying questions, and books appointments directly into your calendar. Everything happens automatically while you focus on closing deals.";
+    }
+    
+    // Pricing
+    if (lower.includes('cost') || lower.includes('price') || lower.includes('how much')) {
+      return "Our pricing is customized based on your specific needs and call volume. The best part is, most clients see ROI within 30 days. Would you like to see exactly how it would work for your business?";
+    }
+    
+    return null;
+  }
+
+  /**
+   * Generate initial greeting
+   */
+  generateGreeting() {
+    this.state.hasGreeted = true;
+    this.waitingFor = 'how_are_you_response';
     const firstName = this.connectionData.firstName || 'there';
     return `Hi ${firstName}! This is Sarah from Nexella AI. How are you doing today?`;
   }
 
   /**
-   * Generate industry-aware rapport response
+   * Build rapport based on their response
    */
-  async generateRapportResponse(userResponse) {
-    const sentiment = this.detectSentiment(userResponse);
-    const firstName = this.connectionData.firstName || '';
+  buildRapport(userMessage) {
+    const sentiment = this.analyzeSentiment(userMessage);
+    const company = this.connectionData.companyName || 'your company';
     
-    // Base response based on sentiment
-    let baseResponse = '';
+    let response = '';
+    
+    // First, acknowledge their response
     if (sentiment === 'positive') {
-      baseResponse = `That's great to hear! I'm doing well too, thank you for asking.`;
+      response = "That's wonderful to hear! ";
     } else if (sentiment === 'negative') {
-      baseResponse = `I'm sorry to hear that. I hope things get better. I'm doing okay, thanks.`;
+      response = "I'm sorry to hear that. I hope things improve for you. ";
     } else {
-      baseResponse = `I hear you. I'm doing alright, thanks for asking.`;
+      response = "Thanks for letting me know. ";
     }
     
-    // Add transition to pain point
-    const transition = ` So I was looking at your form about ${this.connectionData.companyName || 'your business'}... it sounds like you're dealing with some real challenges. `;
-    
-    // Mention specific pain point
-    let painPointMention = '';
-    if (this.connectionData.painPoint) {
-      const painLower = this.connectionData.painPoint.toLowerCase();
-      if (painLower.includes('miss calls')) {
-        painPointMention = `I see that you're missing too many calls. That must be really frustrating when you know each one could be a potential customer...`;
-      } else if (painLower.includes('generating') && painLower.includes('leads')) {
-        painPointMention = `I noticed you're struggling to generate enough leads. That's tough, especially with how competitive things are...`;
-      } else if (painLower.includes('following up')) {
-        painPointMention = `You mentioned having trouble following up quickly with leads. I totally understand - time is everything in sales...`;
-      } else if (painLower.includes('qualified')) {
-        painPointMention = `I see you're dealing with unqualified leads. That's so frustrating when you're wasting time on people who aren't a good fit...`;
-      } else if (painLower.includes('handle') && painLower.includes('amount')) {
-        painPointMention = `You mentioned being overwhelmed with the volume of leads. What a great problem to have, but I know it's still stressful...`;
-      } else {
-        painPointMention = `I see from your form that you're struggling with "${this.connectionData.painPoint}". That sounds really challenging...`;
+    // If they asked how we are, we already responded, so move to pain point
+    if (this.waitingFor !== 'how_are_you_response') {
+      this.state.hasBuiltRapport = true;
+      this.state.hasAcknowledgedPainPoint = true;
+      
+      // Acknowledge their pain point
+      const painPoint = this.connectionData.painPoint;
+      if (painPoint && painPoint.toLowerCase().includes('following up')) {
+        response += `So I was looking at your form, and I see that you're struggling with following up with leads quickly enough at ${company}. Time is everything in real estate, isn't it? You know those first few minutes are critical...`;
       }
+    } else {
+      // They just answered how they are, so acknowledge and move to pain point
+      this.state.hasBuiltRapport = true;
+      response += `So I was just reviewing what you submitted...`;
     }
     
-    return `${baseResponse}${transition}${painPointMention}`;
-  }
-
-  /**
-   * Generate solution presentation
-   */
-  async generateSolutionPresentation() {
-    const painPoint = this.connectionData.painPoint?.toLowerCase() || '';
-    const firstName = this.connectionData.firstName || '';
-    const company = this.connectionData.companyName || 'your company';
-    
-    // Map pain points to solutions
-    const solutionMap = {
-      'miss calls': `Here's exactly how we solve this... Our AI answers every single call, 24/7, and sounds just like a real person. We follow up with every lead instantly by text, so they never go cold. Everything integrates with your current systems seamlessly.`,
-      'generating': `For companies struggling with lead generation, we provide three powerful solutions: AI Texting captures website visitors instantly, SMS Revive reactivates your old database, and our Review Collector boosts your online reputation to attract more leads organically.`,
-      'following up': `Our AI responds to every lead within seconds, 24/7. It answers questions, nurtures leads automatically, and books appointments without any manual work. You'll never lose another lead to slow follow-up.`,
-      'qualified': `We pre-qualify every lead based on YOUR exact criteria before they ever reach you. Our AI asks the right questions and only books appointments with serious, qualified prospects.`,
-      'handle': `Our complete automation suite handles unlimited leads simultaneously. Every lead gets instant attention, proper qualification, and automatic scheduling. Your CRM stays updated automatically so nothing falls through the cracks.`
-    };
-    
-    // Find matching solution
-    for (const [key, solution] of Object.entries(solutionMap)) {
-      if (painPoint.includes(key)) {
-        return solution;
-      }
-    }
-    
-    // Default solution
-    return `So here's how we help... Our AI handles all your customer interactions 24/7, qualifies leads based on YOUR criteria, and books appointments automatically. You focus on serving clients, we handle the rest.`;
-  }
-
-  /**
-   * Generate demo offer
-   */
-  generateDemoOffer() {
-    const firstName = this.connectionData.firstName || '';
-    const company = this.connectionData.companyName || 'your company';
-    
-    return `You know what? I'd love to show you exactly how this would work for ${company}. Our owner, Jaden, does these personalized demo calls where he can show you the system live and create a custom solution just for you. It's completely free and super valuable. Would you be interested in seeing it in action?`;
-  }
-
-  /**
-   * Get next response based on phase - CRITICAL FIX: Return single response only
-   */
-  async getNextResponse(userMessage = '') {
-    // Initialize context on first response
-    if (!this.industryContext && this.conversationFlow.phase === 'greeting') {
-      await this.initializeContext();
-    }
-    
-    // CRITICAL: Only return one response at a time
-    let response = null;
-    
-    switch (this.conversationFlow.phase) {
-      case 'greeting':
-        if (!this.conversationFlow.greetingCompleted) {
-          response = await this.generateQuickGreeting();
-          this.conversationFlow.greetingCompleted = true;
-          this.conversationFlow.phase = 'rapport';
-        }
-        break;
-        
-      case 'rapport':
-        if (userMessage && !this.conversationFlow.rapportBuilt) {
-          response = await this.generateRapportResponse(userMessage);
-          this.conversationFlow.rapportBuilt = true;
-          this.conversationFlow.painPointMentioned = true;
-          this.conversationFlow.phase = 'pain_point_acknowledge';
-        }
-        break;
-        
-      case 'pain_point_acknowledge':
-        if (userMessage && !this.conversationFlow.painPointAcknowledged) {
-          // Check if user acknowledged the pain point
-          const acknowledgments = ['yeah', 'yes', 'yep', 'right', 'exactly', 'true', 'definitely'];
-          const userLower = userMessage.toLowerCase();
-          const isAcknowledgment = acknowledgments.some(ack => userLower.includes(ack));
-          
-          if (isAcknowledgment) {
-            this.conversationFlow.painPointAcknowledged = true;
-            this.conversationFlow.phase = 'solution';
-            // Store transition phrase for next call
-            this.pendingResponses.push({
-              type: 'transition',
-              content: "So here's the good news..."
-            });
-            response = "So here's the good news...";
-          } else {
-            response = "I completely understand. It's a real challenge that many businesses face.";
-          }
-        }
-        break;
-        
-      case 'solution':
-        if (!this.conversationFlow.solutionPresented) {
-          response = await this.generateSolutionPresentation();
-          this.conversationFlow.solutionPresented = true;
-          // Store demo offer for next interaction
-          this.pendingResponses.push({
-            type: 'demo_offer',
-            delay: 3000
-          });
-        } else if (this.pendingResponses.length > 0 && this.pendingResponses[0].type === 'demo_offer') {
-          this.pendingResponses.shift();
-          response = this.generateDemoOffer();
-          this.conversationFlow.schedulingOffered = true;
-          this.conversationFlow.phase = 'scheduling';
-        }
-        break;
-        
-      case 'scheduling':
-        // Scheduling is handled by the main handler
-        response = null;
-        break;
-    }
-    
+    this.waitingFor = 'pain_point_acknowledgment';
     return response;
   }
 
   /**
-   * Check if we should send next queued response
+   * Acknowledge their pain point
    */
-  shouldSendQueuedResponse() {
-    if (this.pendingResponses.length === 0) return false;
+  acknowledgePainPoint(userMessage) {
+    this.state.hasAcknowledgedPainPoint = true;
+    this.waitingFor = 'ready_for_solution';
     
-    const nextResponse = this.pendingResponses[0];
-    const now = Date.now();
-    const timeSinceLastResponse = now - this.lastResponseTime;
-    
-    // Check if enough time has passed
-    const requiredDelay = nextResponse.delay || 2000;
-    return timeSinceLastResponse >= requiredDelay;
-  }
-
-  /**
-   * Get queued response if ready
-   */
-  getQueuedResponse() {
-    if (this.shouldSendQueuedResponse()) {
-      const response = this.pendingResponses.shift();
-      this.lastResponseTime = Date.now();
-      
-      if (response.type === 'demo_offer') {
-        return this.generateDemoOffer();
-      } else if (response.content) {
-        return response.content;
-      }
-    }
-    return null;
-  }
-
-  /**
-   * Generate AI response with context
-   */
-  async generateAIResponse(messages, maxTokens = 50) {
-    try {
-      const response = await axios.post(
-        'https://api.openai.com/v1/chat/completions',
-        {
-          model: 'gpt-4',
-          messages: messages,
-          temperature: 0.7,
-          max_tokens: maxTokens
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${config.OPENAI_API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          timeout: 5000
-        }
-      );
-      
-      return response.data.choices[0].message.content.trim();
-    } catch (error) {
-      console.error('AI response error:', error.message);
-      return null;
-    }
-  }
-
-  /**
-   * Detect user sentiment
-   */
-  detectSentiment(userMessage) {
+    // Check if they're acknowledging/agreeing
     const lower = userMessage.toLowerCase();
-    
-    const positiveWords = ['good', 'great', 'awesome', 'excellent', 'fantastic', 'well', 'fine', 'alright', 'okay'];
-    const negativeWords = ['bad', 'terrible', 'awful', 'struggling', 'tough', 'hard', 'stressed', 'rough'];
-    
-    if (positiveWords.some(word => lower.includes(word))) {
-      return 'positive';
-    } else if (negativeWords.some(word => lower.includes(word))) {
-      return 'negative';
+    if (lower.includes('yeah') || lower.includes('yes') || lower.includes('exactly') || lower.includes('right')) {
+      return "I hear this all the time from real estate professionals. You get a lead but by the time you follow up, they've already moved on to someone else. So here's the good news...";
     }
     
-    return 'neutral';
+    return "I completely understand. Let me tell you how we can help...";
+  }
+
+  /**
+   * Present the solution
+   */
+  presentSolution(userMessage) {
+    this.state.hasPresentedSolution = true;
+    this.waitingFor = 'solution_response';
+    
+    const painPoint = this.connectionData.painPoint?.toLowerCase() || '';
+    
+    if (painPoint.includes('following up')) {
+      return "Our AI responds to every lead within 5 seconds, 24/7. It answers their questions about properties, qualifies them based on YOUR criteria - things like budget, timeline, pre-approval status - and books appointments directly into your calendar. While your competition is still checking their voicemail, you've already secured the appointment!";
+    }
+    
+    return "Our AI system handles all your lead interactions instantly, qualifies them based on your criteria, and books appointments automatically. You never miss another opportunity.";
+  }
+
+  /**
+   * Offer demo
+   */
+  offerDemo() {
+    this.state.hasOfferedDemo = true;
+    this.waitingFor = 'demo_response';
+    
+    const firstName = this.connectionData.firstName || '';
+    const company = this.connectionData.companyName || 'your company';
+    
+    // Add a small delay before offering
+    return `You know what${firstName ? ', ' + firstName : ''}? I'd love to show you exactly how this would work for ${company}. Our founder Jaden does these personalized demo calls where he can show you the system live and create a custom solution just for you. It's completely free and super valuable. Would you be interested in seeing it in action?`;
   }
 
   /**
@@ -350,69 +207,45 @@ class ConversationFlowManager {
   isSchedulingIntent(userMessage) {
     const lower = userMessage.toLowerCase();
     const positiveIndicators = [
-      'yes', 'yeah', 'sure', 'ok', 'sounds good', 'interested',
-      'let\'s do it', 'book', 'schedule', 'demo', 'show me'
+      'yes', 'yeah', 'sure', 'ok', 'sounds good',
+      'interested', 'let\'s do it', 'book', 'schedule'
     ];
     
     return positiveIndicators.some(indicator => lower.includes(indicator));
   }
 
   /**
-   * Check if we need AI response
+   * Analyze sentiment
    */
-  needsAIResponse(userMessage) {
-    const complexIndicators = [
-      'how', 'what', 'why', 'when', 'where', 'explain',
-      'tell me more', 'cost', 'price', 'how much', 'work'
-    ];
+  analyzeSentiment(message) {
+    const lower = message.toLowerCase();
     
-    const lower = userMessage.toLowerCase();
-    return complexIndicators.some(indicator => lower.includes(indicator));
+    const positive = ['good', 'great', 'awesome', 'well', 'fine'];
+    const negative = ['bad', 'not good', 'terrible', 'struggling'];
+    
+    if (positive.some(word => lower.includes(word))) return 'positive';
+    if (negative.some(word => lower.includes(word))) return 'negative';
+    
+    return 'neutral';
   }
 
   /**
-   * Get conversation state
+   * Get current state
    */
   getState() {
     return {
-      phase: this.conversationFlow.phase,
-      readyForScheduling: this.conversationFlow.schedulingOffered && !this.conversationFlow.bookingInProgress,
-      bookingInProgress: this.conversationFlow.bookingInProgress,
-      completed: this.conversationFlow.phase === 'completed',
-      hasPendingResponse: this.pendingResponses.length > 0
+      ...this.state,
+      waitingFor: this.waitingFor,
+      readyForScheduling: this.state.hasOfferedDemo && !this.state.isBooking
     };
   }
 
   /**
-   * Force transition to phase
+   * Force state transition (for debugging)
    */
-  transitionTo(phase) {
-    console.log(`🔄 Transitioning from ${this.conversationFlow.phase} to ${phase}`);
-    this.conversationFlow.phase = phase;
-    
-    if (phase === 'booking') {
-      this.conversationFlow.bookingInProgress = true;
-    } else if (phase === 'completed') {
-      this.conversationFlow.bookingInProgress = false;
-    }
-  }
-
-  /**
-   * Mark booking as completed
-   */
-  markBookingComplete() {
-    this.conversationFlow.phase = 'completed';
-    this.conversationFlow.bookingInProgress = false;
-    // Clear any pending responses
-    this.pendingResponses = [];
-  }
-
-  /**
-   * Update last response time
-   */
-  updateResponseTime() {
-    this.lastResponseTime = Date.now();
+  setState(updates) {
+    Object.assign(this.state, updates);
   }
 }
 
-module.exports = ConversationFlowManager;
+module.exports = SimplifiedConversationManager;
