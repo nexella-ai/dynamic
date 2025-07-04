@@ -1,4 +1,4 @@
-// src/handlers/WebSocketHandlerWithLearning.js - FIXED VERSION
+// src/handlers/WebSocketHandlerWithLearning.js - FIXED VERSION WITH PROPER RAPPORT AND BOOKING
 const WebSocketHandlerWithMemory = require('./WebSocketHandlerWithMemory');
 const SelfScoringLearningModule = require('../services/learning/SelfScoringLearningModule');
 const AdaptiveResponseGenerator = require('../services/learning/AdaptiveResponseGenerator');
@@ -27,13 +27,20 @@ class WebSocketHandlerWithLearning extends WebSocketHandlerWithMemory {
       userMessageLengths: [],
       bookingAttempted: false,
       objections: [],
-      positiveSignals: ['sounds good', 'great', 'yes', 'sure', 'interested', 'tell me more'],
+      positiveSignals: ['sounds good', 'great', 'yes', 'sure', 'interested', 'tell me more', 'good', 'well', 'fine'],
       negativeSignals: ['not interested', 'no', 'busy', 'later', 'goodbye', 'stop']
     };
     
     // Track if user has spoken
     this.userHasSpoken = false;
     this.greetingSent = false;
+    
+    // CRITICAL: Track conversation state properly
+    this.waitingForResponse = false;
+    this.lastQuestionAsked = null;
+    
+    // CRITICAL: Proper response timing
+    this.minimumResponseDelay = 3000; // 3 seconds minimum between responses
     
     console.log('🧠 Self-Learning WebSocket Handler initialized');
   }
@@ -44,11 +51,11 @@ class WebSocketHandlerWithLearning extends WebSocketHandlerWithMemory {
   async initialize() {
     await super.initialize();
     
-    // CRITICAL FIX: If we have Typeform data with pain point, skip discovery
+    // CRITICAL FIX: If we have Typeform data with pain point, prepare for personalized flow
     if (this.connectionData.painPoint && this.connectionData.firstName) {
-      console.log('📋 Have Typeform data - adjusting conversation flow');
+      console.log('📋 Have Typeform data - will use personalized conversation flow');
       
-      // Set conversation manager to skip discovery
+      // Set conversation manager to greeting phase
       if (this.conversationManager) {
         this.conversationManager.conversationFlow.phase = 'greeting';
         this.conversationManager.conversationFlow.greetingCompleted = false;
@@ -90,7 +97,9 @@ class WebSocketHandlerWithLearning extends WebSocketHandlerWithMemory {
     console.log('📊 Current conversation state:', {
       phase: conversationState.phase,
       hasPainPoint: !!conversationState.customerProfile.painPoint,
-      questionsCompleted: conversationState.questionsCompleted
+      questionsCompleted: conversationState.questionsCompleted,
+      waitingForResponse: this.waitingForResponse,
+      lastQuestion: this.lastQuestionAsked
     });
     
     // CRITICAL FIX: Don't get stuck in loops
@@ -104,53 +113,113 @@ class WebSocketHandlerWithLearning extends WebSocketHandlerWithMemory {
     
     console.log('🎯 Learning suggestion:', suggestedAction);
     
-    // CRITICAL FIX: Progress conversation based on Typeform data
+    // CRITICAL FIX: Handle conversation flow properly
     let response = null;
     
+    // Handle greeting phase
     if (!this.greetingSent && this.userHasSpoken) {
-      // Send personalized greeting
       response = await this.generateGreeting();
       this.greetingSent = true;
-      this.conversationManager.conversationFlow.phase = 'rapport';
-    } else if (conversationState.phase === 'rapport' && !conversationState.rapportBuilt) {
-      // Build rapport and acknowledge pain point
+      this.waitingForResponse = true;
+      this.lastQuestionAsked = 'how_are_you';
+      this.conversationManager.conversationFlow.phase = 'greeting';
+    } 
+    // Handle rapport building - WAIT for response to "How are you?"
+    else if (this.waitingForResponse && this.lastQuestionAsked === 'how_are_you') {
+      this.waitingForResponse = false;
       response = await this.generateRapportResponse(userMessage);
       this.conversationManager.conversationFlow.rapportBuilt = true;
+      this.conversationManager.conversationFlow.phase = 'pain_point_acknowledge';
+    }
+    // Handle pain point acknowledgment
+    else if (conversationState.phase === 'pain_point_acknowledge' && !conversationState.painPointAcknowledged) {
+      // Wait a moment for user to process rapport response
+      this.waitingForResponse = true;
+      this.lastQuestionAsked = 'pain_point_acknowledge';
+      // Don't send a response yet - wait for user acknowledgment
+      return;
+    }
+    // Handle user acknowledgment of pain point
+    else if (this.waitingForResponse && this.lastQuestionAsked === 'pain_point_acknowledge') {
+      this.waitingForResponse = false;
+      this.conversationManager.conversationFlow.painPointAcknowledged = true;
       this.conversationManager.conversationFlow.phase = 'solution';
-    } else if (conversationState.phase === 'solution' && !conversationState.solutionPresented) {
-      // Present solution
-      response = await this.generateSolutionResponse();
-      this.conversationManager.conversationFlow.solutionPresented = true;
+      response = "So here's the good news...";
       
-      // Queue scheduling offer
+      // Queue solution presentation after a delay
       setTimeout(async () => {
         if (!this.responseInProgress && !this.appointmentBooked) {
-          const schedulingOffer = await this.generateSchedulingOffer();
-          await this.sendSingleResponse(schedulingOffer, Date.now());
-          this.conversationManager.conversationFlow.phase = 'scheduling';
-          this.conversationManager.conversationFlow.schedulingOffered = true;
+          const solutionResponse = await this.generateSolutionResponse();
+          await this.sendSingleResponse(solutionResponse, Date.now());
+          this.conversationManager.conversationFlow.solutionPresented = true;
+          
+          // Queue scheduling offer after solution
+          setTimeout(async () => {
+            if (!this.responseInProgress && !this.appointmentBooked) {
+              const schedulingOffer = await this.generateSchedulingOffer();
+              await this.sendSingleResponse(schedulingOffer, Date.now());
+              this.conversationManager.conversationFlow.phase = 'scheduling';
+              this.conversationManager.conversationFlow.schedulingOffered = true;
+            }
+          }, 4000); // 4 seconds after solution
         }
-      }, 3000);
-    } else if (conversationState.phase === 'scheduling') {
-      // Handle scheduling
+      }, 2000); // 2 seconds after "good news"
+    }
+    // Handle scheduling response
+    else if (conversationState.phase === 'scheduling' || conversationState.schedulingOffered) {
+      const userLower = userMessage.toLowerCase();
+      
+      // Check for positive scheduling intent
+      if (userLower.includes('yes') || userLower.includes('yeah') || userLower.includes('sure') || 
+          userLower.includes('ok') || userLower.includes('sounds good') || userLower.includes('interested')) {
+        response = "Awesome! Let me check our calendar. What day works best for you this week?";
+        this.conversationManager.conversationFlow.phase = 'booking';
+        this.conversationManager.conversationFlow.bookingInProgress = true;
+      } else {
+        // Handle booking phase directly
+        await this.handleBookingPhase(userMessage, parsed.response_id);
+        return;
+      }
+    }
+    // Handle booking phase
+    else if (conversationState.phase === 'booking' || this.conversationManager?.conversationFlow.bookingInProgress) {
       await this.handleBookingPhase(userMessage, parsed.response_id);
       return;
-    } else if (suggestedAction.confidence > 0.7) {
-      // Apply suggested action
-      await this.applySuggestedAction(suggestedAction, parsed.response_id);
-      return;
-    } else {
-      // Use adaptive response generation
-      response = await this.adaptiveGenerator.generateAdaptiveResponse(
-        conversationState,
-        userMessage
-      );
     }
     
-    // Track response metrics
+    // Send response if we have one
     if (response) {
       this.trackResponseMetrics(response);
       await this.sendSingleResponse(response, parsed.response_id);
+    }
+  }
+
+  /**
+   * Override handleBookingPhase to fix booking issues
+   */
+  async handleBookingPhase(userMessage, responseId) {
+    console.log('📅 Processing booking request:', userMessage);
+    
+    // CRITICAL FIX: Use the parent class booking manager properly
+    if (this.bookingManager) {
+      const bookingResponse = await this.bookingManager.processBookingRequest(userMessage);
+      
+      if (bookingResponse) {
+        await this.sendSingleResponse(bookingResponse, responseId);
+        
+        // Check if booking is complete
+        const bookingState = this.bookingManager.getState();
+        if (bookingState.bookingCompleted) {
+          this.appointmentBooked = true;
+          this.conversationManager.markBookingComplete();
+          
+          // Send webhook with booking details
+          await this.sendBookingWebhook();
+        }
+      }
+    } else {
+      // Fallback if booking manager not available
+      await this.sendSingleResponse("Let me help you schedule that appointment. What day works best?", responseId);
     }
   }
 
@@ -159,8 +228,6 @@ class WebSocketHandlerWithLearning extends WebSocketHandlerWithMemory {
    */
   async generateGreeting() {
     const firstName = this.connectionData.firstName || 'there';
-    const company = this.connectionData.companyName;
-    
     return `Hi ${firstName}! This is Sarah from Nexella AI. How are you doing today?`;
   }
 
@@ -171,30 +238,37 @@ class WebSocketHandlerWithLearning extends WebSocketHandlerWithMemory {
     const sentiment = this.analyzeSentiment(userMessage);
     const firstName = this.connectionData.firstName || '';
     const painPoint = this.connectionData.painPoint;
+    const company = this.connectionData.companyName;
     
     let response = '';
     
-    // Acknowledge their response
-    if (sentiment === 'positive') {
+    // CRITICAL: Actually respond to their answer about how they're doing
+    const userLower = userMessage.toLowerCase();
+    
+    if (sentiment === 'positive' || userLower.includes('good') || userLower.includes('well') || userLower.includes('great')) {
       response = "That's great to hear! ";
-    } else if (sentiment === 'negative') {
-      response = "I'm sorry to hear that. ";
+    } else if (sentiment === 'negative' || userLower.includes('bad') || userLower.includes('not good')) {
+      response = "I'm sorry to hear that. I hope things get better for you. ";
+    } else if (userLower.includes('how are you') || userLower.includes('you?')) {
+      response = "I'm doing well, thank you for asking! ";
     } else {
       response = "Thanks for letting me know. ";
     }
     
-    // Acknowledge pain point from Typeform
+    // Add pain point acknowledgment
     if (painPoint) {
       const painLower = painPoint.toLowerCase();
       
-      if (painLower.includes('following up') && painLower.includes('quickly')) {
-        response += `So I saw from your form that you're struggling with following up with leads quickly enough at ${this.connectionData.companyName}. That's such a common challenge in real estate - time is everything when you're competing for listings, right?`;
-      } else if (painLower.includes('miss calls')) {
-        response += `I noticed from your form that you're missing too many calls. That must be really frustrating when each call could be your next big listing...`;
+      if (painLower.includes('miss calls')) {
+        response += `So I was looking at your form, and I see that you're missing too many calls${company ? ' at ' + company : ''}. That must be really frustrating when each call could be your next big deal...`;
+      } else if (painLower.includes('following up') && painLower.includes('quickly')) {
+        response += `I noticed from your form that you're struggling with following up with leads quickly enough${company ? ' at ' + company : ''}. Time is everything in business, isn't it? You know those first few minutes are critical...`;
       } else if (painLower.includes('generating') && painLower.includes('leads')) {
-        response += `I see from your form that generating enough leads is a challenge. That's tough, especially with how competitive the real estate market is...`;
+        response += `So I saw from your form that generating enough leads is a challenge${company ? ' for ' + company : ''}. That's tough, especially with how competitive things are these days...`;
+      } else if (painLower.includes('handle') && painLower.includes('amount')) {
+        response += `I see from your form that you're overwhelmed with the volume of leads${company ? ' at ' + company : ''}. What a great problem to have, but I know it's still really stressful when you can't give everyone the attention they deserve...`;
       } else {
-        response += `I saw from your form that you're dealing with "${painPoint}". That sounds really challenging...`;
+        response += `I saw from your form that you're dealing with "${painPoint}"${company ? ' at ' + company : ''}. That sounds really challenging...`;
       }
       
       this.conversationManager.conversationFlow.painPointAcknowledged = true;
@@ -212,23 +286,21 @@ class WebSocketHandlerWithLearning extends WebSocketHandlerWithMemory {
     
     let solution = "Here's exactly how we can help... ";
     
-    if (painPoint.includes('following up') && painPoint.includes('quickly')) {
-      solution += "Our AI responds to every lead within 5 seconds, 24/7. It answers questions, qualifies them based on YOUR criteria, and books appointments automatically. Imagine never losing another lead to slow follow-up - your competition won't know what hit them!";
-      this.recommendedServices = ['AI Voice Calls', 'SMS Follow-Ups', 'Appointment Bookings'];
-    } else if (painPoint.includes('miss calls')) {
-      solution += "Our AI Voice system answers every single call, day or night, weekends, holidays - always. It sounds completely natural, qualifies callers, and if they can't talk, it automatically texts them to continue the conversation. You'll literally never miss another opportunity.";
+    if (painPoint.includes('miss calls')) {
+      solution += "Our AI Voice system answers every single call, 24/7, and sounds just like a real person. It qualifies callers based on YOUR criteria, and if they can't talk right then, it automatically texts them to continue the conversation. You'll literally never miss another opportunity.";
       this.recommendedServices = ['AI Voice Calls', 'SMS Follow-Ups'];
+    } else if (painPoint.includes('following up') && painPoint.includes('quickly')) {
+      solution += "Our AI responds to every lead within 5 seconds, 24/7. It answers their questions, qualifies them based on YOUR criteria, and books appointments automatically. While your competition is still checking voicemail, you've already secured the appointment!";
+      this.recommendedServices = ['AI Voice Calls', 'SMS Follow-Ups', 'Appointment Bookings'];
     } else if (painPoint.includes('generating') && painPoint.includes('leads')) {
-      solution += "We have three powerful ways to generate more leads: AI Texting on your website captures visitors instantly, SMS Revive wakes up your old database, and our Review Collector boosts your online reputation so people choose you first.";
+      solution += "We have three powerful ways to generate more leads: Our AI Texting on your website captures visitors instantly when they're most interested, SMS Revive wakes up all those old leads in your database, and our Review Collector boosts your online reputation so more people choose you first.";
       this.recommendedServices = ['AI Texting', 'SMS Revive', 'Review Collector'];
+    } else if (painPoint.includes('handle') && painPoint.includes('amount')) {
+      solution += "Our complete automation suite handles unlimited leads simultaneously. Every lead gets instant attention, proper qualification, and automatic scheduling. Your CRM stays updated automatically so nothing falls through the cracks. Your team can focus on closing deals instead of juggling calls.";
+      this.recommendedServices = ['Complete Automation Suite', 'CRM Integration'];
     } else {
-      solution += "Our AI system handles all your customer interactions automatically - from initial contact to booking appointments. Everything integrates seamlessly with your current systems.";
+      solution += "Our AI system handles all your customer interactions automatically - from initial contact to booking appointments. Everything integrates seamlessly with your current systems, so you can focus on what you do best.";
       this.recommendedServices = ['Complete AI System'];
-    }
-    
-    // Add business-specific context
-    if (businessType.toLowerCase().includes('real estate')) {
-      solution += " For real estate specifically, we help you respond to every lead faster than your competition, so you win more listings!";
     }
     
     this.conversationManager.conversationFlow.solutionPresented = true;
@@ -242,7 +314,82 @@ class WebSocketHandlerWithLearning extends WebSocketHandlerWithMemory {
     const firstName = this.connectionData.firstName || '';
     const company = this.connectionData.companyName || 'your business';
     
-    return `You know what, ${firstName}? I'd love to show you exactly how this would work for ${company}. Our founder Jaden does these personalized demo calls where he can show you the system live and create a custom solution just for you. It's completely free and super valuable. Would you be interested in seeing it in action?`;
+    return `You know what${firstName ? ', ' + firstName : ''}? I'd love to show you exactly how this would work for ${company}. Our founder Jaden does these personalized demo calls where he can show you the system live and create a custom solution just for you. It's completely free and super valuable. Would you be interested in seeing it in action?`;
+  }
+
+  /**
+   * Override sendSingleResponse to ensure proper timing
+   */
+  async sendSingleResponse(content, responseId) {
+    // CRITICAL: Prevent multiple responses
+    if (this.responseInProgress) {
+      console.log('🚫 Response already in progress, skipping');
+      return;
+    }
+    
+    // Apply rate limiting
+    const now = Date.now();
+    const timeSinceLastResponse = now - this.lastResponseTime;
+    
+    if (timeSinceLastResponse < this.minimumResponseDelay) {
+      const waitTime = this.minimumResponseDelay - timeSinceLastResponse;
+      console.log(`⏳ Waiting ${waitTime}ms before sending response`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+    
+    this.responseInProgress = true;
+    
+    try {
+      console.log('🤖 Sending:', content);
+      
+      this.ws.send(JSON.stringify({
+        content: content,
+        content_complete: true,
+        actions: [],
+        response_id: responseId || Date.now()
+      }));
+      
+      this.lastResponseTime = Date.now();
+      if (this.conversationManager) {
+        this.conversationManager.updateResponseTime();
+      }
+      
+    } finally {
+      // Always clear the response lock after a short delay
+      setTimeout(() => {
+        this.responseInProgress = false;
+      }, 500);
+    }
+  }
+
+  /**
+   * Send booking webhook
+   */
+  async sendBookingWebhook() {
+    try {
+      const bookingState = this.bookingManager.getState();
+      const { sendSchedulingPreference } = require('../services/webhooks/WebhookService');
+      
+      await sendSchedulingPreference(
+        this.connectionData.customerName || `${this.connectionData.firstName} ${this.connectionData.lastName}`,
+        this.connectionData.customerEmail,
+        this.connectionData.customerPhone,
+        bookingState.selectedDay || 'Appointment booked',
+        this.callId,
+        {
+          first_name: this.connectionData.firstName,
+          last_name: this.connectionData.lastName,
+          company_name: this.connectionData.companyName,
+          pain_point: this.connectionData.painPoint,
+          appointment_booked: true,
+          booking_confirmed: true
+        }
+      );
+      
+      console.log('✅ Booking webhook sent');
+    } catch (error) {
+      console.error('❌ Webhook error:', error.message);
+    }
   }
 
   /**
@@ -250,11 +397,16 @@ class WebSocketHandlerWithLearning extends WebSocketHandlerWithMemory {
    */
   analyzeSentiment(message) {
     const lower = message.toLowerCase();
-    const positiveWords = ['good', 'great', 'well', 'fine', 'awesome', 'excellent'];
-    const negativeWords = ['bad', 'not good', 'terrible', 'struggling', 'tough'];
     
-    if (positiveWords.some(word => lower.includes(word))) return 'positive';
-    if (negativeWords.some(word => lower.includes(word))) return 'negative';
+    const positiveWords = ['good', 'great', 'awesome', 'excellent', 'fantastic', 'well', 'fine', 'alright', 'okay', 'wonderful'];
+    const negativeWords = ['bad', 'terrible', 'awful', 'struggling', 'tough', 'hard', 'stressed', 'rough', 'not good', 'not well'];
+    
+    if (positiveWords.some(word => lower.includes(word))) {
+      return 'positive';
+    } else if (negativeWords.some(word => lower.includes(word))) {
+      return 'negative';
+    }
+    
     return 'neutral';
   }
 
@@ -365,6 +517,7 @@ class WebSocketHandlerWithLearning extends WebSocketHandlerWithMemory {
     score += this.conversationMetrics.smoothTransitions * 3;
     if (this.conversationManager?.conversationFlow.painPointAcknowledged) score += 10;
     if (this.conversationManager?.conversationFlow.solutionPresented) score += 10;
+    if (this.conversationManager?.conversationFlow.rapportBuilt) score += 10;
     
     // Negative factors
     score -= this.conversationMetrics.disengagementSignals * 10;
@@ -399,13 +552,20 @@ CUSTOMER CONTEXT:
 - Industry: ${this.connectionData.business_type || 'unknown'}
 - Pain Point: ${this.connectionData.painPoint || 'not specified yet'}
 
-CRITICAL: The customer already told us their pain point via form submission. Do NOT ask about it again.
+CRITICAL: The customer already told us their pain point via form submission. Build rapport by:
+1. Greeting them warmly by name
+2. Asking how they're doing
+3. WAITING for their response
+4. Responding appropriately to their answer
+5. Then acknowledging their pain point with empathy
 
 CONVERSATION PHASE: ${this.conversationManager?.getState().phase || 'greeting'}
 
 LEARNING-BASED GUIDELINES:
 - Current engagement level: ${this.calculateEngagementLevel()}
-- Conversation score: ${this.calculateCurrentScore()}/100`;
+- Conversation score: ${this.calculateCurrentScore()}/100
+- Waiting for response: ${this.waitingForResponse}
+- Last question asked: ${this.lastQuestionAsked}`;
 
     // Add specific guidance based on metrics
     if (this.conversationMetrics.disengagementSignals > 0) {
@@ -424,54 +584,12 @@ LEARNING-BASED GUIDELINES:
   }
 
   /**
-   * Apply suggested action from learning module
-   */
-  async applySuggestedAction(suggestedAction, responseId) {
-    console.log('🎯 Applying learned action:', suggestedAction.action);
-    
-    // Map actions to responses
-    const actionResponses = {
-      'acknowledge_pain_point': async () => {
-        const painPoint = this.connectionData.painPoint;
-        return `I completely understand. ${painPoint} is a real challenge that many businesses face. Let me show you exactly how we've helped others overcome this...`;
-      },
-      'present_solution': async () => {
-        return await this.generateSolutionResponse();
-      },
-      'create_urgency': async () => {
-        return "You know what? I actually have some time slots opening up this week. Would you like me to check what's available?";
-      },
-      'handle_objection': async () => {
-        const lastObjection = this.conversationMetrics.objections[this.conversationMetrics.objections.length - 1];
-        if (lastObjection?.type === 'price') {
-          return "I understand cost is important. That's why we focus on ROI - our clients typically see returns within 60 days. Let me show you how...";
-        }
-        return "I hear your concern. Let me address that...";
-      },
-      'offer_scheduling': async () => {
-        return await this.generateSchedulingOffer();
-      },
-      'continue_current_approach': async () => {
-        return null; // Let normal flow continue
-      }
-    };
-    
-    const actionHandler = actionResponses[suggestedAction.action];
-    if (actionHandler) {
-      const response = await actionHandler();
-      if (response) {
-        await this.sendSingleResponse(response, responseId);
-      }
-    }
-  }
-
-  /**
    * Override handleClose to trigger learning
    */
   async handleClose() {
     console.log('🔌 Connection closing - triggering learning process');
     
-    // Prepare call data for scoring - FIX: Ensure customerName is set
+    // Prepare call data for scoring
     const callData = {
       callId: this.callId,
       customerEmail: this.connectionData.customerEmail,
@@ -499,6 +617,7 @@ LEARNING-BASED GUIDELINES:
       responseTracking: this.conversationMetrics.responses,
       painPointAcknowledged: this.conversationManager?.conversationFlow.painPointAcknowledged || false,
       solutionPresented: this.conversationManager?.conversationFlow.solutionPresented || false,
+      rapportBuilt: this.conversationManager?.conversationFlow.rapportBuilt || false,
       servicesRecommended: this.recommendedServices || []
     };
     
