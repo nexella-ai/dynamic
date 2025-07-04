@@ -46,6 +46,68 @@ class TypeformWebhookHandler {
           message: 'Call already initiated for this form submission'
         };
       }
+
+      // Fix for TypeformWebhookHandler.js - triggerRetellCall method
+
+async triggerRetellCall(customerData) {
+  try {
+    console.log('📞 Triggering Retell call to:', customerData.phone);
+    
+    // Check if we have all required data
+    if (!customerData.phone || !customerData.email) {
+      console.error('❌ Missing required data for call');
+      return { success: false, error: 'Missing phone or email' };
+    }
+    
+    // FIXED: Use correct Retell API endpoint
+    const response = await axios.post(
+      'https://api.retellai.com/create-phone-call', // Correct endpoint
+      {
+        from_number: process.env.RETELL_FROM_NUMBER || '+14158881234',
+        to_number: customerData.phone,
+        override_agent_id: config.RETELL_AGENT_ID,
+        metadata: {
+          customer_email: customerData.email,
+          customer_name: customerData.full_name,
+          first_name: customerData.first_name,
+          last_name: customerData.last_name,
+          company_name: customerData.company_name,
+          business_type: customerData.business_type,
+          pain_point: customerData.pain_point,
+          source: 'typeform',
+          response_id: customerData.responseId
+        }
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${config.RETELL_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    
+    console.log('✅ Retell call initiated:', response.data.call_id);
+    
+    return {
+      success: true,
+      callId: response.data.call_id
+    };
+    
+  } catch (error) {
+    console.error('❌ Error triggering Retell call:', error.response?.data || error.message);
+    
+    // Log more details for debugging
+    if (error.response) {
+      console.error('Response status:', error.response.status);
+      console.error('Response headers:', error.response.headers);
+    }
+    
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
       
       // Store in global for immediate access
       this.storeGlobally(customerData);
