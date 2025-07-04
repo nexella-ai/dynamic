@@ -684,6 +684,83 @@ function generateCallSuggestions(improvements, learningPoints) {
       priority: improvement.priority,
       specificActions: []
     };
+
+    // Add this endpoint to your src/routes/learningRoutes.js file
+// Place it after your existing endpoints but before module.exports
+
+/**
+ * Debug endpoint to check what's actually in the database
+ */
+router.get('/debug/all-scorings', async (req, res) => {
+  try {
+    if (!learningModule) {
+      return res.status(503).json({
+        success: false,
+        error: 'Learning module not initialized'
+      });
+    }
+    
+    const results = await learningModule.debugGetAllRecentCalls();
+    
+    res.json({
+      success: true,
+      totalFound: results?.matches?.length || 0,
+      samples: results?.matches?.slice(0, 10).map(m => ({
+        callId: m.metadata.call_id,
+        score: m.metadata.final_score,
+        timestamp: m.metadata.timestamp,
+        booked: m.metadata.appointment_booked,
+        customerEmail: m.metadata.customer_email,
+        strengths: m.metadata.strengths,
+        improvements: m.metadata.improvements
+      })),
+      message: results ? 'Found call scorings' : 'No results found - check if calls are being scored properly'
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      success: false, 
+      error: error.message,
+      stack: error.stack
+    });
+  }
+});
+
+/**
+ * Force a manual learning cycle
+ */
+router.post('/trigger-learning', async (req, res) => {
+  try {
+    if (!learningModule) {
+      return res.status(503).json({
+        success: false,
+        error: 'Learning module not initialized'
+      });
+    }
+    
+    console.log('🚀 Manually triggering learning cycle...');
+    
+    const results = await learningModule.learnFromHistory(100);
+    
+    res.json({
+      success: true,
+      message: 'Learning cycle completed',
+      results: {
+        callsAnalyzed: results.callsAnalyzed,
+        uniqueCalls: results.uniqueCalls,
+        averageScore: results.insights?.averageScore?.toFixed(1),
+        successRate: results.insights?.successRate?.toFixed(1),
+        scoreDistribution: results.insights?.scoreDistribution,
+        recentTrend: results.insights?.recentTrend,
+        strategiesGenerated: results.strategies?.length || 0
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
     
     // Generate specific actions based on area
     switch (improvement.area) {
