@@ -1,6 +1,12 @@
-// src/handlers/DynamicWebSocketHandler.js
+// src/handlers/DynamicWebSocketHandler.js - Enhanced for Dynamic Companies
 const axios = require('axios');
 const configLoader = require('../services/config/ConfigurationLoader');
+const { 
+  autoBookAppointment, 
+  getAvailableTimeSlots,
+  isCalendarInitialized 
+} = require('../services/calendar/CalendarHelpers');
+const { sendSchedulingPreference } = require('../services/webhooks/WebhookService');
 
 class DynamicWebSocketHandler {
   constructor(ws, req, companyId) {
@@ -11,9 +17,14 @@ class DynamicWebSocketHandler {
     
     // Extract call ID from URL
     const callIdMatch = req.url.match(/\/call_([a-f0-9]+)/);
-    this.callId = callIdMatch ? `call_${callIdMatch[1]}` : null;
+    this.callId = callIdMatch ? `call_${callIdMatch[1]}` : `call_${Date.now()}`;
     
-    // Initialize handler with company config
+    // Connection state
+    this.connectionActive = true;
+    this.messageQueue = [];
+    this.processingMessage = false;
+    
+    // Initialize handler
     this.initialize();
   }
   
@@ -23,19 +34,21 @@ class DynamicWebSocketHandler {
       this.config = await configLoader.loadCompanyConfig(this.companyId);
       
       console.log(`🏢 Initialized handler for ${this.config.companyName}`);
-      console.log(`🤖 AI Agent: ${this.config.aiAgent.name}`);
+      console.log(`🤖 AI Agent: ${this.config.aiAgent.name} (${this.config.aiAgent.role})`);
       console.log(`📞 Call ID: ${this.callId}`);
       
-      // Set up conversation context with dynamic config
+      // Initialize conversation context
       this.conversationContext = {
         companyName: this.config.companyName,
         agentName: this.config.aiAgent.name,
         agentRole: this.config.aiAgent.role,
+        agentPersonality: this.config.aiAgent.personality,
         services: this.config.services,
         businessHours: this.config.businessHours,
         customerData: {},
         qualificationAnswers: {},
-        phase: 'greeting'
+        phase: 'greeting',
+        bookingAttempted: false
       };
       
       // Initialize conversation history with dynamic system prompt
@@ -46,347 +59,457 @@ class DynamicWebSocketHandler {
         }
       ];
       
+      // Setup event handlers
       this.setupEventHandlers();
+      
+      // Send ready signal
+      this.ws.send(JSON.stringify({
+        type: 'agent_ready',
+        agentName: this.config.aiAgent.name,
+        companyName: this.config.companyName,
+        timestamp: new Date().toISOString()
+      }));
       
     } catch (error) {
       console.error('❌ Failed to initialize handler:', error);
-      this.ws.close();
+      this.ws.send(JSON.stringify({
+        type: 'error',
+        error: 'Failed to load company configuration',
+        message: error.message
+      }));
+      this.ws.close(1011, 'Configuration error');
     }
   }
   
   generateSystemPrompt() {
-    return `You are ${this.config.aiAgent.name}, a ${this.config.aiAgent.role} at ${this.config.companyName}.
+    // Generate dynamic system prompt based on company config
+    return `You are ${this.config.aiAgent.name}, ${this.config.aiAgent.role} at ${this.config.companyName}.
 
 PERSONALITY: ${this.config.aiAgent.personality}
 
 COMPANY DETAILS:
 - Name: ${this.config.companyName}
-- Services: ${Object.keys(this.config.services).map(s => this.config.services[s].name || s).join(', ')}
-- Certifications: ${this.config.roofingSettings.certifications.join(', ')}
-- Service Areas: ${this.config.roofingSettings.serviceAreas.primary.join(', ')}
+- Phone: ${this.config.companyPhone}
+- Email: ${this.config.companyEmail}
+- Website: ${this.config.website || 'Not specified'}
+
+SERVICES OFFERED:
+${Object.entries(this.config.services).map(([key, service]) => 
+  `- ${service.name || key}: ${service.description || 'Available'}`
+).join('\n')}
+
+BUSINESS HOURS:
+${this.formatBusinessHours()}
+
+SERVICE AREAS:
+- Primary: ${this.config.roofingSettings?.serviceAreas?.primary?.join(', ') || 'All areas'}
+- Secondary: ${this.config.roofingSettings?.serviceAreas?.secondary?.join(', ') || 'Upon request'}
+
+CERTIFICATIONS:
+${this.config.roofingSettings?.certifications?.join(', ') || 'Industry certified'}
 
 YOUR OBJECTIVES:
-1. Build rapport using their name and understanding their roofing concerns
-2. Identify their specific roofing issue (leak, storm damage, age, etc.)
-3. Qualify them using our qualification questions
-4. Present our relevant solution based on their needs
-5. Create urgency based on their situation
-6. Book an inspection appointment
+1. Greet warmly and build rapport
+2. Understand their specific needs
+3. Qualify using these questions:
+${this.config.qualificationQuestions.map((q, i) => 
+  `   ${i + 1}. ${q.question}`
+).join('\n')}
+4. Present relevant solutions based on their needs
+5. Create appropriate urgency
+6. Schedule appointments when appropriate
 
-CONVERSATION FLOW:
-- Start with warm greeting using their first name
-- Ask about their roofing concerns
-- Use the qualification questions naturally in conversation
-- Match their pain point to our solutions
-- Handle objections using the provided scripts
-- Book appointment when they show interest
+CONVERSATION GUIDELINES:
+- Use the greeting template: "${this.config.aiAgent.greeting}"
+- Be ${this.config.aiAgent.personality}
+- Adapt responses to their industry if mentioned
+- Use company-specific scripts when available
 
-Remember: You're talking to homeowners who need roofing help. Be empathetic, professional, and helpful.`;
+Remember: You represent ${this.config.companyName} with professionalism and expertise.`;
+  }
+  
+  formatBusinessHours() {
+    const days = this.config.businessHours.days;
+    return Object.entries(days)
+      .map(([day, hours]) => {
+        if (!hours.isOpen) return `${day}: Closed`;
+        return `${day}: ${hours.open} - ${hours.close}`;
+      })
+      .join('\n');
   }
   
   setupEventHandlers() {
     this.ws.on('message', this.handleMessage.bind(this));
     this.ws.on('close', this.handleClose.bind(this));
     this.ws.on('error', this.handleError.bind(this));
+    this.ws.on('pong', () => {
+      console.log('🏓 Pong received');
+    });
+    
+    // Ping to keep connection alive (important for Render)
+    this.pingInterval = setInterval(() => {
+      if (this.connectionActive && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.ping();
+      }
+    }, 30000); // Every 30 seconds
   }
   
   async handleMessage(data) {
     try {
       const parsed = JSON.parse(data);
       
-      if (parsed.interaction_type === 'response_required') {
-        await this.processUserMessage(parsed);
+      // Queue message for processing
+      this.messageQueue.push(parsed);
+      
+      // Process queue if not already processing
+      if (!this.processingMessage) {
+        await this.processMessageQueue();
       }
     } catch (error) {
-      console.error('❌ Error handling message:', error);
+      console.error('❌ Error parsing message:', error);
+      this.ws.send(JSON.stringify({
+        type: 'error',
+        error: 'Invalid message format',
+        message: error.message
+      }));
     }
+  }
+  
+  async processMessageQueue() {
+    if (this.processingMessage || this.messageQueue.length === 0) return;
+    
+    this.processingMessage = true;
+    
+    while (this.messageQueue.length > 0 && this.connectionActive) {
+      const message = this.messageQueue.shift();
+      
+      try {
+        if (message.interaction_type === 'response_required') {
+          await this.processUserMessage(message);
+        } else if (message.type === 'update_config') {
+          await this.handleConfigUpdate(message);
+        } else if (message.type === 'get_availability') {
+          await this.handleAvailabilityRequest(message);
+        }
+      } catch (error) {
+        console.error('❌ Error processing message:', error);
+      }
+      
+      // Small delay between messages
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
+    this.processingMessage = false;
   }
   
   async processUserMessage(parsed) {
     const userMessage = parsed.transcript[parsed.transcript.length - 1]?.content || "";
-    console.log(`🗣️ ${this.conversationContext.customerData.firstName || 'Customer'}: ${userMessage}`);
+    console.log(`🗣️ [${this.config.companyName}] User: ${userMessage}`);
     
     // Add to conversation history
     this.conversationHistory.push({ role: 'user', content: userMessage });
     
-    // Determine response based on conversation phase
-    let response = '';
+    // Extract customer information if available
+    this.extractCustomerInfo(userMessage);
     
-    switch (this.conversationContext.phase) {
-      case 'greeting':
-        response = await this.handleGreeting(userMessage);
-        break;
-      case 'discovery':
-        response = await this.handleDiscovery(userMessage);
-        break;
-      case 'qualification':
-        response = await this.handleQualification(userMessage);
-        break;
-      case 'solution':
-        response = await this.handleSolution(userMessage);
-        break;
-      case 'objection':
-        response = await this.handleObjection(userMessage);
-        break;
-      case 'scheduling':
-        response = await this.handleScheduling(userMessage);
-        break;
-      default:
-        response = await this.generateAIResponse(userMessage);
-    }
+    // Generate response based on phase and company config
+    let response = await this.generateContextualResponse(userMessage);
     
     // Send response
     await this.sendResponse(response, parsed.response_id);
+    
+    // Check if we should transition phases
+    this.updateConversationPhase(userMessage, response);
   }
   
-  async handleGreeting(userMessage) {
-    // Use dynamic greeting from config
-    const greeting = configLoader.formatScript(
-      this.config.aiAgent.greeting,
-      {
-        firstName: this.conversationContext.customerData.firstName || 'there'
-      }
-    );
+  extractCustomerInfo(message) {
+    // Extract email
+    const emailMatch = message.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+    if (emailMatch) {
+      this.conversationContext.customerData.email = emailMatch[0];
+    }
     
-    this.conversationContext.phase = 'discovery';
-    return greeting;
-  }
-  
-  async handleDiscovery(userMessage) {
-    // Check for roofing issue mentions
-    const painPointKeywords = {
-      'leak': ['leak', 'water', 'drip', 'wet', 'moisture'],
-      'storm_damage': ['storm', 'hail', 'wind', 'damage', 'insurance'],
-      'old_roof': ['old', 'replace', 'worn', 'age', 'years']
-    };
+    // Extract phone
+    const phoneMatch = message.match(/(?:\+?1[-.\s]?)?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})/);
+    if (phoneMatch) {
+      this.conversationContext.customerData.phone = phoneMatch[0];
+    }
     
-    let detectedPainPoint = null;
-    for (const [painPoint, keywords] of Object.entries(painPointKeywords)) {
-      if (keywords.some(keyword => userMessage.toLowerCase().includes(keyword))) {
-        detectedPainPoint = painPoint;
+    // Extract name (simple pattern)
+    const namePatterns = [
+      /my name is ([A-Z][a-z]+ ?[A-Z]?[a-z]*)/i,
+      /i'm ([A-Z][a-z]+ ?[A-Z]?[a-z]*)/i,
+      /this is ([A-Z][a-z]+ ?[A-Z]?[a-z]*)/i
+    ];
+    
+    for (const pattern of namePatterns) {
+      const match = message.match(pattern);
+      if (match) {
+        this.conversationContext.customerData.name = match[1];
         break;
       }
     }
-    
-    if (detectedPainPoint) {
-      this.conversationContext.painPoint = detectedPainPoint;
-      this.conversationContext.phase = 'qualification';
-      
-      // Get dynamic acknowledgment script
-      const script = this.config.scripts.painPoints[detectedPainPoint];
-      return script.acknowledgment + " Let me ask you a few quick questions to better understand your situation.";
-    }
-    
-    // Ask about their roofing needs
-    return "I'd be happy to help! What's going on with your roof that brought you to us today?";
   }
   
-  async handleQualification(userMessage) {
-    // Get next unanswered question
-    const unansweredQuestion = this.config.qualificationQuestions.find(
-      q => !this.conversationContext.qualificationAnswers[q.id]
-    );
+  async generateContextualResponse(userMessage) {
+    // Use company-specific logic and scripts
+    const phase = this.conversationContext.phase;
     
-    if (unansweredQuestion) {
-      // Store answer to previous question if any
-      const previousQuestion = this.getCurrentQuestion();
-      if (previousQuestion) {
-        this.conversationContext.qualificationAnswers[previousQuestion.id] = userMessage;
-      }
-      
-      // Ask next question
-      return unansweredQuestion.question;
-    }
-    
-    // All questions answered, move to solution
-    this.conversationContext.phase = 'solution';
-    return this.presentSolution();
-  }
-  
-  presentSolution() {
-    const painPoint = this.conversationContext.painPoint || 'general';
-    const script = this.config.scripts.painPoints[painPoint];
-    
-    if (script) {
-      return script.solution + " " + script.urgency;
-    }
-    
-    // Default solution
-    return `Based on what you've told me, I'd recommend scheduling a free inspection. 
-    Our certified technicians will assess your roof and provide you with a detailed report 
-    and multiple options. Would you like to schedule that?`;
-  }
-  
-  async handleObjection(userMessage) {
-    // Detect common objections
-    const objectionTypes = {
-      'too_expensive': ['expensive', 'cost', 'price', 'afford', 'budget'],
-      'getting_other_quotes': ['quotes', 'other', 'compare', 'shopping'],
-      'not_urgent': ['not urgent', 'wait', 'later', 'think about'],
-      'bad_experience': ['bad experience', 'burned', 'trust', 'scammed']
-    };
-    
-    for (const [objection, keywords] of Object.entries(objectionTypes)) {
-      if (keywords.some(keyword => userMessage.toLowerCase().includes(keyword))) {
-        const response = configLoader.formatScript(
-          this.config.scripts.objectionHandling[objection],
-          this.conversationContext
-        );
-        return response;
-      }
-    }
-    
-    // No specific objection detected
-    return "I understand your concerns. What specifically would help you feel more comfortable moving forward?";
-  }
-  
-  async handleScheduling(userMessage) {
     // Check for scheduling intent
-    if (userMessage.toLowerCase().includes('yes') || 
-        userMessage.toLowerCase().includes('schedule') ||
-        userMessage.toLowerCase().includes('book')) {
+    if (this.detectSchedulingIntent(userMessage)) {
+      return await this.handleSchedulingRequest(userMessage);
+    }
+    
+    // Check for objections
+    const objection = this.detectObjection(userMessage);
+    if (objection) {
+      return this.handleObjection(objection);
+    }
+    
+    // Generate phase-specific response
+    const contextPrompt = `
+Current phase: ${phase}
+Customer message: "${userMessage}"
+Company scripts available: ${JSON.stringify(Object.keys(this.config.scripts))}
+
+Generate an appropriate response following the company's tone and scripts.
+If transitioning phases, indicate the new phase.
+`;
+    
+    const messages = [
+      ...this.conversationHistory,
+      { role: 'system', content: contextPrompt }
+    ];
+    
+    return await this.callOpenAI(messages);
+  }
+  
+  detectSchedulingIntent(message) {
+    const schedulingKeywords = [
+      'schedule', 'book', 'appointment', 'available', 'meet',
+      'call', 'time', 'when', 'calendar', 'free'
+    ];
+    
+    const lower = message.toLowerCase();
+    return schedulingKeywords.some(keyword => lower.includes(keyword));
+  }
+  
+  async handleSchedulingRequest(userMessage) {
+    if (!isCalendarInitialized() || !this.config.calendar) {
+      return "I'd be happy to help schedule a time! Let me have someone from our team reach out to you directly to find a time that works best.";
+    }
+    
+    try {
+      // Get available slots
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
       
-      // Get available slots based on company config
-      const slots = await this.getAvailableSlots();
+      const slots = await getAvailableTimeSlots(tomorrow);
       
       if (slots.length > 0) {
         const slotOptions = slots.slice(0, 3).map(s => s.displayTime).join(', ');
-        return `Great! I have ${slotOptions} available. Which works best for you?`;
+        return `Great! I have the following times available: ${slotOptions}. Which works best for you?`;
+      } else {
+        return "I'd be happy to schedule a time! Let me check our availability and have someone reach out to you with options.";
       }
+    } catch (error) {
+      console.error('Error checking availability:', error);
+      return "I'd love to schedule a time with you! Our scheduling team will reach out shortly with available options.";
     }
-    
-    return "Would you like to schedule a free roof inspection?";
   }
   
-  async getAvailableSlots() {
-    // This would integrate with the calendar system
-    // Using company-specific settings
-    const leadTime = this.config.calendar.leadTime;
-    const duration = this.config.calendar.appointmentDuration;
-    const bufferTime = this.config.calendar.bufferTime;
+  detectObjection(message) {
+    const objectionMap = {
+      'too_expensive': ['expensive', 'cost', 'price', 'afford', 'budget'],
+      'getting_other_quotes': ['quotes', 'shopping', 'compare', 'other companies'],
+      'not_urgent': ['not urgent', 'wait', 'later', 'think about it'],
+      'bad_experience': ['bad experience', 'burned', 'trust', 'scammed']
+    };
     
-    // Mock implementation
-    const slots = [];
-    const startDate = new Date();
-    startDate.setHours(startDate.getHours() + leadTime);
+    const lower = message.toLowerCase();
     
-    for (let i = 0; i < 5; i++) {
-      const slotDate = new Date(startDate);
-      slotDate.setDate(slotDate.getDate() + i);
-      
-      const dayName = slotDate.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
-      const dayHours = this.config.businessHours.days[dayName];
-      
-      if (dayHours && dayHours.isOpen) {
-        slots.push({
-          startTime: slotDate.toISOString(),
-          displayTime: slotDate.toLocaleDateString('en-US', { 
-            weekday: 'long', 
-            month: 'long', 
-            day: 'numeric',
-            hour: 'numeric',
-            hour12: true
-          })
-        });
+    for (const [objection, keywords] of Object.entries(objectionMap)) {
+      if (keywords.some(keyword => lower.includes(keyword))) {
+        return objection;
       }
-    }
-    
-    return slots;
-  }
-  
-  async generateAIResponse(userMessage) {
-    // Use OpenAI with company context
-    const messages = [
-      ...this.conversationHistory,
-      {
-        role: 'system',
-        content: `Remember: You work for ${this.config.companyName}. 
-        Current phase: ${this.conversationContext.phase}.
-        Customer pain point: ${this.conversationContext.painPoint || 'unknown'}.
-        Use the company's tone and scripts when appropriate.`
-      }
-    ];
-    
-    const response = await axios.post(
-      'https://api.openai.com/v1/chat/completions',
-      {
-        model: 'gpt-4',
-        messages: messages,
-        temperature: 0.7,
-        max_tokens: 150
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-    
-    return response.data.choices[0].message.content;
-  }
-  
-  async sendResponse(content, responseId) {
-    console.log(`🤖 ${this.config.aiAgent.name}: ${content}`);
-    
-    this.conversationHistory.push({ role: 'assistant', content });
-    
-    this.ws.send(JSON.stringify({
-      content: content,
-      content_complete: true,
-      actions: [],
-      response_id: responseId || Date.now()
-    }));
-  }
-  
-  getCurrentQuestion() {
-    // Find the last asked question
-    const answeredIds = Object.keys(this.conversationContext.qualificationAnswers);
-    const lastAnsweredIndex = this.config.qualificationQuestions.findIndex(
-      q => q.id === answeredIds[answeredIds.length - 1]
-    );
-    
-    if (lastAnsweredIndex >= 0 && lastAnsweredIndex < this.config.qualificationQuestions.length - 1) {
-      return this.config.qualificationQuestions[lastAnsweredIndex + 1];
     }
     
     return null;
   }
   
+  handleObjection(objectionType) {
+    const objectionScript = this.config.scripts.objectionHandling[objectionType];
+    if (objectionScript) {
+      return configLoader.formatScript(objectionScript, this.conversationContext);
+    }
+    
+    // Default objection handling
+    return "I completely understand your concern. Let me address that for you...";
+  }
+  
+  updateConversationPhase(userMessage, response) {
+    const currentPhase = this.conversationContext.phase;
+    
+    // Simple phase progression logic
+    if (currentPhase === 'greeting' && this.conversationHistory.length > 4) {
+      this.conversationContext.phase = 'discovery';
+    } else if (currentPhase === 'discovery' && this.conversationContext.customerData.email) {
+      this.conversationContext.phase = 'qualification';
+    } else if (currentPhase === 'qualification' && Object.keys(this.conversationContext.qualificationAnswers).length >= 3) {
+      this.conversationContext.phase = 'solution';
+    } else if (currentPhase === 'solution' && this.detectSchedulingIntent(userMessage)) {
+      this.conversationContext.phase = 'scheduling';
+    }
+    
+    if (currentPhase !== this.conversationContext.phase) {
+      console.log(`📊 Phase transition: ${currentPhase} → ${this.conversationContext.phase}`);
+    }
+  }
+  
+  async callOpenAI(messages, maxTokens = 150) {
+    try {
+      const response = await axios.post(
+        'https://api.openai.com/v1/chat/completions',
+        {
+          model: 'gpt-4',
+          messages: messages,
+          temperature: 0.7,
+          max_tokens: maxTokens
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 10000
+        }
+      );
+      
+      return response.data.choices[0].message.content;
+    } catch (error) {
+      console.error('OpenAI API error:', error);
+      return "I understand. Let me help you with that.";
+    }
+  }
+  
+  async sendResponse(content, responseId) {
+    console.log(`🤖 [${this.config.companyName}] ${this.config.aiAgent.name}: ${content}`);
+    
+    this.conversationHistory.push({ role: 'assistant', content });
+    
+    if (this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({
+        content: content,
+        content_complete: true,
+        actions: [],
+        response_id: responseId || Date.now(),
+        agent_name: this.config.aiAgent.name,
+        company: this.config.companyName
+      }));
+    }
+  }
+  
+  async handleConfigUpdate(message) {
+    try {
+      console.log('🔄 Updating configuration dynamically');
+      
+      // Reload configuration
+      this.config = await configLoader.loadCompanyConfig(this.companyId);
+      
+      // Update conversation context
+      this.conversationContext.companyName = this.config.companyName;
+      this.conversationContext.agentName = this.config.aiAgent.name;
+      
+      // Update system prompt
+      this.conversationHistory[0] = {
+        role: 'system',
+        content: this.generateSystemPrompt()
+      };
+      
+      this.ws.send(JSON.stringify({
+        type: 'config_updated',
+        success: true,
+        message: 'Configuration updated successfully'
+      }));
+      
+    } catch (error) {
+      this.ws.send(JSON.stringify({
+        type: 'config_update_error',
+        error: error.message
+      }));
+    }
+  }
+  
+  async handleAvailabilityRequest(message) {
+    try {
+      const { date } = message;
+      const slots = await getAvailableTimeSlots(new Date(date));
+      
+      this.ws.send(JSON.stringify({
+        type: 'availability_response',
+        date: date,
+        slots: slots,
+        company: this.config.companyName
+      }));
+    } catch (error) {
+      this.ws.send(JSON.stringify({
+        type: 'availability_error',
+        error: error.message
+      }));
+    }
+  }
+  
   async handleClose() {
-    console.log(`🔌 Connection closed for ${this.config.companyName}`);
+    console.log(`🔌 Connection closed for ${this.config?.companyName || this.companyId}`);
+    
+    this.connectionActive = false;
+    
+    // Clear ping interval
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+    }
     
     // Save conversation data
     await this.saveConversationData();
   }
   
   async saveConversationData() {
-    // Save to CRM or database based on company config
-    const conversationData = {
-      companyId: this.companyId,
-      callId: this.callId,
-      customerData: this.conversationContext.customerData,
-      qualificationAnswers: this.conversationContext.qualificationAnswers,
-      painPoint: this.conversationContext.painPoint,
-      phase: this.conversationContext.phase,
-      timestamp: new Date().toISOString()
-    };
-    
-    // Save based on CRM config
-    if (this.config.crm.provider) {
-      await this.saveToCRM(conversationData);
+    try {
+      const conversationData = {
+        companyId: this.companyId,
+        companyName: this.config?.companyName,
+        callId: this.callId,
+        customerData: this.conversationContext.customerData,
+        qualificationAnswers: this.conversationContext.qualificationAnswers,
+        phase: this.conversationContext.phase,
+        duration: Date.now() - this.connectionStartTime,
+        timestamp: new Date().toISOString()
+      };
+      
+      // Send to webhook if configured
+      if (this.conversationContext.customerData.email) {
+        await sendSchedulingPreference(
+          this.conversationContext.customerData.name || 'Unknown',
+          this.conversationContext.customerData.email,
+          this.conversationContext.customerData.phone || '',
+          'Call ended',
+          this.callId,
+          {
+            company: this.config.companyName,
+            phase_reached: this.conversationContext.phase,
+            qualification_data: this.conversationContext.qualificationAnswers
+          }
+        );
+      }
+      
+      console.log('💾 Conversation data saved');
+    } catch (error) {
+      console.error('Error saving conversation data:', error);
     }
-    
-    console.log('💾 Conversation data saved');
-  }
-  
-  async saveToCRM(data) {
-    // Implement CRM-specific save logic
-    console.log(`Saving to ${this.config.crm.provider}`);
   }
   
   handleError(error) {
-    console.error(`❌ WebSocket Error for ${this.config.companyName}:`, error);
+    console.error(`❌ WebSocket Error for ${this.config?.companyName || this.companyId}:`, error);
   }
 }
 
