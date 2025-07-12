@@ -1,0 +1,308 @@
+{
+  "companyId": "halfpriceroof_oh",
+  "companyName": "Half Price Roof",
+  "companyPhone": "+18449457663",
+  "companyEmail": "info@halfpriceroof.net",
+  "website": "https://www.halfpriceroof.net",
+  "address": {
+    "street": "11427 Reed Hartman Hwy",
+    "city": "Cincinnati",
+    "state": "OH",
+    "zip": "45241"
+  },
+  
+  "businessHours": {
+    "timezone": "America/New_York",
+    "days": {
+      "monday": { "open": "07:00", "close": "19:00", "isOpen": true },
+      "tuesday": { "open": "07:00", "close": "19:00", "isOpen": true },
+      "wednesday": { "open": "07:00", "close": "19:00", "isOpen": true },
+      "thursday": { "open": "07:00", "close": "19:00", "isOpen": true },
+      "friday": { "open": "07:00", "close": "19:00", "isOpen": true },
+      "saturday": { "open": "08:00", "close": "17:00", "isOpen": true },
+      "sunday": { "open": "09:00", "close": "17:00", "isOpen": true }
+    },
+    "emergencyAvailable": true,
+    "emergencyNote": "24/7 emergency response crew available"
+  },
+  
+  "services": {
+    "newRoofInstallation": {
+      "name": "New Roof Installation",
+      "description": "Complete roof replacement with lifetime warranty",
+      "keywords": ["new roof", "replace roof", "roof replacement", "re-roof", "install new roof"],
+      "features": ["Lifetime warranty", "One day installation", "GAF Architectural shingles"]
+    },
+    "roofRepair": {
+      "name": "Roof Repair",
+      "description": "Fix leaks, damaged shingles, and extend roof life",
+      "keywords": ["leak", "leaking", "repair", "fix", "damage", "water spots", "missing shingles"]
+    },
+    "emergencyRepair": {
+      "name": "Emergency Roof Repair",
+      "description": "24/7 emergency response for immediate roofing issues",
+      "keywords": ["emergency", "urgent", "water coming in", "immediate", "storm damage", "tree damage"]
+    },
+    "roofInspection": {
+      "name": "Free Roof Inspection",
+      "description": "Comprehensive annual roof inspection at no cost",
+      "keywords": ["inspection", "check", "evaluate", "assessment", "annual inspection"]
+    },
+    "commercialRoofing": {
+      "name": "Commercial Roofing",
+      "description": "Professional commercial roofing with 30+ years experience",
+      "keywords": ["commercial", "business", "retail", "flat roof", "condo", "weekend work"]
+    },
+    "insuranceClaims": {
+      "name": "Insurance Claim Assistance",
+      "description": "Expert guidance through the insurance claim process",
+      "keywords": ["insurance", "claim", "storm damage", "insurance help"]
+    },
+    "solar": {
+      "name": "Solar Installation",
+      "description": "Low cost, clean, reliable solar energy solutions",
+      "keywords": ["solar", "renewable energy", "solar panels"]
+    }
+  },
+  
+  "aiAgent": {
+    "name": "Mike",
+    "role": "Roofing Specialist at Half Price Roof",
+    "personality": "professional, friendly, knowledgeable about roofing, focused on saving customers money and providing excellent service",
+    "greeting": "Hi! This is Mike from Half Price Roof. Thanks for calling! We're your Cincinnati roofing experts, and I'm here to help you protect what matters most. Whether you need a repair, inspection, or complete roof replacement, we'll get it done at half the price of our competitors. How can I help you today?",
+    "voiceSettings": {
+      "speed": 1.0,
+      "pitch": 1.0,
+      "voice": "male-professional"
+    }
+  },
+  
+  "conversationFlow": {
+    "phases": [
+      {
+        "id": "greeting",
+        "questions": [
+          {
+            "text": "First, may I have your name please?",
+            "field": "customer_name",
+            "required": true,
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "service_inquiry",
+        "questions": [
+          {
+            "text": "Thanks {customer_name}! What type of roofing service are you looking for today? Are you dealing with a leak, looking for a complete roof replacement, need an inspection, or is this an emergency?",
+            "field": "service_needed",
+            "required": true,
+            "type": "open",
+            "serviceMapping": {
+              "leak": "roofRepair",
+              "leaking": "roofRepair",
+              "water": "roofRepair",
+              "damage": "roofRepair",
+              "water spots": "roofRepair",
+              "missing shingles": "roofRepair",
+              "replacement": "newRoofInstallation",
+              "new roof": "newRoofInstallation",
+              "replace": "newRoofInstallation",
+              "inspection": "roofInspection",
+              "check": "roofInspection",
+              "emergency": "emergencyRepair",
+              "urgent": "emergencyRepair",
+              "tree": "emergencyRepair",
+              "storm": "insuranceClaims",
+              "insurance": "insuranceClaims",
+              "commercial": "commercialRoofing",
+              "business": "commercialRoofing",
+              "solar": "solar"
+            }
+          }
+        ]
+      },
+      {
+        "id": "property_details",
+        "questions": [
+          {
+            "text": "I can definitely help you with that. What's the address of the property that needs roofing work?",
+            "field": "property_address",
+            "required": true,
+            "type": "address"
+          }
+        ]
+      },
+      {
+        "id": "ownership_verification",
+        "questions": [
+          {
+            "text": "Are you the owner of this property?",
+            "field": "is_owner",
+            "required": true,
+            "type": "yes_no",
+            "followUp": {
+              "no": "No problem! Are you authorized to make decisions about roofing work for this property, or should we include the owner in our conversation?"
+            }
+          }
+        ]
+      },
+      {
+        "id": "urgency_assessment",
+        "condition": "service_needed contains 'leak' or 'emergency' or 'urgent'",
+        "questions": [
+          {
+            "text": "I understand this might be urgent. Is there active water coming into your home right now?",
+            "field": "is_emergency",
+            "type": "yes_no",
+            "followUp": {
+              "yes": "Don't worry! We have a 24/7 emergency response crew. I'll make sure to flag this as urgent, and we can have someone there within the hour."
+            }
+          }
+        ]
+      },
+      {
+        "id": "roof_details",
+        "condition": "service_needed contains 'replacement' or 'new roof'",
+        "questions": [
+          {
+            "text": "Do you know approximately how old your current roof is?",
+            "field": "roof_age",
+            "required": false,
+            "type": "text"
+          },
+          {
+            "text": "Have you noticed any specific issues like water spots, missing shingles, or blackish algae?",
+            "field": "roof_issues",
+            "required": false,
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "additional_info",
+        "questions": [
+          {
+            "text": "Is there anything else about your roof situation that you'd like our inspector to know about?",
+            "field": "additional_info",
+            "required": false,
+            "type": "open"
+          }
+        ]
+      },
+      {
+        "id": "contact_info",
+        "questions": [
+          {
+            "text": "What's the best phone number to reach you at?",
+            "field": "phone_number",
+            "required": true,
+            "type": "phone"
+          },
+          {
+            "text": "And your email address so I can send you the confirmation and our aerial quote report?",
+            "field": "email",
+            "required": true,
+            "type": "email"
+          }
+        ]
+      },
+      {
+        "id": "financing_interest",
+        "condition": "service_needed contains 'replacement' or 'new roof'",
+        "questions": [
+          {
+            "text": "By the way, we offer 0% interest financing for 12 months with no payments, plus longer term options. Would you like information about our financing options?",
+            "field": "wants_financing",
+            "required": false,
+            "type": "yes_no"
+          }
+        ]
+      },
+      {
+        "id": "scheduling",
+        "introduction": "Perfect! Now let me schedule your FREE roof inspection. Our inspector will perform a comprehensive evaluation and provide you with a detailed report - all at absolutely no cost or obligation to you.",
+        "questions": [
+          {
+            "text": "We have inspectors available as early as tomorrow. What day works best for you?",
+            "field": "preferred_day",
+            "required": true,
+            "type": "date"
+          },
+          {
+            "text": "And what time of day works best - morning or afternoon?",
+            "field": "preferred_time",
+            "required": true,
+            "type": "time_preference"
+          }
+        ]
+      }
+    ]
+  },
+  
+  "scripts": {
+    "valueProps": {
+      "halfPrice": "The reason we're called Half Price Roof is because we truly deliver the same quality roofing at half the price of our competitors. We're able to do this because we do 100% of our work in-house - no subcontractors - and we've invested in building an efficient, professional installation team.",
+      "aerialQuote": "We use cutting-edge aerial quote technology that gives you the most accurate measurements and pricing in just hours, not days. You'll get a detailed report with exact measurements you can trust.",
+      "oneDay": "Most of our roof installations are completed in just one day! Our experienced crews can remove your old roof and install the new one typically between 8am and 3pm.",
+      "lifetime_warranty": "All our roofing services come with a lifetime warranty because we use the best rated roofing shingle systems and our installation quality is second to none.",
+      "localExperts": "We're your local Cincinnati roofing experts with GAF certification. We've been protecting homes in Cincinnati, Dayton, Columbus, and Louisville for years.",
+      "financing": "We offer fantastic financing options including 0% interest for 12 months with no payments, or affordable monthly plans as low as $165/month for 10 years with $0 down."
+    },
+    
+    "objectionHandling": {
+      "getting_quotes": "That's absolutely the smart thing to do! We encourage getting multiple quotes. What you'll find is that we're typically 40-50% less expensive for the exact same quality work because we don't use subcontractors. Plus, our free inspection will give you valuable information about your roof's condition with no obligation. Should we get that scheduled so you have all the facts?",
+      "not_sure_need": "I completely understand! That's exactly why our inspection is 100% free with no obligation. Our inspector will give you an honest assessment - we've actually told many customers their roof is fine and doesn't need replacement yet. There's absolutely no pressure. Would you like to get that peace of mind with a free inspection?",
+      "too_expensive": "I hear you - roofing is a big investment. That's why we created Half Price Roof! We typically save customers $5,000 to $15,000 compared to other companies. Plus, with our 0% financing for 12 months, you can get the work done now and delay the payments. The free inspection will give you an exact quote with all your options. Should we schedule that?",
+      "bad_experience": "I'm really sorry you had that experience. Unfortunately, there are contractors who don't do right by their customers. We're different - we're licensed, insured, GAF-certified, and have 4.3-star ratings across Google, Yelp, and Facebook. Plus, everything we do comes with a lifetime warranty. Why don't we start with a free, no-obligation inspection so you can see how professional we are?"
+    },
+    
+    "urgencyCreation": {
+      "inspection_value": "Our comprehensive inspection checks for issues that often go unnoticed - small problems that can turn into costly repairs if not caught early. Plus, it helps protect your home from pests that can enter through small holes or rotted areas.",
+      "drainage": "One thing we always check is your gutters and drainage. Improper drainage is a leading cause of fascia board rot and leaks into your home.",
+      "insurance_timing": "If you're considering an insurance claim for any storm damage, timing is critical. Insurance companies often have strict deadlines, and we can help guide you through the entire process.",
+      "aerial_report": "You'll get our detailed aerial quote report within 24 hours - it's the most accurate way to assess your roof because we can see everything from above.",
+      "safety": "A compromised roof doesn't just damage your home - it can affect your family's safety. Water leaks can lead to mold growth and even electrical issues."
+    },
+    
+    "closing": {
+      "confirmation": "Excellent! I've got you scheduled for {preferred_day} in the {preferred_time}. Our inspector will call you one hour before arrival to confirm. You'll receive an email confirmation shortly with all the details.",
+      "safety_protocol": "Just so you know, our team follows strict safety protocols. They'll sanitize their hands and equipment before the inspection, and they'll wear face masks if you prefer.",
+      "what_to_expect": "The inspection typically takes 30-60 minutes. Our inspector will check everything thoroughly and provide you with a detailed report, including our aerial measurements and photos of any issues found.",
+      "reminder": "Remember, this inspection is completely free with no obligation. We're simply here to give you the information you need to protect your home. Is there anything else I can help you with today?"
+    }
+  },
+  
+  "qualificationCriteria": {
+    "mustBeOwner": false,
+    "minimumProjectSize": 0,
+    "serviceAreas": ["Cincinnati", "Dayton", "Columbus", "Louisville"],
+    "serviceRadius": "100 miles from Cincinnati",
+    "commercialAvailable": true,
+    "emergencyRadius": "Greater Cincinnati area"
+  },
+  
+  "additionalFeatures": {
+    "textSupport": {
+      "enabled": true,
+      "keyword": "InstantQuote",
+      "number": "21000",
+      "alternateNumber": "(844) 945-7663"
+    },
+    "certifications": [
+      "Licensed",
+      "Insured", 
+      "GAF-Certified",
+      "A+ BBB Rating"
+    ],
+    "ratings": {
+      "google": 4.3,
+      "yelp": 4.3,
+      "facebook": 4.3
+    },
+    "specialOffers": {
+      "newCustomer": "Special pricing for new customers - up to $2000 off any service",
+      "financing": "0% interest & 12 month no-pay options available"
+    }
+  }
+}
