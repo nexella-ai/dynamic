@@ -1,4 +1,4 @@
-// src/handlers/DynamicWebSocketHandler.js - Enhanced for Dynamic Companies
+// src/handlers/DynamicWebSocketHandler.js - FIXED VERSION
 const axios = require('axios');
 const configLoader = require('../services/config/ConfigurationLoader');
 const { 
@@ -24,6 +24,11 @@ class DynamicWebSocketHandler {
     this.messageQueue = [];
     this.processingMessage = false;
     
+    // CRITICAL: Track if greeting was sent
+    this.greetingSent = false;
+    this.lastResponseTime = 0;
+    this.minimumResponseDelay = 1500; // 1.5 seconds between responses
+    
     // Initialize handler
     this.initialize();
   }
@@ -48,7 +53,9 @@ class DynamicWebSocketHandler {
         customerData: {},
         qualificationAnswers: {},
         phase: 'greeting',
-        bookingAttempted: false
+        bookingAttempted: false,
+        currentQuestionIndex: -1,
+        waitingForAnswer: false
       };
       
       // Initialize conversation history with dynamic system prompt
@@ -62,13 +69,7 @@ class DynamicWebSocketHandler {
       // Setup event handlers
       this.setupEventHandlers();
       
-      // Send ready signal
-      this.ws.send(JSON.stringify({
-        type: 'agent_ready',
-        agentName: this.config.aiAgent.name,
-        companyName: this.config.companyName,
-        timestamp: new Date().toISOString()
-      }));
+      // DON'T send ready signal - wait for user to speak first
       
     } catch (error) {
       console.error('❌ Failed to initialize handler:', error);
@@ -87,45 +88,27 @@ class DynamicWebSocketHandler {
 
 PERSONALITY: ${this.config.aiAgent.personality}
 
+CRITICAL INSTRUCTIONS:
+1. Give SHORT, CONCISE responses - maximum 2-3 sentences
+2. Ask ONE question at a time - NEVER multiple questions
+3. Wait for the customer's answer before asking the next question
+4. Use natural conversation flow
+
+GREETING TEMPLATE: "${this.config.aiAgent.greeting}"
+
+CONVERSATION FLOW:
+1. Greet ONCE when they speak (use the greeting template)
+2. Ask how you can help
+3. When they state their need, ask ONE qualifying question
+4. Continue with one question at a time
+5. After 3-4 questions max, offer to schedule
+
 COMPANY DETAILS:
 - Name: ${this.config.companyName}
 - Phone: ${this.config.companyPhone}
-- Email: ${this.config.companyEmail}
-- Website: ${this.config.website || 'Not specified'}
+- Services: ${Object.keys(this.config.services).join(', ')}
 
-SERVICES OFFERED:
-${Object.entries(this.config.services).map(([key, service]) => 
-  `- ${service.name || key}: ${service.description || 'Available'}`
-).join('\n')}
-
-BUSINESS HOURS:
-${this.formatBusinessHours()}
-
-SERVICE AREAS:
-- Primary: ${this.config.roofingSettings?.serviceAreas?.primary?.join(', ') || 'All areas'}
-- Secondary: ${this.config.roofingSettings?.serviceAreas?.secondary?.join(', ') || 'Upon request'}
-
-CERTIFICATIONS:
-${this.config.roofingSettings?.certifications?.join(', ') || 'Industry certified'}
-
-YOUR OBJECTIVES:
-1. Greet warmly and build rapport
-2. Understand their specific needs
-3. Qualify using these questions:
-${this.config.qualificationQuestions.map((q, i) => 
-  `   ${i + 1}. ${q.question}`
-).join('\n')}
-4. Present relevant solutions based on their needs
-5. Create appropriate urgency
-6. Schedule appointments when appropriate
-
-CONVERSATION GUIDELINES:
-- Use the greeting template: "${this.config.aiAgent.greeting}"
-- Be ${this.config.aiAgent.personality}
-- Adapt responses to their industry if mentioned
-- Use company-specific scripts when available
-
-Remember: You represent ${this.config.companyName} with professionalism and expertise.`;
+Remember: Be conversational, ask ONE thing at a time, keep responses SHORT.`;
   }
   
   formatBusinessHours() {
@@ -206,17 +189,38 @@ Remember: You represent ${this.config.companyName} with professionalism and expe
     const userMessage = parsed.transcript[parsed.transcript.length - 1]?.content || "";
     console.log(`🗣️ [${this.config.companyName}] User: ${userMessage}`);
     
+    // CRITICAL: Apply response delay
+    const now = Date.now();
+    const timeSinceLastResponse = now - this.lastResponseTime;
+    if (timeSinceLastResponse < this.minimumResponseDelay) {
+      const waitTime = this.minimumResponseDelay - timeSinceLastResponse;
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+    
     // Add to conversation history
     this.conversationHistory.push({ role: 'user', content: userMessage });
     
     // Extract customer information if available
     this.extractCustomerInfo(userMessage);
     
+    // CRITICAL: Handle greeting first
+    if (!this.greetingSent) {
+      this.greetingSent = true;
+      const greeting = configLoader.formatScript(this.config.aiAgent.greeting, {
+        firstName: this.conversationContext.customerData.name || ''
+      });
+      await this.sendResponse(greeting, parsed.response_id);
+      this.conversationContext.phase = 'discovery';
+      this.lastResponseTime = Date.now();
+      return;
+    }
+    
     // Generate response based on phase and company config
     let response = await this.generateContextualResponse(userMessage);
     
     // Send response
     await this.sendResponse(response, parsed.response_id);
+    this.lastResponseTime = Date.now();
     
     // Check if we should transition phases
     this.updateConversationPhase(userMessage, response);
@@ -266,18 +270,43 @@ Remember: You represent ${this.config.companyName} with professionalism and expe
       return this.handleObjection(objection);
     }
     
+    // Handle qualification questions ONE AT A TIME
+    if (phase === 'discovery' && this.conversationContext.currentQuestionIndex < this.config.qualificationQuestions.length - 1) {
+      // Check if we're waiting for an answer
+      if (this.conversationContext.waitingForAnswer) {
+        // Store the answer
+        const currentQuestion = this.config.qualificationQuestions[this.conversationContext.currentQuestionIndex];
+        this.conversationContext.qualificationAnswers[currentQuestion.id] = userMessage;
+        this.conversationContext.waitingForAnswer = false;
+      }
+      
+      // Move to next question
+      this.conversationContext.currentQuestionIndex++;
+      const nextQuestion = this.config.qualificationQuestions[this.conversationContext.currentQuestionIndex];
+      this.conversationContext.waitingForAnswer = true;
+      
+      // Return just the question
+      return nextQuestion.question;
+    }
+    
+    // If all questions answered, move to solution/scheduling
+    if (this.conversationContext.currentQuestionIndex >= this.config.qualificationQuestions.length - 1) {
+      this.conversationContext.phase = 'solution';
+      return "Great! Based on what you've told me, I can definitely help you. Let me check our schedule for a free inspection. What day works best for you this week?";
+    }
+    
     // Generate phase-specific response
     const contextPrompt = `
 Current phase: ${phase}
 Customer message: "${userMessage}"
-Company scripts available: ${JSON.stringify(Object.keys(this.config.scripts))}
 
-Generate an appropriate response following the company's tone and scripts.
-If transitioning phases, indicate the new phase.
+Generate a SHORT response (1-2 sentences max) that addresses their concern.
+If they mentioned a specific need, acknowledge it briefly.
+DO NOT ask multiple questions.
 `;
     
     const messages = [
-      ...this.conversationHistory,
+      ...this.conversationHistory.slice(-5), // Only last 5 messages for context
       { role: 'system', content: contextPrompt }
     ];
     
@@ -287,7 +316,7 @@ If transitioning phases, indicate the new phase.
   detectSchedulingIntent(message) {
     const schedulingKeywords = [
       'schedule', 'book', 'appointment', 'available', 'meet',
-      'call', 'time', 'when', 'calendar', 'free'
+      'inspection', 'time', 'when', 'calendar', 'free'
     ];
     
     const lower = message.toLowerCase();
@@ -296,7 +325,7 @@ If transitioning phases, indicate the new phase.
   
   async handleSchedulingRequest(userMessage) {
     if (!isCalendarInitialized() || !this.config.calendar) {
-      return "I'd be happy to help schedule a time! Let me have someone from our team reach out to you directly to find a time that works best.";
+      return "I'd be happy to schedule a free inspection! What day works best for you this week?";
     }
     
     try {
@@ -314,15 +343,15 @@ If transitioning phases, indicate the new phase.
       }
     } catch (error) {
       console.error('Error checking availability:', error);
-      return "I'd love to schedule a time with you! Our scheduling team will reach out shortly with available options.";
+      return "I'd love to schedule a free inspection! Our scheduling team will reach out shortly with available options.";
     }
   }
   
   detectObjection(message) {
     const objectionMap = {
       'too_expensive': ['expensive', 'cost', 'price', 'afford', 'budget'],
-      'getting_other_quotes': ['quotes', 'shopping', 'compare', 'other companies'],
-      'not_urgent': ['not urgent', 'wait', 'later', 'think about it'],
+      'getting_quotes': ['quotes', 'shopping', 'compare', 'other companies'],
+      'not_sure_need': ['not sure', 'maybe', 'think about', 'consider'],
       'bad_experience': ['bad experience', 'burned', 'trust', 'scammed']
     };
     
@@ -340,20 +369,22 @@ If transitioning phases, indicate the new phase.
   handleObjection(objectionType) {
     const objectionScript = this.config.scripts.objectionHandling[objectionType];
     if (objectionScript) {
-      return configLoader.formatScript(objectionScript, this.conversationContext);
+      // Return just the first sentence to keep it short
+      const firstSentence = objectionScript.split('.')[0] + '.';
+      return firstSentence;
     }
     
     // Default objection handling
-    return "I completely understand your concern. Let me address that for you...";
+    return "I completely understand your concern.";
   }
   
   updateConversationPhase(userMessage, response) {
     const currentPhase = this.conversationContext.phase;
     
     // Simple phase progression logic
-    if (currentPhase === 'greeting' && this.conversationHistory.length > 4) {
+    if (currentPhase === 'greeting') {
       this.conversationContext.phase = 'discovery';
-    } else if (currentPhase === 'discovery' && this.conversationContext.customerData.email) {
+    } else if (currentPhase === 'discovery' && this.conversationContext.currentQuestionIndex >= 2) {
       this.conversationContext.phase = 'qualification';
     } else if (currentPhase === 'qualification' && Object.keys(this.conversationContext.qualificationAnswers).length >= 3) {
       this.conversationContext.phase = 'solution';
@@ -366,7 +397,7 @@ If transitioning phases, indicate the new phase.
     }
   }
   
-  async callOpenAI(messages, maxTokens = 150) {
+  async callOpenAI(messages, maxTokens = 50) { // Reduced tokens for shorter responses
     try {
       const response = await axios.post(
         'https://api.openai.com/v1/chat/completions',
@@ -381,7 +412,7 @@ If transitioning phases, indicate the new phase.
             Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
             'Content-Type': 'application/json'
           },
-          timeout: 10000
+          timeout: 5000
         }
       );
       
