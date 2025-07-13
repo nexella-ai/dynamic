@@ -118,21 +118,28 @@ class ConfigurationLoader {
   
   getScript(category, subcategory) {
     const config = this.getCurrentConfig();
-    return config.scripts[category]?.[subcategory] || '';
+    return config.scripts?.[category]?.[subcategory] || '';
   }
   
   formatScript(script, variables = {}) {
+    if (!script || typeof script !== 'string') {
+      return script || '';
+    }
+    
     const config = this.getCurrentConfig();
     
-    // Default variables
+    // Default variables with safe access
     const defaultVars = {
-      companyName: config.companyName,
-      agentName: config.aiAgent.name,
+      companyName: config.companyName || '',
+      agentName: config.aiAgent?.name || '',
       firstName: variables.firstName || 'there',
-      certifications: config.roofingSettings.certifications.join(', '),
-      warranty: config.services.installation.warranties[0],
-      serviceArea: config.roofingSettings.serviceAreas.primary.join(', '),
+      certifications: config.roofingSettings?.certifications?.join(', ') || '',
+      warranty: config.services?.installation?.warranties?.[0] || 
+                config.roofingSettings?.warranties?.workmanship || 
+                'comprehensive warranty',
+      serviceArea: config.roofingSettings?.serviceAreas?.primary?.join(', ') || '',
       daysOut: this.getBookingLeadDays(),
+      yearsInBusiness: config.roofingSettings?.yearsInBusiness || 'many',
       ...variables
     };
     
@@ -180,10 +187,79 @@ class ConfigurationLoader {
   
   async saveToDatabase(companyId, config) {
     // Implement database save logic
+    const { MongoClient } = require('mongodb');
+    const client = new MongoClient(process.env.MONGODB_URI);
+    
+    try {
+      await client.connect();
+      const db = client.db('nexella_configs');
+      await db.collection('company_configs').replaceOne(
+        { companyId },
+        config,
+        { upsert: true }
+      );
+    } finally {
+      await client.close();
+    }
   }
   
   async saveToAPI(companyId, config) {
     // Implement API save logic
+    const axios = require('axios');
+    await axios.put(`${process.env.CONFIG_API_URL}/companies/${companyId}/config`, 
+      config,
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.CONFIG_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+  }
+  
+  async listCompanies() {
+    try {
+      switch (this.configSource) {
+        case 'file':
+          // List all JSON files in configs directory
+          const configDir = path.join(__dirname, '../../../configs');
+          const files = await fs.readdir(configDir);
+          return files
+            .filter(file => file.endsWith('.json'))
+            .map(file => file.replace('.json', ''));
+            
+        case 'database':
+          // List from database
+          const { MongoClient } = require('mongodb');
+          const client = new MongoClient(process.env.MONGODB_URI);
+          try {
+            await client.connect();
+            const db = client.db('nexella_configs');
+            const configs = await db.collection('company_configs')
+              .find({}, { projection: { companyId: 1, companyName: 1 } })
+              .toArray();
+            return configs.map(c => c.companyId);
+          } finally {
+            await client.close();
+          }
+          
+        case 'api':
+          // List from API
+          const axios = require('axios');
+          const response = await axios.get(`${process.env.CONFIG_API_URL}/companies`, {
+            headers: {
+              'Authorization': `Bearer ${process.env.CONFIG_API_KEY}`
+            }
+          });
+          return response.data.companies;
+          
+        default:
+          return [];
+      }
+    } catch (error) {
+      console.error('Error listing companies:', error);
+      return [];
+    }
   }
 }
 
