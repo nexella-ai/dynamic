@@ -1,6 +1,6 @@
-// src/handlers/DynamicWebSocketHandler.js - SIMPLIFIED & RELIABLE VERSION
-const axios = require('axios');
+// src/handlers/DynamicWebSocketHandler.js - ULTRA SIMPLE & FAST VERSION
 const configLoader = require('../services/config/ConfigurationLoader');
+const { autoBookAppointment, isCalendarInitialized } = require('../services/calendar/CalendarHelpers');
 const { sendSchedulingPreference } = require('../services/webhooks/WebhookService');
 
 class DynamicWebSocketHandler {
@@ -14,231 +14,232 @@ class DynamicWebSocketHandler {
     const callIdMatch = req.url.match(/\/call_([a-f0-9]+)/);
     this.callId = callIdMatch ? `call_${callIdMatch[1]}` : `call_${Date.now()}`;
     
-    // Simple state tracking
-    this.state = {
-      step: 0,
+    // Track conversation
+    this.messageCount = 0;
+    this.customerInfo = {
       name: null,
-      email: null,
       need: null,
-      isOwner: null,
-      urgency: null,
       day: null,
-      time: null
+      time: null,
+      phoneFromCall: req.headers['x-caller-phone'] || null
     };
     
-    // Conversation history for context
-    this.messages = [];
-    
+    // Immediate initialization
     this.initialize();
   }
   
   async initialize() {
     try {
       this.config = await configLoader.loadCompanyConfig(this.companyId);
-      console.log(`🏢 Initialized handler for ${this.config.companyName}`);
-      console.log(`🤖 AI Agent: ${this.config.aiAgent.name}`);
-      console.log(`📞 Call ID: ${this.callId}`);
+      console.log(`🏢 ${this.config.companyName} ready`);
       
-      this.ws.on('message', this.handleMessage.bind(this));
-      this.ws.on('close', () => this.handleClose());
-      this.ws.on('error', (err) => console.error('❌ Error:', err));
-      
-    } catch (error) {
-      console.error('❌ Failed to initialize:', error);
-      this.ws.close(1011, 'Configuration error');
-    }
-  }
-  
-  async handleMessage(data) {
-    try {
-      const parsed = JSON.parse(data);
-      
-      if (parsed.interaction_type === 'response_required') {
-        const userMessage = parsed.transcript[parsed.transcript.length - 1]?.content || "";
-        console.log(`🗣️ User: ${userMessage}`);
-        
-        // Small delay for natural feel
-        await new Promise(resolve => setTimeout(resolve, 600));
-        
-        // Get response based on current step
-        const response = await this.getNextResponse(userMessage);
-        
-        if (response) {
-          console.log(`🤖 Mike: ${response}`);
-          await this.sendResponse(response, parsed.response_id);
-        }
-      }
-    } catch (error) {
-      console.error('❌ Message error:', error);
-    }
-  }
-  
-  async getNextResponse(userMessage) {
-    const lower = userMessage.toLowerCase();
-    this.messages.push(userMessage);
-    
-    // Step-by-step conversation flow
-    switch(this.state.step) {
-      case 0: // Initial greeting
-        this.state.step = 1;
-        return "Hey there! This is Mike from Half Price Roof. How's your day going so far?";
-        
-      case 1: // Build rapport
-        this.state.step = 2;
-        if (lower.includes('good') || lower.includes('fine') || lower.includes('well')) {
-          return "Glad to hear it! So what's going on with your roof?";
-        } else if (lower.includes('bad') || lower.includes('not')) {
-          return "Oh sorry to hear that. Well hopefully I can help - what's happening with your roof?";
-        } else {
-          return "I appreciate you taking my call! What can I help you with regarding your roof?";
-        }
-        
-      case 2: // Understand need
-        if (lower.includes('replac')) {
-          this.state.need = 'replacement';
-          this.state.step = 3;
-          return "Got it, you need a full roof replacement. Is this for your own home?";
-        } else if (lower.includes('leak') || lower.includes('repair')) {
-          this.state.need = 'repair';
-          this.state.step = 3;
-          return "Oh no, dealing with a leak? Let me help. Is this your own property?";
-        } else if (lower.includes('inspection')) {
-          this.state.need = 'inspection';
-          this.state.step = 3;
-          return "Smart to get it checked out! Is this for your own home?";
-        } else {
-          return "Are you looking for a repair, replacement, or just want a free inspection?";
-        }
-        
-      case 3: // Check ownership
-        if (lower.includes('yes') || lower.includes('yeah') || lower.includes('yep')) {
-          this.state.isOwner = true;
-          this.state.step = 4;
-          return "Perfect. Do you need someone out there ASAP or are you just planning ahead?";
-        } else if (lower.includes('no')) {
-          this.state.isOwner = false;
-          this.state.step = 4;
-          return "No problem! Are you authorized to schedule this work?";
-        } else {
-          return "Just to clarify - is this your property?";
-        }
-        
-      case 4: // Check urgency
-        if (lower.includes('asap') || lower.includes('urgent') || lower.includes('soon')) {
-          this.state.urgency = 'urgent';
-          this.state.step = 5;
-          return "I understand it's urgent! Good news - I can get someone out as early as tomorrow. What day works best?";
-        } else {
-          this.state.urgency = 'planning';
-          this.state.step = 5;
-          return "Great, planning ahead is smart. What day this week works best for a free inspection?";
-        }
-        
-      case 5: // Get day
-        const dayMatch = lower.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\b/);
-        if (dayMatch) {
-          this.state.day = dayMatch[0];
-          this.state.step = 6;
-          return `${this.capitalize(this.state.day)} works great! Do you prefer morning or afternoon?`;
-        } else {
-          return "What day works best - I have openings all week.";
-        }
-        
-      case 6: // Get time
-        if (lower.includes('morning') || lower.includes('am')) {
-          this.state.time = 'morning';
-          this.state.step = 7;
-          return "Perfect! I've got you down for " + this.state.day + " morning. Can I get your first name?";
-        } else if (lower.includes('afternoon') || lower.includes('pm')) {
-          this.state.time = 'afternoon';
-          this.state.step = 7;
-          return "Perfect! I've got you down for " + this.state.day + " afternoon. Can I get your first name?";
-        } else {
-          return "Morning or afternoon - what's better?";
-        }
-        
-      case 7: // Get name
-        this.state.name = userMessage.trim();
-        this.state.step = 8;
-        return `Awesome ${this.state.name}! You're all set for ${this.state.day} ${this.state.time}. We'll call 30 minutes before arrival. Would you like me to send a confirmation email?`;
-        
-      case 8: // Optional email
-        if (lower.includes('yes') || lower.includes('sure')) {
-          this.state.step = 9;
-          return "Great! What's your email address?";
-        } else if (lower.includes('no')) {
-          this.state.step = 10;
-          return "No problem! You're all confirmed. We'll see you " + this.state.day + ". Anything else I can help with?";
-        } else {
-          // They might have given email directly
-          const emailMatch = userMessage.match(/[^\s@]+@[^\s@]+\.[^\s@]+/);
-          if (emailMatch) {
-            this.state.email = emailMatch[0];
-            this.state.step = 10;
-            return "Got it! I'll send the confirmation to " + this.state.email + ". We'll see you " + this.state.day + "!";
-          } else {
-            return "Would you like an email confirmation?";
+      // Set up handlers
+      this.ws.on('message', async (data) => {
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.interaction_type === 'response_required') {
+            // IMMEDIATE response - no delays
+            await this.respond(parsed);
           }
+        } catch (error) {
+          console.error('❌ Error:', error);
         }
-        
-      case 9: // Capture email
-        const emailMatch2 = userMessage.match(/[^\s@]+@[^\s@]+\.[^\s@]+/);
-        if (emailMatch2) {
-          this.state.email = emailMatch2[0];
-          this.state.step = 10;
-          return "Perfect! I'll send the confirmation to " + this.state.email + ". We'll see you " + this.state.day + "!";
-        } else {
-          return "Could you repeat your email address?";
-        }
-        
-      case 10: // End
-        return "Thanks for choosing Half Price Roof! Have a great day!";
-        
-      default:
-        return "Is there anything else I can help you with?";
+      });
+      
+      this.ws.on('close', () => this.handleClose());
+      
+    } catch (error) {
+      console.error('❌ Init failed:', error);
+      this.ws.close();
     }
   }
   
-  capitalize(str) {
-    return str.charAt(0).toUpperCase() + str.slice(1);
-  }
-  
-  async sendResponse(content, responseId) {
-    if (this.ws.readyState === WebSocket.OPEN) {
+  async respond(parsed) {
+    const userMessage = parsed.transcript[parsed.transcript.length - 1]?.content || "";
+    console.log(`🗣️ User: ${userMessage}`);
+    
+    // Increment message count
+    this.messageCount++;
+    
+    // Get response based on what we need to know
+    let response = this.getResponse(userMessage);
+    
+    // Send immediately
+    if (response) {
+      console.log(`🤖 Mike: ${response}`);
       this.ws.send(JSON.stringify({
-        content: content,
+        content: response,
         content_complete: true,
         actions: [],
-        response_id: responseId || Date.now()
+        response_id: parsed.response_id
       }));
     }
   }
   
-  async handleClose() {
-    console.log('🔌 Connection closed');
+  getResponse(userMessage) {
+    const lower = userMessage.toLowerCase();
     
-    // Save data if we got far enough
-    if (this.state.name && this.state.day) {
-      const data = {
-        companyId: this.companyId,
-        callId: this.callId,
-        customer: this.state,
-        scheduledFor: `${this.state.day} ${this.state.time || ''}`,
-        timestamp: new Date().toISOString()
-      };
+    // Message 1: Greeting
+    if (this.messageCount === 1) {
+      return "Hey! Mike from Half Price Roof here. How's it going today?";
+    }
+    
+    // Message 2: Acknowledge and pivot
+    if (this.messageCount === 2) {
+      if (lower.includes('good') || lower.includes('fine')) {
+        return "Awesome! So what's going on with your roof?";
+      } else {
+        return "Thanks for taking my call! What can I help you with - repair, replacement, or inspection?";
+      }
+    }
+    
+    // Message 3+: Get what they need
+    if (!this.customerInfo.need) {
+      if (lower.includes('replac')) {
+        this.customerInfo.need = 'replacement';
+        return "Perfect, I can help with that replacement. Is this for your own home?";
+      } else if (lower.includes('repair') || lower.includes('leak')) {
+        this.customerInfo.need = 'repair';
+        return "Got it, let's get that fixed. Is this your property?";
+      } else if (lower.includes('inspect')) {
+        this.customerInfo.need = 'inspection';
+        return "Smart move! Is this for your own home?";
+      } else {
+        return "Are you looking for a repair, replacement, or just a free inspection?";
+      }
+    }
+    
+    // After we know their need, check ownership
+    if (this.customerInfo.need && !this.customerInfo.day) {
+      // They just answered ownership question
+      if (this.messageCount === 4 || this.messageCount === 5) {
+        if (lower.includes('ye') || lower.includes('own') || !lower.includes('no')) {
+          return "Great! I can get someone out there this week. What day works best - Thursday or Friday?";
+        } else {
+          return "No problem! What day works for an inspection - Thursday or Friday?";
+        }
+      }
+    }
+    
+    // Get the day
+    if (!this.customerInfo.day) {
+      if (lower.includes('thursday')) {
+        this.customerInfo.day = 'Thursday';
+        return "Thursday it is! Morning or afternoon better for you?";
+      } else if (lower.includes('friday')) {
+        this.customerInfo.day = 'Friday';
+        return "Friday works! Morning or afternoon?";
+      } else if (lower.includes('monday') || lower.includes('tuesday') || lower.includes('wednesday')) {
+        const day = lower.match(/(monday|tuesday|wednesday)/)[0];
+        this.customerInfo.day = day.charAt(0).toUpperCase() + day.slice(1);
+        return `${this.customerInfo.day} works! Morning or afternoon?`;
+      } else {
+        return "What day works best for you this week?";
+      }
+    }
+    
+    // Get the time
+    if (!this.customerInfo.time && this.customerInfo.day) {
+      if (lower.includes('morning') || lower.includes('am')) {
+        this.customerInfo.time = 'morning';
+        return `Perfect! ${this.customerInfo.day} morning it is. Can I get your first name for the appointment?`;
+      } else if (lower.includes('afternoon') || lower.includes('pm')) {
+        this.customerInfo.time = 'afternoon';
+        return `Great! ${this.customerInfo.day} afternoon. What's your first name?`;
+      } else {
+        return "Do you prefer morning or afternoon?";
+      }
+    }
+    
+    // Get their name
+    if (!this.customerInfo.name && this.customerInfo.time) {
+      // Assume this message is their name
+      this.customerInfo.name = userMessage.trim().split(' ')[0]; // Get first word as first name
       
-      console.log('💾 Saving appointment:', data);
+      // Try to book if calendar is available
+      this.attemptBooking();
       
-      // Get phone from call metadata
-      const callerPhone = this.req.headers['x-caller-phone'] || 'From call';
+      return `Thanks ${this.customerInfo.name}! I've got you scheduled for ${this.customerInfo.day} ${this.customerInfo.time}. Our inspector will call 30 minutes before arrival. Sound good?`;
+    }
+    
+    // Final confirmation
+    if (this.customerInfo.name) {
+      return "Perfect! You're all set. We'll see you then. Have a great day!";
+    }
+    
+    // Fallback
+    return "Sorry, what was that?";
+  }
+  
+  async attemptBooking() {
+    try {
+      if (!isCalendarInitialized()) {
+        console.log('📅 Calendar not available - manual booking needed');
+        return;
+      }
       
+      // Calculate the date
+      const bookingDate = this.getNextDate(this.customerInfo.day);
+      
+      // Set time based on preference
+      if (this.customerInfo.time === 'morning') {
+        bookingDate.setHours(9, 0, 0, 0); // 9 AM
+      } else {
+        bookingDate.setHours(14, 0, 0, 0); // 2 PM
+      }
+      
+      // Try to book
+      const result = await autoBookAppointment(
+        this.customerInfo.name,
+        '', // No email yet
+        this.customerInfo.phoneFromCall || '',
+        bookingDate,
+        {
+          service: this.customerInfo.need,
+          source: 'Phone Call',
+          company: this.config.companyName
+        }
+      );
+      
+      if (result.success) {
+        console.log('✅ Appointment booked:', result.eventId);
+      }
+      
+    } catch (error) {
+      console.error('❌ Booking error:', error);
+    }
+  }
+  
+  getNextDate(dayName) {
+    const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const today = new Date();
+    const todayIndex = today.getDay();
+    const targetIndex = days.indexOf(dayName.toLowerCase());
+    
+    let daysUntil = targetIndex - todayIndex;
+    if (daysUntil <= 0) daysUntil += 7;
+    
+    const targetDate = new Date();
+    targetDate.setDate(today.getDate() + daysUntil);
+    return targetDate;
+  }
+  
+  async handleClose() {
+    console.log('🔌 Call ended');
+    
+    // Send webhook if we have info
+    if (this.customerInfo.name && this.customerInfo.day) {
       await sendSchedulingPreference(
-        this.state.name,
-        this.state.email || '',
-        callerPhone,
-        `${this.state.day} ${this.state.time || ''}`,
+        this.customerInfo.name,
+        '',
+        this.customerInfo.phoneFromCall || 'Unknown',
+        `${this.customerInfo.day} ${this.customerInfo.time}`,
         this.callId,
-        data
+        {
+          service: this.customerInfo.need,
+          company: this.config.companyName,
+          callDuration: Date.now()
+        }
       );
     }
   }
