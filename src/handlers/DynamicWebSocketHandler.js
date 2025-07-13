@@ -1,4 +1,4 @@
-// src/handlers/DynamicWebSocketHandler.js - ENHANCED WITH BETTER LISTENING & TIME SELECTION
+// src/handlers/DynamicWebSocketHandler.js - WITH SILENCE DETECTION & TRANSCRIPT VALIDATION
 const configLoader = require('../services/config/ConfigurationLoader');
 const { 
   autoBookAppointment, 
@@ -19,51 +19,59 @@ class DynamicWebSocketHandler {
     const callIdMatch = req.url.match(/\/call_([a-f0-9]+)/);
     this.callId = callIdMatch ? `call_${callIdMatch[1]}` : `call_${Date.now()}`;
     
-    // Track conversation with enhanced discovery
+    // Track conversation
     this.messageCount = 0;
+    this.validMessageCount = 0; // Only count valid, meaningful messages
     this.customerInfo = {
       name: null,
       firstName: null,
       phone: this.req.headers['x-caller-phone'] || null,
-      email: '', // Will need to ask for this for calendar invite
+      email: '',
       // Roofing specific info
-      propertyType: null,      // residential/commercial
-      roofAge: null,          // how old is the roof
-      issue: null,            // leak, damage, replacement, inspection
-      urgency: null,          // emergency, this week, planning
-      insuranceClaim: null,   // yes/no/maybe
-      propertyAddress: null,  // for accurate scheduling
+      propertyType: null,
+      roofAge: null,
+      issue: null,
+      urgency: null,
+      insuranceClaim: null,
+      propertyAddress: null,
       // Scheduling
       day: null,
-      specificTime: null,     // Actual time like "9 AM"
-      timePreference: null,   // morning/afternoon
-      availableSlots: [],     // Available calendar slots
-      selectedSlot: null,     // The chosen slot
+      specificTime: null,
+      timePreference: null,
+      availableSlots: [],
+      selectedSlot: null,
       readyToSchedule: false
     };
     
-    // Discovery questions tracker
-    this.discoveryPhase = 'greeting'; // greeting -> need -> details -> scheduling -> time_selection -> booking
-    this.questionsAsked = {
-      need: false,
-      propertyType: false,
-      urgency: false,
-      roofAge: false,
-      insuranceClaim: false,
-      address: false,
-      email: false,
-      specificTime: false
-    };
+    // Discovery phases
+    this.discoveryPhase = 'waiting'; // waiting -> greeting -> need -> details -> scheduling -> time_selection -> booking
+    this.hasGreeted = false;
+    this.waitingForResponse = false;
+    this.lastBotMessage = null;
+    this.lastBotMessageTime = 0;
     
-    // Response cache to prevent repeats
-    this.lastResponse = null;
-    this.lastUserMessage = null;
+    // Silence and transcript management
+    this.silenceCount = 0;
+    this.lastValidUserMessage = null;
+    this.transcriptHistory = [];
+    this.lastUserSpokeTime = 0;
     
-    // Add response timing control
-    this.responseDelay = 1500; // Wait 1.5 seconds before responding
-    this.isWaitingToRespond = false;
+    // Response control
+    this.responseDelay = 2000; // Wait 2 seconds before responding
+    this.pendingResponseTimeout = null;
+    this.minimumUserMessageLength = 2; // Ignore single character responses
     
-    // Initialize immediately
+    // Common transcript errors to ignore
+    this.transcriptErrorPatterns = [
+      /^(uh|um|ah|oh|eh|hm+)$/i,
+      /^(guess it's|guess its)/i,
+      /^no\.$|^yes\.$/i, // Single word with period often means unclear audio
+      /^i'm$/i,
+      /^oh,? i'm$/i,
+      /from.*here$/i // Partial transcriptions like "from X here"
+    ];
+    
+    // Initialize
     this.initialize();
   }
   
@@ -99,353 +107,466 @@ class DynamicWebSocketHandler {
     }
   }
   
+  isValidUserMessage(message) {
+    if (!message || typeof message !== 'string') return false;
+    
+    const trimmed = message.trim();
+    
+    // Check minimum length
+    if (trimmed.length < this.minimumUserMessageLength) return false;
+    
+    // Check for common transcript errors
+    for (const pattern of this.transcriptErrorPatterns) {
+      if (pattern.test(trimmed)) {
+        console.log(`🚫 Ignoring transcript error: "${trimmed}"`);
+        return false;
+      }
+    }
+    
+    // Check if it's just gibberish or partial words
+    if (trimmed.split(' ').every(word => word.length < 2)) return false;
+    
+    // Check if it's too similar to our bot's name/company
+    if (trimmed.toLowerCase().includes("mike from aflac") || 
+        trimmed.toLowerCase().includes("from aflac's creek")) {
+      console.log(`🚫 Ignoring misheard bot introduction: "${trimmed}"`);
+      return false;
+    }
+    
+    return true;
+  }
+  
   async handleIncomingMessage(parsed) {
     const userMessage = parsed.transcript[parsed.transcript.length - 1]?.content || "";
+    
+    // Validate the message first
+    if (!this.isValidUserMessage(userMessage)) {
+      console.log(`🔇 Invalid/unclear message ignored: "${userMessage}"`);
+      return;
+    }
+    
     console.log(`🗣️ User: ${userMessage}`);
+    
+    // Track user activity
+    this.lastUserSpokeTime = Date.now();
+    this.lastValidUserMessage = userMessage;
+    this.transcriptHistory.push({
+      message: userMessage,
+      timestamp: Date.now(),
+      valid: true
+    });
     
     // Cancel any pending response
     if (this.pendingResponseTimeout) {
       clearTimeout(this.pendingResponseTimeout);
     }
     
-    // Store the message and wait a bit for them to finish speaking
-    this.lastIncomingMessage = userMessage;
-    this.lastIncomingParsed = parsed;
+    // If we haven't greeted yet and user said hello, greet immediately
+    if (!this.hasGreeted && userMessage.toLowerCase().includes('hello')) {
+      this.discoveryPhase = 'greeting';
+      await this.sendResponse("Hey! Mike from Half Price Roof here. How's it going today?", parsed.response_id);
+      this.hasGreeted = true;
+      this.waitingForResponse = true;
+      return;
+    }
     
-    // Wait before responding to let them finish their thought
+    // For all other messages, wait a bit to see if they'll say more
     this.pendingResponseTimeout = setTimeout(async () => {
-      await this.respond(this.lastIncomingParsed);
+      await this.processUserMessage(userMessage, parsed);
     }, this.responseDelay);
   }
   
-  async respond(parsed) {
-    const userMessage = parsed.transcript[parsed.transcript.length - 1]?.content || "";
+  async processUserMessage(userMessage, parsed) {
+    const lower = userMessage.toLowerCase();
     
-    // Prevent responding to the same message twice
-    if (userMessage === this.lastUserMessage) {
-      console.log('🚫 Duplicate message ignored');
-      return;
+    // Increment valid message count
+    this.validMessageCount++;
+    
+    // Check if this is silence after we asked a question
+    const timeSinceLastBot = Date.now() - this.lastBotMessageTime;
+    if (this.waitingForResponse && timeSinceLastBot > 10000) {
+      // User has been silent for 10+ seconds after our question
+      this.silenceCount++;
+      if (this.silenceCount >= 2) {
+        await this.sendResponse("Are you still there? I'm here to help with any roofing needs you might have.", parsed.response_id);
+        this.silenceCount = 0;
+        return;
+      }
     }
-    this.lastUserMessage = userMessage;
     
-    // Increment message count
-    this.messageCount++;
-    
-    // Get response based on discovery phase
+    // Get appropriate response based on conversation phase
     let response = await this.getResponse(userMessage);
     
-    // Send immediately if we have a response
-    if (response && response !== this.lastResponse) {
-      console.log(`🤖 Mike: ${response}`);
-      this.lastResponse = response;
-      
-      this.ws.send(JSON.stringify({
-        content: response,
-        content_complete: true,
-        actions: [],
-        response_id: parsed.response_id
-      }));
+    if (response) {
+      await this.sendResponse(response, parsed.response_id);
     }
+  }
+  
+  async sendResponse(content, responseId) {
+    console.log(`🤖 Mike: ${content}`);
+    
+    this.lastBotMessage = content;
+    this.lastBotMessageTime = Date.now();
+    this.waitingForResponse = true;
+    this.silenceCount = 0;
+    
+    this.ws.send(JSON.stringify({
+      content: content,
+      content_complete: true,
+      actions: [],
+      response_id: responseId
+    }));
   }
   
   async getResponse(userMessage) {
     const lower = userMessage.toLowerCase();
     
-    // Phase 1: Initial Greeting
-    if (this.messageCount === 1) {
-      this.discoveryPhase = 'greeting';
-      return "Hey! Mike from Half Price Roof here. How's it going today?";
-    }
-    
-    // Phase 2: Acknowledge greeting and ask about need
-    if (this.discoveryPhase === 'greeting' && this.messageCount === 2) {
-      this.discoveryPhase = 'need';
-      if (lower.includes('good') || lower.includes('fine') || lower.includes('well')) {
-        return "Awesome! So what's going on with your roof? Are you dealing with a leak, need a replacement, or just looking for an inspection?";
-      } else if (lower.includes('how') && lower.includes('going')) {
-        // They echoed the question back
-        return "I'm doing great, thanks for asking! So what can I help you with today - is your roof giving you trouble?";
-      } else {
-        return "I hear you. Well, I'm here to help with any roofing needs. What's going on with your roof?";
-      }
-    }
-    
-    // Phase 3: Capture their need and ask property type
-    if (this.discoveryPhase === 'need' && !this.customerInfo.issue) {
-      if (lower.includes('replac')) {
-        this.customerInfo.issue = 'replacement';
-        this.discoveryPhase = 'details';
-        return "Got it, full roof replacement. Is this for your home or a commercial property?";
-      } else if (lower.includes('leak') || lower.includes('water')) {
-        this.customerInfo.issue = 'leak';
-        this.discoveryPhase = 'details';
-        return "Oh no, a leak! Those need quick attention. Is this at your home or a business?";
-      } else if (lower.includes('inspect') || lower.includes('check')) {
-        this.customerInfo.issue = 'inspection';
-        this.discoveryPhase = 'details';
-        return "Smart to get it inspected! Is this for a residential or commercial property?";
-      } else if (lower.includes('damage') || lower.includes('storm')) {
-        this.customerInfo.issue = 'storm damage';
-        this.discoveryPhase = 'details';
-        return "Storm damage can be serious. Is this your home or a commercial building?";
-      } else {
-        // They said something else, probe more
-        return "I can help with repairs, replacements, or free inspections. Which one are you looking for?";
-      }
-    }
-    
-    // Phase 4: Get property type and ask urgency
-    if (this.discoveryPhase === 'details' && !this.customerInfo.propertyType) {
-      if (lower.includes('home') || lower.includes('house') || lower.includes('residential') || 
-          lower.includes('my') || lower === 'yes') {
-        this.customerInfo.propertyType = 'residential';
-        this.questionsAsked.propertyType = true;
+    // Handle different conversation phases
+    switch (this.discoveryPhase) {
+      case 'greeting':
+        return this.handleGreetingResponse(userMessage);
         
-        if (this.customerInfo.issue === 'leak') {
-          return "I'll make sure we get someone out quickly. Is water actively coming in right now, or is it more of a slow leak?";
-        } else {
-          return "Perfect. How urgent is this - do you need someone out right away or are you planning ahead?";
-        }
-      } else if (lower.includes('commercial') || lower.includes('business') || lower.includes('building')) {
-        this.customerInfo.propertyType = 'commercial';
-        this.questionsAsked.propertyType = true;
-        return "We handle a lot of commercial properties. How urgent is this for your business?";
-      }
-    }
-    
-    // Phase 5: Get urgency and ask about roof age
-    if (!this.customerInfo.urgency && this.questionsAsked.propertyType) {
-      if (lower.includes('asap') || lower.includes('soon as possible') || lower.includes('right away') || 
-          lower.includes('emergency') || lower.includes('active') || lower.includes('coming in')) {
-        this.customerInfo.urgency = 'emergency';
-        this.questionsAsked.urgency = true;
-        return "We have emergency crews available. Do you know roughly how old your roof is?";
-      } else if (lower.includes('week') || lower.includes('soon')) {
-        this.customerInfo.urgency = 'this week';
-        this.questionsAsked.urgency = true;
-        return "We can definitely get someone out this week. About how old is your current roof?";
-      } else if (lower.includes('planning') || lower.includes('quote') || lower.includes('slow')) {
-        this.customerInfo.urgency = 'planning';
-        this.questionsAsked.urgency = true;
-        return "Good to plan ahead! Do you know approximately how old your roof is?";
-      }
-    }
-    
-    // Phase 6: Get roof age and ask about insurance
-    if (!this.customerInfo.roofAge && this.questionsAsked.urgency) {
-      // Try to extract age from response - handle multi-part responses
-      const ageMatch = lower.match(/(\d+)\s*(year|yr)/);
-      const thirtyMatch = lower.match(/thirty|30/);
-      
-      if (ageMatch) {
-        this.customerInfo.roofAge = `${ageMatch[1]} years`;
-      } else if (thirtyMatch) {
-        this.customerInfo.roofAge = '30+ years';
-      } else if (lower.includes('old')) {
-        // If they just say "old" or "pretty old", check if there's more context
-        if (lower.includes('least') && (lower.includes('thirty') || lower.includes('30'))) {
-          this.customerInfo.roofAge = '30+ years';
-        } else {
-          this.customerInfo.roofAge = 'very old';
-        }
-      } else if (lower.includes('new') || lower.includes('recent')) {
-        this.customerInfo.roofAge = 'less than 5 years';
-      } else if (lower.includes("don't know") || lower.includes('not sure')) {
-        this.customerInfo.roofAge = 'unknown';
-      } else {
-        // Assume they gave a non-specific answer
-        this.customerInfo.roofAge = 'not specified';
-      }
-      
-      this.questionsAsked.roofAge = true;
-      
-      if (this.customerInfo.issue === 'storm damage' || this.customerInfo.issue === 'leak') {
-        return "Thanks. Are you planning to file an insurance claim for this?";
-      } else {
-        // Skip insurance question for regular replacements/inspections
-        this.questionsAsked.insuranceClaim = true;
-        this.customerInfo.insuranceClaim = 'N/A';
-        return "Great! Now let me check our schedule. What's your first name for the appointment?";
-      }
-    }
-    
-    // Phase 7: Get insurance info and ask for name
-    if (!this.customerInfo.insuranceClaim && this.questionsAsked.roofAge) {
-      if (lower.includes('yes') || lower.includes('file') || lower.includes('claim')) {
-        this.customerInfo.insuranceClaim = 'yes';
-        return "We work with all insurance companies and can help with that process. What's your first name for the appointment?";
-      } else if (lower.includes('no') || lower.includes('not')) {
-        this.customerInfo.insuranceClaim = 'no';
-        return "No problem, we have great cash pricing too. What's your first name?";
-      } else if (lower.includes('maybe') || lower.includes('not sure')) {
-        this.customerInfo.insuranceClaim = 'maybe';
-        return "We can help you figure that out during the inspection. What's your first name?";
-      }
-    }
-    
-    // Phase 8: CRITICAL - Better name capture
-    if (!this.customerInfo.firstName && 
-        (this.questionsAsked.insuranceClaim || this.questionsAsked.roofAge)) {
-      // Enhanced name extraction
-      const nameMatch = userMessage.match(/(?:my name is |i'm |i am |it's |this is |call me )?([A-Z][a-z]+)/);
-      
-      if (nameMatch) {
-        this.customerInfo.firstName = nameMatch[1];
-        this.customerInfo.name = nameMatch[1];
-        this.discoveryPhase = 'scheduling';
+      case 'need':
+        return this.handleNeedResponse(userMessage);
         
-        // Personalized response based on urgency
-        if (this.customerInfo.urgency === 'emergency') {
-          return `Thanks ${this.customerInfo.firstName}! Let me get our emergency crew scheduled. We can have someone there today or tomorrow. Which works better?`;
-        } else {
-          return `Perfect, ${this.customerInfo.firstName}! I can get someone out to take a look. What day works best for you this week?`;
-        }
+      case 'details':
+        return this.handleDetailsResponse(userMessage);
+        
+      case 'urgency':
+        return this.handleUrgencyResponse(userMessage);
+        
+      case 'roofAge':
+        return this.handleRoofAgeResponse(userMessage);
+        
+      case 'insurance':
+        return this.handleInsuranceResponse(userMessage);
+        
+      case 'getName':
+        return this.handleNameResponse(userMessage);
+        
+      case 'scheduling':
+        return this.handleSchedulingResponse(userMessage);
+        
+      case 'time_selection':
+        return this.handleTimeSelectionResponse(userMessage);
+        
+      case 'confirmation':
+        return this.handleConfirmationResponse(userMessage);
+        
+      default:
+        // We're in waiting phase, shouldn't respond unless greeted
+        return null;
+    }
+  }
+  
+  handleGreetingResponse(userMessage) {
+    const lower = userMessage.toLowerCase();
+    this.discoveryPhase = 'need';
+    
+    if (lower.includes('good') || lower.includes('great') || lower.includes('fine') || lower.includes('well')) {
+      return "That's great to hear! So what's going on with your roof? Are you dealing with any leaks, need a replacement, or just looking for an inspection?";
+    } else if (lower.includes('not') && (lower.includes('good') || lower.includes('great'))) {
+      return "Sorry to hear that. Well, I'm here to help with any roofing issues. Is your roof giving you trouble?";
+    } else if (lower.includes('hello') || lower.includes('hi')) {
+      // They just said hello back
+      return "Thanks for taking my call! What can I help you with today - are you having any issues with your roof?";
+    } else {
+      // Generic response
+      return "I appreciate you taking my call. What's going on with your roof today?";
+    }
+  }
+  
+  handleNeedResponse(userMessage) {
+    const lower = userMessage.toLowerCase();
+    
+    if (lower.includes('replac')) {
+      this.customerInfo.issue = 'replacement';
+      this.discoveryPhase = 'details';
+      return "Got it, you need a full roof replacement. Is this for your home or a commercial property?";
+    } else if (lower.includes('leak') || lower.includes('water') || lower.includes('drip')) {
+      this.customerInfo.issue = 'leak';
+      this.discoveryPhase = 'details';
+      return "Oh no, a leak! Those definitely need quick attention. Is this happening at your home or a business property?";
+    } else if (lower.includes('inspect') || lower.includes('check') || lower.includes('look')) {
+      this.customerInfo.issue = 'inspection';
+      this.discoveryPhase = 'details';
+      return "Smart thinking! Regular inspections can catch problems early. Is this for a residential or commercial property?";
+    } else if (lower.includes('repair') || lower.includes('fix')) {
+      this.customerInfo.issue = 'repair';
+      this.discoveryPhase = 'details';
+      return "I can definitely help with repairs. Is this for your home or a commercial building?";
+    } else if (lower.includes('damage') || lower.includes('storm') || lower.includes('hail') || lower.includes('wind')) {
+      this.customerInfo.issue = 'storm damage';
+      this.discoveryPhase = 'details';
+      return "Storm damage can be serious. Is this your residential property or a commercial one?";
+    } else if (lower.includes('not sure') || lower.includes("don't know")) {
+      return "No problem! I can have our inspector take a look and let you know exactly what's needed. Is this for your home?";
+    } else {
+      // Clarify
+      return "I can help with repairs, full replacements, or free inspections. Which one sounds like what you need?";
+    }
+  }
+  
+  handleDetailsResponse(userMessage) {
+    const lower = userMessage.toLowerCase();
+    
+    if (lower.includes('home') || lower.includes('house') || lower.includes('residential') || 
+        lower === 'yes' || lower.includes('my place')) {
+      this.customerInfo.propertyType = 'residential';
+      this.discoveryPhase = 'urgency';
+      
+      if (this.customerInfo.issue === 'leak') {
+        return "I'll make sure we get someone out there quickly. Is water actively coming in right now?";
       } else {
-        // Couldn't extract name, ask more directly
-        return "Sorry, I didn't catch that. What's your first name?";
+        return "Perfect. How soon do you need someone to come take a look - is this urgent or are you planning ahead?";
       }
+    } else if (lower.includes('commercial') || lower.includes('business') || lower.includes('office') || 
+               lower.includes('building') || lower.includes('store')) {
+      this.customerInfo.propertyType = 'commercial';
+      this.discoveryPhase = 'urgency';
+      return "We handle a lot of commercial properties. How urgent is this for your business operations?";
+    } else if (lower === 'no') {
+      return "Got it. So is this for a commercial property then?";
+    } else {
+      return "Just to clarify - is this for a home or a business property?";
+    }
+  }
+  
+  handleUrgencyResponse(userMessage) {
+    const lower = userMessage.toLowerCase();
+    
+    if (lower.includes('yes') && this.customerInfo.issue === 'leak') {
+      // Active leak
+      this.customerInfo.urgency = 'emergency';
+      this.discoveryPhase = 'roofAge';
+      return "We'll get our emergency crew out there right away. While I'm scheduling this, can you tell me roughly how old your roof is?";
+    } else if (lower.includes('asap') || lower.includes('soon as possible') || lower.includes('immediately') || 
+               lower.includes('emergency') || lower.includes('urgent') || lower.includes('right away') ||
+               lower.includes('today') || lower.includes('active')) {
+      this.customerInfo.urgency = 'emergency';
+      this.discoveryPhase = 'roofAge';
+      return "I understand this is urgent. We have crews available for emergency calls. Do you know approximately how old your roof is?";
+    } else if (lower.includes('this week') || lower.includes('soon') || lower.includes('quick')) {
+      this.customerInfo.urgency = 'this week';
+      this.discoveryPhase = 'roofAge';
+      return "We can definitely get someone out this week. About how old is your current roof?";
+    } else if (lower.includes('planning') || lower.includes('quote') || lower.includes('estimate') || 
+               lower.includes('not urgent') || lower.includes('no rush') || lower === 'no') {
+      this.customerInfo.urgency = 'planning';
+      this.discoveryPhase = 'roofAge';
+      return "It's great that you're planning ahead! Do you know roughly how old your roof is?";
+    } else {
+      return "Would you say you need someone out there within the next few days, or is this more for future planning?";
+    }
+  }
+  
+  handleRoofAgeResponse(userMessage) {
+    const lower = userMessage.toLowerCase();
+    
+    // Extract age
+    const ageMatch = lower.match(/(\d+)\s*(year|yr)/);
+    const thirtyMatch = lower.match(/thirty|30/);
+    const twentyMatch = lower.match(/twenty|20/);
+    
+    if (ageMatch) {
+      this.customerInfo.roofAge = `${ageMatch[1]} years`;
+    } else if (thirtyMatch) {
+      this.customerInfo.roofAge = '30+ years';
+    } else if (twentyMatch) {
+      this.customerInfo.roofAge = '20+ years';
+    } else if (lower.includes('old') || lower.includes('original')) {
+      this.customerInfo.roofAge = 'very old';
+    } else if (lower.includes('new') || lower.includes('recent') || lower.includes('few')) {
+      this.customerInfo.roofAge = 'less than 5 years';
+    } else if (lower.includes("don't know") || lower.includes('not sure') || lower.includes('no idea')) {
+      this.customerInfo.roofAge = 'unknown';
+    } else {
+      this.customerInfo.roofAge = userMessage; // Store whatever they said
     }
     
-    // Phase 9: Scheduling - Get the day
-    if (this.discoveryPhase === 'scheduling' && !this.customerInfo.day) {
-      const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'today', 'tomorrow'];
-      const dayFound = days.find(day => lower.includes(day));
+    // Move to insurance question for damage/leaks, or skip to name for others
+    if (this.customerInfo.issue === 'storm damage' || this.customerInfo.issue === 'leak') {
+      this.discoveryPhase = 'insurance';
+      return "Thanks for that info. Are you planning to file an insurance claim for this damage?";
+    } else {
+      this.discoveryPhase = 'getName';
+      return "Great, thanks for that information! Now let me get you scheduled. What's your first name?";
+    }
+  }
+  
+  handleInsuranceResponse(userMessage) {
+    const lower = userMessage.toLowerCase();
+    
+    if (lower.includes('yes') || lower.includes('definitely') || lower.includes('planning to')) {
+      this.customerInfo.insuranceClaim = 'yes';
+      this.discoveryPhase = 'getName';
+      return "Perfect! We work with all insurance companies and can help document everything for your claim. What's your first name for the appointment?";
+    } else if (lower.includes('no') || lower.includes('not')) {
+      this.customerInfo.insuranceClaim = 'no';
+      this.discoveryPhase = 'getName';
+      return "No problem at all. We have great cash pricing and payment options. What's your first name?";
+    } else if (lower.includes('maybe') || lower.includes('not sure') || lower.includes('might')) {
+      this.customerInfo.insuranceClaim = 'maybe';
+      this.discoveryPhase = 'getName';
+      return "That's fine! Our inspector can help you determine if it's worth filing a claim. What's your first name?";
+    } else {
+      return "Will you be using insurance for this, or would you prefer to handle it directly?";
+    }
+  }
+  
+  handleNameResponse(userMessage) {
+    // Enhanced name extraction
+    const nameMatch = userMessage.match(/(?:my name is |i'm |i am |it's |this is |call me )?([A-Z][a-z]+)/);
+    
+    if (nameMatch) {
+      this.customerInfo.firstName = nameMatch[1];
+      this.customerInfo.name = nameMatch[1];
+      this.discoveryPhase = 'scheduling';
       
-      if (dayFound) {
-        this.customerInfo.day = dayFound.charAt(0).toUpperCase() + dayFound.slice(1);
+      if (this.customerInfo.urgency === 'emergency') {
+        return `Thanks ${this.customerInfo.firstName}! Since this is urgent, I can get someone there today or tomorrow. Which day works better for you?`;
+      } else {
+        return `Perfect, ${this.customerInfo.firstName}! Let me check our schedule. What day works best for you this week?`;
+      }
+    } else if (userMessage.length < 20 && /^[A-Z][a-z]+$/.test(userMessage.trim())) {
+      // Just a single capitalized word - likely a name
+      this.customerInfo.firstName = userMessage.trim();
+      this.customerInfo.name = userMessage.trim();
+      this.discoveryPhase = 'scheduling';
+      return `Great, ${this.customerInfo.firstName}! What day works best for you to have someone come out?`;
+    } else {
+      return "I didn't quite catch that. Could you tell me your first name please?";
+    }
+  }
+  
+  async handleSchedulingResponse(userMessage) {
+    const lower = userMessage.toLowerCase();
+    const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'today', 'tomorrow'];
+    const dayFound = days.find(day => lower.includes(day));
+    
+    if (dayFound) {
+      this.customerInfo.day = dayFound.charAt(0).toUpperCase() + dayFound.slice(1);
+      
+      // Get available slots for that day
+      const targetDate = this.getNextDate(this.customerInfo.day);
+      const availableSlots = await getAvailableTimeSlots(targetDate);
+      
+      if (availableSlots.length > 0) {
+        this.customerInfo.availableSlots = availableSlots;
         this.discoveryPhase = 'time_selection';
         
-        // Check available times for that day
-        const targetDate = this.getNextDate(this.customerInfo.day);
-        const availableSlots = await getAvailableTimeSlots(targetDate);
-        
-        if (availableSlots.length > 0) {
-          this.customerInfo.availableSlots = availableSlots;
-          
-          // Offer specific times
-          const morningSlots = availableSlots.filter(s => parseInt(s.displayTime) < 12);
-          const afternoonSlots = availableSlots.filter(s => parseInt(s.displayTime) >= 12);
-          
-          if (morningSlots.length > 0 && afternoonSlots.length > 0) {
-            return `Great! For ${this.customerInfo.day}, I have ${morningSlots[0].displayTime} or ${afternoonSlots[0].displayTime} available. Which time works better for you?`;
-          } else if (morningSlots.length > 0) {
-            return `For ${this.customerInfo.day}, I have ${morningSlots[0].displayTime} available in the morning. Does that work for you?`;
-          } else if (afternoonSlots.length > 0) {
-            return `For ${this.customerInfo.day}, I have ${afternoonSlots[0].displayTime} available in the afternoon. Does that work for you?`;
-          }
-        } else {
-          // No slots available that day
-          this.customerInfo.day = null;
-          return `I don't have any openings on ${dayFound}. How about the following day?`;
-        }
-      } else {
-        return "What day works best for you this week?";
-      }
-    }
-    
-    // Phase 10: Get specific time selection
-    if (this.discoveryPhase === 'time_selection' && this.customerInfo.day && !this.customerInfo.specificTime) {
-      // Look for specific times mentioned
-      const timeMatch = userMessage.match(/(\d{1,2})\s*(am|pm|o'clock|:)/i);
-      const morningMatch = lower.includes('morning') || (lower.includes('am') && !timeMatch);
-      const afternoonMatch = lower.includes('afternoon') || (lower.includes('pm') && !timeMatch);
-      
-      if (timeMatch) {
-        // User specified a time
-        const hour = parseInt(timeMatch[1]);
-        const isPM = timeMatch[2] && timeMatch[2].toLowerCase().includes('pm');
-        
-        // Find matching slot
-        const matchedSlot = this.customerInfo.availableSlots.find(slot => {
-          const slotHour = parseInt(slot.displayTime);
-          return (isPM && slotHour === hour && slot.displayTime.includes('PM')) ||
-                 (!isPM && slotHour === hour && slot.displayTime.includes('AM'));
+        // Group slots by morning/afternoon
+        const morningSlots = availableSlots.filter(s => {
+          const hour = parseInt(s.displayTime.split(':')[0]);
+          return s.displayTime.includes('AM') || (hour === 12 && s.displayTime.includes('PM'));
+        });
+        const afternoonSlots = availableSlots.filter(s => {
+          const hour = parseInt(s.displayTime.split(':')[0]);
+          return s.displayTime.includes('PM') && hour !== 12;
         });
         
-        if (matchedSlot) {
-          this.customerInfo.specificTime = matchedSlot.displayTime;
-          this.customerInfo.selectedSlot = matchedSlot;
-          this.customerInfo.readyToSchedule = true;
-          return await this.confirmAndBook();
-        } else {
-          // Time not available
-          return `I don't have ${hour}${isPM ? ' PM' : ' AM'} available. Would any of these times work instead: ${this.customerInfo.availableSlots.map(s => s.displayTime).join(', ')}?`;
+        // Offer specific times
+        if (morningSlots.length > 0 && afternoonSlots.length > 0) {
+          return `Great! I have ${morningSlots[0].displayTime} in the morning or ${afternoonSlots[0].displayTime} in the afternoon available on ${this.customerInfo.day}. Which works better for you?`;
+        } else if (morningSlots.length > 0) {
+          const times = morningSlots.slice(0, 2).map(s => s.displayTime).join(' or ');
+          return `For ${this.customerInfo.day}, I have ${times} available. Which time works best?`;
+        } else if (afternoonSlots.length > 0) {
+          const times = afternoonSlots.slice(0, 2).map(s => s.displayTime).join(' or ');
+          return `For ${this.customerInfo.day}, I have ${times} available in the afternoon. Does one of those work?`;
         }
-      } else if (morningMatch || afternoonMatch) {
-        // User said morning/afternoon
-        const relevantSlots = this.customerInfo.availableSlots.filter(s => 
-          morningMatch ? s.displayTime.includes('AM') : s.displayTime.includes('PM')
-        );
-        
-        if (relevantSlots.length === 1) {
-          this.customerInfo.specificTime = relevantSlots[0].displayTime;
-          this.customerInfo.selectedSlot = relevantSlots[0];
-          this.customerInfo.readyToSchedule = true;
-          return await this.confirmAndBook();
-        } else if (relevantSlots.length > 1) {
-          // Need to be more specific
-          return `I have ${relevantSlots.map(s => s.displayTime).join(' or ')} available ${morningMatch ? 'in the morning' : 'in the afternoon'}. Which specific time works best?`;
-        } else {
-          return `I don't have any ${morningMatch ? 'morning' : 'afternoon'} slots on ${this.customerInfo.day}. Would another time work?`;
-        }
-      } else if (lower.includes('first') || lower.includes('earliest')) {
-        // They want the first available
-        this.customerInfo.specificTime = this.customerInfo.availableSlots[0].displayTime;
-        this.customerInfo.selectedSlot = this.customerInfo.availableSlots[0];
-        this.customerInfo.readyToSchedule = true;
-        return await this.confirmAndBook();
-      } else if (lower.includes('any') || lower.includes('either') || lower.includes('work')) {
-        // They're flexible, book the first slot
-        this.customerInfo.specificTime = this.customerInfo.availableSlots[0].displayTime;
-        this.customerInfo.selectedSlot = this.customerInfo.availableSlots[0];
-        this.customerInfo.readyToSchedule = true;
-        return await this.confirmAndBook();
       } else {
-        // Ask for clarification on specific time
-        return `What specific time works best for you? I have ${this.customerInfo.availableSlots.slice(0, 3).map(s => s.displayTime).join(', ')} available.`;
+        // No slots available
+        this.customerInfo.day = null;
+        return `I don't have any openings on ${dayFound}. Would the following day work instead?`;
       }
+    } else if (lower.includes('week') || lower.includes('whenever') || lower.includes('flexible')) {
+      return "I have good availability Thursday and Friday. Which day would you prefer?";
+    } else {
+      return "What day works best for you? I have openings most days this week.";
+    }
+  }
+  
+  async handleTimeSelectionResponse(userMessage) {
+    const lower = userMessage.toLowerCase();
+    
+    // Look for specific time mentions
+    const timeMatch = userMessage.match(/(\d{1,2})\s*(:\d{2})?\s*(am|pm|a\.m\.|p\.m\.)?/i);
+    const morningWords = ['morning', 'first', 'early', 'earlier'];
+    const afternoonWords = ['afternoon', 'later', 'second'];
+    
+    let selectedSlot = null;
+    
+    if (timeMatch) {
+      const requestedHour = parseInt(timeMatch[1]);
+      const isPM = timeMatch[3] && timeMatch[3].toLowerCase().includes('p');
+      
+      // Find exact or close match
+      selectedSlot = this.customerInfo.availableSlots.find(slot => {
+        const slotTime = slot.displayTime.toLowerCase();
+        return slotTime.includes(`${requestedHour}:`) && 
+               (isPM ? slotTime.includes('pm') : slotTime.includes('am'));
+      });
+    } else if (morningWords.some(word => lower.includes(word))) {
+      // Select first morning slot
+      selectedSlot = this.customerInfo.availableSlots.find(s => s.displayTime.includes('AM'));
+    } else if (afternoonWords.some(word => lower.includes(word))) {
+      // Select first afternoon slot
+      selectedSlot = this.customerInfo.availableSlots.find(s => s.displayTime.includes('PM'));
+    } else if (lower.includes('either') || lower.includes('any') || lower.includes('work')) {
+      // They're flexible, use first available
+      selectedSlot = this.customerInfo.availableSlots[0];
     }
     
-    // Phase 11: Handle questions about timing after booking
-    if (this.customerInfo.readyToSchedule) {
-      if (lower.includes('what time') || lower.includes('at what time')) {
-        return `Your appointment is scheduled for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. Our inspector will call 30 minutes before arriving.`;
-      } else if (lower.includes('sounds good') || lower.includes('yes') || lower.includes('perfect') || 
-          lower.includes('great') || lower.includes('ok')) {
-        return "Excellent! You're all set. We'll send you a confirmation and our inspector will call 30 minutes before arrival. Have a great day!";
-      } else if (lower.includes('email')) {
-        this.questionsAsked.email = true;
-        return "Sure! What email should I send the confirmation to?";
-      } else if (lower.includes('no') || lower.includes('actually') || lower.includes('cancel')) {
-        return "No problem! What would work better for you?";
-      } else if (this.questionsAsked.email && lower.includes('@')) {
-        // They provided an email
-        this.customerInfo.email = userMessage.trim();
-        return "Perfect! I've added that email. You'll receive a calendar invitation shortly. Is there anything else you need?";
-      } else {
-        // Handle other questions
-        return "Is there anything else you'd like to know about the appointment?";
-      }
+    if (selectedSlot) {
+      this.customerInfo.selectedSlot = selectedSlot;
+      this.customerInfo.specificTime = selectedSlot.displayTime;
+      this.customerInfo.readyToSchedule = true;
+      this.discoveryPhase = 'confirmation';
+      return await this.confirmAndBook();
+    } else {
+      // Couldn't match, ask for clarification
+      const availableTimes = this.customerInfo.availableSlots.slice(0, 3).map(s => s.displayTime).join(', ');
+      return `I have ${availableTimes} available. Which specific time works best for you?`;
     }
+  }
+  
+  handleConfirmationResponse(userMessage) {
+    const lower = userMessage.toLowerCase();
     
-    // Fallback
-    return null;
+    if (lower.includes('yes') || lower.includes('sounds good') || lower.includes('perfect') || 
+        lower.includes('great') || lower.includes('ok') || lower.includes('sure')) {
+      return `Excellent! You're all set for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. Our inspector will call you 30 minutes before arriving. Is there anything else you need to know?`;
+    } else if (lower.includes('email')) {
+      return "Sure! What email address should I send the confirmation to?";
+    } else if (lower.includes('@')) {
+      // They provided an email
+      this.customerInfo.email = userMessage.trim();
+      return "Perfect! I've added your email. You'll receive a calendar invitation shortly. Have a great day!";
+    } else if (lower.includes('what time') || lower.includes('when')) {
+      return `Your appointment is scheduled for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. We'll call 30 minutes before arrival.`;
+    } else if (lower.includes('no') || lower.includes('cancel') || lower.includes('different')) {
+      this.discoveryPhase = 'scheduling';
+      this.customerInfo.day = null;
+      this.customerInfo.selectedSlot = null;
+      return "No problem! What day would work better for you?";
+    } else {
+      return "Do you have any questions about the appointment?";
+    }
   }
   
   async confirmAndBook() {
     try {
-      // Try to book the appointment
       let bookingResult = null;
       
       if (isCalendarInitialized() && this.customerInfo.selectedSlot) {
-        console.log('📅 Calendar is ready, attempting to book...');
-        console.log('📅 Selected slot:', this.customerInfo.selectedSlot);
+        console.log('📅 Attempting calendar booking...');
         
         const bookingDate = new Date(this.customerInfo.selectedSlot.startTime);
         
         bookingResult = await autoBookAppointment(
           this.customerInfo.name || this.customerInfo.firstName,
-          this.customerInfo.email || 'pending@halfpriceroof.com', // Placeholder if no email yet
+          this.customerInfo.email || `${this.customerInfo.firstName.toLowerCase()}@customer.halfpriceroof.com`,
           this.customerInfo.phone || '',
           bookingDate,
           {
@@ -455,28 +576,23 @@ class DynamicWebSocketHandler {
             roofAge: this.customerInfo.roofAge,
             insurance: this.customerInfo.insuranceClaim,
             source: 'Phone Call',
-            company: this.config.companyName,
-            specificTime: this.customerInfo.specificTime
+            company: this.config.companyName
           }
         );
         
         if (bookingResult.success) {
-          console.log('✅ Appointment booked successfully!');
-          if (!this.customerInfo.email) {
-            return `Perfect ${this.customerInfo.firstName}! I've got you booked for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. Our inspector will call 30 minutes before arrival. Would you like me to send a confirmation email?`;
-          } else {
-            return `Perfect ${this.customerInfo.firstName}! I've got you booked for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. You'll receive a confirmation at ${this.customerInfo.email}. Our inspector will call 30 minutes before arrival. Sound good?`;
-          }
+          console.log('✅ Calendar booking successful!');
+          return `Perfect ${this.customerInfo.firstName}! I've got you booked for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. You'll receive a confirmation shortly. Our inspector will call 30 minutes before arrival. Sound good?`;
         }
       }
       
       // Fallback if booking fails
-      console.log('📅 Could not auto-book, will handle manually');
-      return `Great ${this.customerInfo.firstName}! I'm putting you down for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. Our scheduling team will call you shortly to confirm. They'll also call 30 minutes before arrival. Sound good?`;
+      console.log('📅 Calendar booking failed or unavailable');
+      return `Great ${this.customerInfo.firstName}! I'm scheduling you for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. Our office will call shortly to confirm. The inspector will also call 30 minutes before arrival. Sound good?`;
       
     } catch (error) {
       console.error('❌ Booking error:', error);
-      return `Perfect ${this.customerInfo.firstName}! I've noted ${this.customerInfo.day} at ${this.customerInfo.specificTime} for your appointment. Our team will call to confirm. Sound good?`;
+      return `I've noted your appointment for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. Our team will call to confirm shortly. Sound good?`;
     }
   }
   
@@ -509,20 +625,16 @@ class DynamicWebSocketHandler {
   
   async handleClose() {
     console.log('🔌 Call ended');
-    console.log('📊 Final Summary:');
-    console.log('  - Name:', this.customerInfo.firstName || 'Not captured');
-    console.log('  - Issue:', this.customerInfo.issue || 'Not captured');
-    console.log('  - Property:', this.customerInfo.propertyType || 'Not captured');
-    console.log('  - Urgency:', this.customerInfo.urgency || 'Not captured');
-    console.log('  - Roof Age:', this.customerInfo.roofAge || 'Not captured');
-    console.log('  - Insurance:', this.customerInfo.insuranceClaim || 'Not captured');
-    console.log('  - Scheduled:', this.customerInfo.day, this.customerInfo.specificTime || 'Not scheduled');
-    console.log('  - Email:', this.customerInfo.email || 'Not captured');
+    console.log(`📊 Call Summary:`);
+    console.log(`  - Valid messages received: ${this.validMessageCount}`);
+    console.log(`  - Customer: ${this.customerInfo.firstName || 'Not captured'}`);
+    console.log(`  - Issue: ${this.customerInfo.issue || 'Not identified'}`);
+    console.log(`  - Scheduled: ${this.customerInfo.day} ${this.customerInfo.specificTime || ''}`);
     
-    // Send webhook with all discovery data
-    if (this.customerInfo.firstName || this.customerInfo.day) {
+    // Send webhook only if we got meaningful information
+    if (this.customerInfo.firstName || this.customerInfo.issue || this.validMessageCount > 2) {
       await sendSchedulingPreference(
-        this.customerInfo.name || this.customerInfo.firstName,
+        this.customerInfo.name || this.customerInfo.firstName || 'Unknown',
         this.customerInfo.email || '',
         this.customerInfo.phone || 'Unknown',
         this.customerInfo.day && this.customerInfo.specificTime ? 
@@ -536,8 +648,7 @@ class DynamicWebSocketHandler {
           roofAge: this.customerInfo.roofAge,
           insuranceClaim: this.customerInfo.insuranceClaim,
           company: this.config.companyName,
-          callDuration: Date.now(),
-          questionsCompleted: Object.values(this.questionsAsked).filter(v => v).length,
+          validMessageCount: this.validMessageCount,
           calendarBooked: this.customerInfo.readyToSchedule
         }
       );
