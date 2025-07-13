@@ -1,4 +1,4 @@
-// src/handlers/DynamicWebSocketHandler.js - FIXED WITH RAPPORT & SCHEDULING
+// src/handlers/DynamicWebSocketHandler.js - FAST & NATURAL WITH OPENAI
 const axios = require('axios');
 const configLoader = require('../services/config/ConfigurationLoader');
 const { 
@@ -15,128 +15,82 @@ class DynamicWebSocketHandler {
     this.companyId = companyId;
     this.config = null;
     
-    // Extract call ID from URL
+    // Extract call ID
     const callIdMatch = req.url.match(/\/call_([a-f0-9]+)/);
     this.callId = callIdMatch ? `call_${callIdMatch[1]}` : `call_${Date.now()}`;
     
     // Connection state
     this.connectionActive = true;
-    this.messageQueue = [];
-    this.processingMessage = false;
+    this.conversationStarted = false;
     
     // Conversation tracking
-    this.greetingSent = false;
-    this.rapportBuilt = false;
-    this.ownershipAsked = false;
-    this.lastResponseTime = 0;
-    this.minimumResponseDelay = 800;
-    
-    // Scheduling state
-    this.schedulingState = {
-      inProgress: false,
+    this.conversationContext = {
+      phase: 'greeting',
+      customerData: {},
+      serviceNeeded: null,
+      isOwner: null,
+      urgency: null,
+      schedulingStarted: false,
       daySelected: null,
-      timeSelected: null,
-      attemptCount: 0
+      timeSelected: null
     };
     
-    // Track connection start time
-    this.connectionStartTime = Date.now();
+    // Conversation history for OpenAI
+    this.conversationHistory = [];
     
-    // Initialize handler
+    // Response timing
+    this.lastResponseTime = 0;
+    this.minimumResponseDelay = 500; // 0.5 seconds
+    
     this.initialize();
   }
   
   async initialize() {
     try {
-      // Load company configuration
       this.config = await configLoader.loadCompanyConfig(this.companyId);
       
       console.log(`🏢 Initialized handler for ${this.config.companyName}`);
-      console.log(`🤖 AI Agent: ${this.config.aiAgent.name} (${this.config.aiAgent.role})`);
+      console.log(`🤖 AI Agent: ${this.config.aiAgent.name}`);
       console.log(`📞 Call ID: ${this.callId}`);
       
-      // Initialize conversation context
-      this.conversationContext = {
-        companyName: this.config.companyName,
-        agentName: this.config.aiAgent.name,
-        agentRole: this.config.aiAgent.role,
-        agentPersonality: this.config.aiAgent.personality,
-        services: this.config.services,
-        businessHours: this.config.businessHours,
-        customerData: {},
-        qualificationAnswers: {},
-        phase: 'greeting',
-        bookingAttempted: false,
-        currentQuestionIndex: -1,
-        waitingForAnswer: false,
-        serviceType: null,
-        propertyType: null,
-        urgency: null,
-        isOwner: null
-      };
+      // Initialize with a focused system prompt
+      this.conversationHistory = [{
+        role: 'system',
+        content: `You are Mike, a friendly roofing specialist at Half Price Roof in Cincinnati.
+
+PERSONALITY: Be warm, conversational, and helpful. Sound like a real person, not a robot.
+
+CRITICAL RULES:
+1. Keep responses SHORT - max 1-2 sentences
+2. Use casual, natural language with contractions
+3. Show empathy and build rapport
+4. Ask ONE thing at a time
+
+CONVERSATION FLOW:
+1. First greeting: "Hey there! This is Mike from Half Price Roof. How's your day going so far?"
+2. Respond warmly to how they're doing, then ask about their roofing needs
+3. Once you understand their need, ask: "Is this for your own home?"
+4. Ask about urgency: "Do you need someone out there ASAP or just planning ahead?"
+5. Offer scheduling: "What day works best for you?"
+6. When they pick a day, ask: "Morning or afternoon?"
+7. Get their first name for the appointment
+8. Confirm the appointment and optionally ask for email
+
+IMPORTANT: Be conversational and natural. If someone says hello multiple times or seems confused, just acknowledge them warmly and move forward.`
+      }];
       
-      // Initialize conversation history with dynamic system prompt
-      this.conversationHistory = [
-        {
-          role: 'system',
-          content: this.generateSystemPrompt()
-        }
-      ];
-      
-      // Setup event handlers
       this.setupEventHandlers();
       
     } catch (error) {
       console.error('❌ Failed to initialize handler:', error);
-      this.ws.send(JSON.stringify({
-        type: 'error',
-        error: 'Failed to load company configuration',
-        message: error.message
-      }));
       this.ws.close(1011, 'Configuration error');
     }
-  }
-  
-  generateSystemPrompt() {
-    return `You are ${this.config.aiAgent.name}, ${this.config.aiAgent.role} at ${this.config.companyName}.
-
-PERSONALITY: ${this.config.aiAgent.personality}
-
-CRITICAL INSTRUCTIONS:
-1. Build rapport first - respond to how they're doing, show empathy
-2. Ask ONE question at a time - NEVER multiple questions
-3. Keep responses short and natural (2-3 sentences max)
-4. Show genuine interest and understanding
-
-CONVERSATION FLOW:
-1. Greet warmly when they speak
-2. Build rapport - ask how they're doing or acknowledge their response
-3. Understand their roofing need
-4. Ask if they're the property owner
-5. Ask 2-3 qualifying questions ONE at a time
-6. Offer to schedule free inspection
-7. When they give a day, confirm it and ask for time preference
-
-IMPORTANT: When scheduling, if they say a day (like Friday), CONFIRM IT and ask what time works best.
-
-COMPANY: ${this.config.companyName}
-SERVICES: ${Object.keys(this.config.services).join(', ')}`;
   }
   
   setupEventHandlers() {
     this.ws.on('message', this.handleMessage.bind(this));
     this.ws.on('close', this.handleClose.bind(this));
     this.ws.on('error', this.handleError.bind(this));
-    this.ws.on('pong', () => {
-      console.log('🏓 Pong received');
-    });
-    
-    // Ping to keep connection alive
-    this.pingInterval = setInterval(() => {
-      if (this.connectionActive && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.ping();
-      }
-    }, 30000);
   }
   
   async handleMessage(data) {
@@ -145,43 +99,16 @@ SERVICES: ${Object.keys(this.config.services).join(', ')}`;
       
       if (parsed.interaction_type === 'response_required') {
         await this.processUserMessage(parsed);
-      } else {
-        this.messageQueue.push(parsed);
-        if (!this.processingMessage) {
-          await this.processMessageQueue();
-        }
       }
     } catch (error) {
-      console.error('❌ Error parsing message:', error);
+      console.error('❌ Error handling message:', error);
     }
-  }
-  
-  async processMessageQueue() {
-    if (this.processingMessage || this.messageQueue.length === 0) return;
-    
-    this.processingMessage = true;
-    
-    while (this.messageQueue.length > 0 && this.connectionActive) {
-      const message = this.messageQueue.shift();
-      
-      try {
-        if (message.type === 'update_config') {
-          await this.handleConfigUpdate(message);
-        } else if (message.type === 'get_availability') {
-          await this.handleAvailabilityRequest(message);
-        }
-      } catch (error) {
-        console.error('❌ Error processing message:', error);
-      }
-    }
-    
-    this.processingMessage = false;
   }
   
   async processUserMessage(parsed) {
     try {
       const userMessage = parsed.transcript[parsed.transcript.length - 1]?.content || "";
-      console.log(`🗣️ [${this.config.companyName}] User: ${userMessage}`);
+      console.log(`🗣️ User: ${userMessage}`);
       
       // Apply minimal delay for natural conversation
       const now = Date.now();
@@ -191,262 +118,171 @@ SERVICES: ${Object.keys(this.config.services).join(', ')}`;
         await new Promise(resolve => setTimeout(resolve, waitTime));
       }
       
-      // Add to conversation history
+      // Add user message to history
       this.conversationHistory.push({ role: 'user', content: userMessage });
       
-      // Extract customer information
-      this.extractCustomerInfo(userMessage);
+      // Generate response using OpenAI
+      const response = await this.generateResponse();
       
-      // Generate and send response
-      let response = await this.generateContextualResponse(userMessage);
-      
-      if (response) {
-        await this.sendResponse(response, parsed.response_id);
-        this.lastResponseTime = Date.now();
-      }
+      // Send response
+      await this.sendResponse(response, parsed.response_id);
+      this.lastResponseTime = Date.now();
       
     } catch (error) {
-      console.error('❌ Error in processUserMessage:', error);
-      await this.sendResponse("I understand. How can I help you with your roofing needs?", parsed.response_id);
+      console.error('❌ Error processing message:', error);
+      await this.sendResponse("Sorry, I didn't catch that. What can I help you with regarding your roof?", parsed.response_id);
     }
   }
   
-  extractCustomerInfo(message) {
-    // Extract email
-    const emailMatch = message.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-    if (emailMatch) {
-      this.conversationContext.customerData.email = emailMatch[0];
-    }
-    
-    // Extract phone
-    const phoneMatch = message.match(/(?:\+?1[-.\s]?)?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})/);
-    if (phoneMatch) {
-      this.conversationContext.customerData.phone = phoneMatch[0];
-    }
-    
-    // Extract name
-    const namePatterns = [
-      /my name is ([A-Z][a-z]+ ?[A-Z]?[a-z]*)/i,
-      /i'm ([A-Z][a-z]+ ?[A-Z]?[a-z]*)/i,
-      /this is ([A-Z][a-z]+ ?[A-Z]?[a-z]*)/i
-    ];
-    
-    for (const pattern of namePatterns) {
-      const match = message.match(pattern);
-      if (match) {
-        this.conversationContext.customerData.name = match[1];
-        break;
-      }
+  async generateResponse() {
+    try {
+      // Add context about current phase
+      const phaseContext = this.getPhaseContext();
+      
+      const messages = [
+        ...this.conversationHistory,
+        {
+          role: 'system',
+          content: phaseContext
+        }
+      ];
+      
+      // Make OpenAI API call with tight parameters for speed
+      const response = await axios.post(
+        'https://api.openai.com/v1/chat/completions',
+        {
+          model: 'gpt-4-turbo-preview', // Faster than regular GPT-4
+          messages: messages.slice(-7), // Only last 7 messages for speed
+          temperature: 0.7,
+          max_tokens: 60, // Short responses
+          presence_penalty: 0.3, // Reduce repetition
+          frequency_penalty: 0.3
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 3000 // 3 second timeout
+        }
+      );
+      
+      const aiResponse = response.data.choices[0].message.content.trim();
+      
+      // Add to conversation history
+      this.conversationHistory.push({ role: 'assistant', content: aiResponse });
+      
+      // Update phase based on response
+      this.updatePhase(aiResponse);
+      
+      return aiResponse;
+      
+    } catch (error) {
+      console.error('OpenAI API error:', error.message);
+      
+      // Fallback responses based on phase
+      return this.getFallbackResponse();
     }
   }
   
-  async generateContextualResponse(userMessage) {
+  getPhaseContext() {
     const phase = this.conversationContext.phase;
-    const lowerMessage = userMessage.toLowerCase();
     
-    // GREETING PHASE
-    if (!this.greetingSent) {
-      this.greetingSent = true;
-      this.conversationContext.phase = 'rapport';
-      return "Hi! This is Mike from Half Price Roof. How are you doing today?";
+    switch(phase) {
+      case 'greeting':
+        if (!this.conversationStarted) {
+          this.conversationStarted = true;
+          return 'Start with: "Hey there! This is Mike from Half Price Roof. How\'s your day going so far?"';
+        }
+        return 'Build rapport by responding warmly to how they\'re doing, then ask what\'s going on with their roof.';
+        
+      case 'discovery':
+        return 'Find out what roofing service they need (repair, replacement, or inspection). Once clear, ask if it\'s their own home.';
+        
+      case 'ownership':
+        return 'You need to know if they own the property. Ask: "Is this for your own home?"';
+        
+      case 'urgency':
+        return 'Find out their timeline. Ask: "Do you need someone out there ASAP or just planning ahead?"';
+        
+      case 'scheduling':
+        if (!this.conversationContext.daySelected) {
+          return 'Offer to schedule. Say something like: "I can get you scheduled for a free inspection. What day works best this week?"';
+        } else if (!this.conversationContext.timeSelected) {
+          return `They chose ${this.conversationContext.daySelected}. Confirm it and ask: "Great! Morning or afternoon work better for you?"`;
+        } else if (!this.conversationContext.customerData.name) {
+          return 'Get their name for the appointment. Ask: "Perfect! Can I get your first name for the appointment?"';
+        } else {
+          return 'Confirm the appointment and optionally ask for their email to send confirmation details.';
+        }
+        
+      default:
+        return 'Have a natural conversation about their roofing needs. Keep it friendly and helpful.';
     }
+  }
+  
+  updatePhase(response) {
+    const lower = response.toLowerCase();
     
-    // RAPPORT BUILDING PHASE
-    if (phase === 'rapport' && !this.rapportBuilt) {
-      this.rapportBuilt = true;
+    // Update phase based on what we asked
+    if (lower.includes("how's your day") || lower.includes("how are you")) {
       this.conversationContext.phase = 'discovery';
-      
-      // Respond appropriately to their greeting
-      if (lowerMessage.includes('good') || lowerMessage.includes('fine') || lowerMessage.includes('ok')) {
-        return "That's great to hear! How can I help you with your roofing needs today?";
-      } else if (lowerMessage.includes('bad') || lowerMessage.includes('not')) {
-        return "I'm sorry to hear that. Well, I'm here to help make at least your roofing situation better. What's going on with your roof?";
-      } else {
-        return "Thanks for taking my call! What can I help you with regarding your roof today?";
+    } else if (lower.includes("what's going on") || lower.includes("help you with")) {
+      this.conversationContext.phase = 'discovery';
+    } else if (lower.includes("your own home") || lower.includes("your property")) {
+      this.conversationContext.phase = 'ownership';
+    } else if (lower.includes("asap") || lower.includes("planning ahead")) {
+      this.conversationContext.phase = 'urgency';
+    } else if (lower.includes("what day") || lower.includes("schedule")) {
+      this.conversationContext.phase = 'scheduling';
+    } else if (lower.includes("morning or afternoon")) {
+      // Extract day from conversation
+      const dayMatch = this.conversationHistory.slice(-4).join(' ').match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\b/i);
+      if (dayMatch) {
+        this.conversationContext.daySelected = dayMatch[0];
+      }
+    } else if (lower.includes("first name") || lower.includes("your name")) {
+      // Extract time preference from recent conversation
+      const timeMatch = this.conversationHistory.slice(-3).join(' ').match(/\b(morning|afternoon|am|pm)\b/i);
+      if (timeMatch) {
+        this.conversationContext.timeSelected = timeMatch[0];
       }
     }
-    
-    // DISCOVERY PHASE - Understanding their need
-    if (phase === 'discovery' && !this.conversationContext.serviceType) {
-      // Check for service keywords
-      if (lowerMessage.includes('replac') || lowerMessage.includes('new roof')) {
-        this.conversationContext.serviceType = 'replacement';
-        this.conversationContext.phase = 'qualification';
-        return "I can definitely help with a roof replacement. Is this for your own property?";
-      } else if (lowerMessage.includes('leak') || lowerMessage.includes('repair')) {
-        this.conversationContext.serviceType = 'repair';
-        this.conversationContext.phase = 'qualification';
-        return "I understand you need a repair. Is this for your own property?";
-      } else if (lowerMessage.includes('inspection') || lowerMessage.includes('check')) {
-        this.conversationContext.serviceType = 'inspection';
-        this.conversationContext.phase = 'qualification';
-        return "A roof inspection is a smart choice. Is this for your own property?";
-      } else {
-        return "What type of roofing service are you looking for today?";
-      }
-    }
-    
-    // QUALIFICATION PHASE
-    if (phase === 'qualification') {
-      // Ask about ownership if not asked
-      if (!this.ownershipAsked) {
-        this.ownershipAsked = true;
-        this.conversationContext.waitingForAnswer = true;
-        this.conversationContext.currentQuestionIndex = -1; // Special index for ownership
-        return null; // Already asked in discovery phase
-      }
-      
-      // Process ownership answer
-      if (this.conversationContext.currentQuestionIndex === -1 && this.conversationContext.waitingForAnswer) {
-        this.conversationContext.isOwner = lowerMessage.includes('yes') || lowerMessage.includes('yeah') || 
-                                          lowerMessage.includes('own') || !lowerMessage.includes('no');
-        this.conversationContext.waitingForAnswer = false;
-        this.conversationContext.currentQuestionIndex = 0;
-        
-        if (!this.conversationContext.isOwner) {
-          return "No problem! Are you authorized to make decisions about roofing work for this property?";
-        } else {
-          // Ask first real qualification question
-          const firstQuestion = this.config.qualificationQuestions[0];
-          this.conversationContext.waitingForAnswer = true;
-          return firstQuestion.question;
-        }
-      }
-      
-      // Handle qualification questions
-      if (this.conversationContext.waitingForAnswer && this.conversationContext.currentQuestionIndex >= 0) {
-        // Store the answer
-        const currentQuestion = this.config.qualificationQuestions[this.conversationContext.currentQuestionIndex];
-        if (currentQuestion) {
-          this.conversationContext.qualificationAnswers[currentQuestion.id] = userMessage;
-          
-          // Special handling for urgency
-          if (currentQuestion.id === 'urgency') {
-            if (lowerMessage.includes('asap') || lowerMessage.includes('emergency') || 
-                lowerMessage.includes('urgent') || lowerMessage.includes('leak')) {
-              this.conversationContext.urgency = 'urgent';
-            }
-          }
-        }
-        
-        // Move to next question
-        this.conversationContext.currentQuestionIndex++;
-        
-        // Check if we have more questions
-        if (this.conversationContext.currentQuestionIndex < this.config.qualificationQuestions.length) {
-          const nextQuestion = this.config.qualificationQuestions[this.conversationContext.currentQuestionIndex];
-          this.conversationContext.waitingForAnswer = true;
-          return nextQuestion.question;
-        } else {
-          // All questions answered, move to scheduling
-          this.conversationContext.phase = 'scheduling';
-          this.conversationContext.waitingForAnswer = false;
-          
-          if (this.conversationContext.urgency === 'urgent') {
-            return "I understand this is urgent. Let me get you scheduled right away for a free inspection. We have availability as soon as tomorrow. What day works best for you?";
-          } else {
-            return "Perfect! Based on what you've told me, I can get you scheduled for a free inspection. What day works best for you this week?";
-          }
-        }
-      }
-    }
-    
-    // SCHEDULING PHASE
-    if (phase === 'scheduling' || this.schedulingState.inProgress) {
-      return await this.handleSchedulingPhase(userMessage);
-    }
-    
-    // Default response
-    return "I can help you with that. What's your main concern with your roof?";
   }
   
-  async handleSchedulingPhase(userMessage) {
-    const lowerMessage = userMessage.toLowerCase();
-    
-    // Check if they mentioned a day
-    const dayMatch = lowerMessage.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\b/i);
-    
-    if (dayMatch && !this.schedulingState.daySelected) {
-      this.schedulingState.daySelected = dayMatch[0];
-      this.schedulingState.inProgress = true;
-      
-      // Capitalize first letter
-      const day = this.schedulingState.daySelected.charAt(0).toUpperCase() + this.schedulingState.daySelected.slice(1);
-      
-      return `Great! I have ${day} available. What time works best for you - morning or afternoon?`;
-    }
-    
-    // Check if they mentioned a time preference
-    if (this.schedulingState.daySelected && !this.schedulingState.timeSelected) {
-      if (lowerMessage.includes('morning') || lowerMessage.includes('am')) {
-        this.schedulingState.timeSelected = 'morning';
-        return `Perfect! I'll schedule you for ${this.schedulingState.daySelected} morning. Our inspector will call you 30 minutes before arrival. What's the best phone number to reach you?`;
-      } else if (lowerMessage.includes('afternoon') || lowerMessage.includes('pm')) {
-        this.schedulingState.timeSelected = 'afternoon';
-        return `Perfect! I'll schedule you for ${this.schedulingState.daySelected} afternoon. Our inspector will call you 30 minutes before arrival. What's the best phone number to reach you?`;
-      } else if (lowerMessage.match(/\d/)) {
-        // They gave a specific time
-        this.schedulingState.timeSelected = userMessage;
-        return `Perfect! I'll schedule you for ${this.schedulingState.daySelected} at ${userMessage}. Our inspector will call you 30 minutes before arrival. What's the best phone number to reach you?`;
-      } else {
-        return "Do you prefer morning or afternoon?";
-      }
-    }
-    
-    // Check if they provided phone number
-    if (this.schedulingState.daySelected && this.schedulingState.timeSelected) {
-      const phoneMatch = userMessage.match(/(?:\+?1[-.\s]?)?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})/);
-      if (phoneMatch) {
-        this.conversationContext.customerData.phone = phoneMatch[0];
-        return `Got it! I have you scheduled for ${this.schedulingState.daySelected} ${this.schedulingState.timeSelected}. Can I get your name for the appointment?`;
-      } else if (this.conversationContext.customerData.name) {
-        return `Excellent ${this.conversationContext.customerData.name}! You're all set for ${this.schedulingState.daySelected} ${this.schedulingState.timeSelected}. We'll send you a confirmation and our inspector will call 30 minutes before arrival. Is there anything else I can help you with?`;
-      }
-    }
-    
-    // Fallback
-    this.schedulingState.attemptCount++;
-    if (this.schedulingState.attemptCount > 3) {
-      return "Let me have our scheduling team reach out to you directly to find a time that works best. What's the best number to reach you?";
-    }
-    
-    return "What day works best for you for a free inspection?";
-  }
-  
-  updateConversationPhase(userMessage, response) {
-    const currentPhase = this.conversationContext.phase;
-    
-    if (currentPhase !== this.conversationContext.phase) {
-      console.log(`📊 Phase transition: ${currentPhase} → ${this.conversationContext.phase}`);
+  getFallbackResponse() {
+    switch(this.conversationContext.phase) {
+      case 'greeting':
+        return "Hey there! This is Mike from Half Price Roof. How's your day going so far?";
+      case 'discovery':
+        return "What's going on with your roof that I can help with?";
+      case 'ownership':
+        return "Is this for your own home?";
+      case 'urgency':
+        return "Do you need someone out there ASAP or just planning ahead?";
+      case 'scheduling':
+        return "What day works best for you this week?";
+      default:
+        return "How can I help you with your roofing needs?";
     }
   }
   
   async sendResponse(content, responseId) {
-    console.log(`🤖 [${this.config.companyName}] ${this.config.aiAgent.name}: ${content}`);
-    
-    this.conversationHistory.push({ role: 'assistant', content });
+    console.log(`🤖 Mike: ${content}`);
     
     if (this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({
         content: content,
         content_complete: true,
         actions: [],
-        response_id: responseId || Date.now(),
-        agent_name: this.config.aiAgent.name,
-        company: this.config.companyName
+        response_id: responseId || Date.now()
       }));
     }
   }
   
   async handleClose() {
     console.log(`🔌 Connection closed for ${this.config?.companyName || this.companyId}`);
-    
     this.connectionActive = false;
-    
-    if (this.pingInterval) {
-      clearInterval(this.pingInterval);
-    }
-    
     await this.saveConversationData();
   }
   
@@ -456,36 +292,38 @@ SERVICES: ${Object.keys(this.config.services).join(', ')}`;
         companyId: this.companyId,
         companyName: this.config?.companyName,
         callId: this.callId,
-        customerData: this.conversationContext.customerData,
-        qualificationAnswers: this.conversationContext.qualificationAnswers,
         phase: this.conversationContext.phase,
-        schedulingComplete: this.schedulingState.daySelected && this.schedulingState.timeSelected,
-        scheduledDay: this.schedulingState.daySelected,
-        scheduledTime: this.schedulingState.timeSelected,
-        isOwner: this.conversationContext.isOwner,
-        duration: Date.now() - this.connectionStartTime,
+        customerData: this.conversationContext.customerData,
+        scheduling: {
+          day: this.conversationContext.daySelected,
+          time: this.conversationContext.timeSelected
+        },
         timestamp: new Date().toISOString()
       };
       
-      if (this.conversationContext.customerData.email) {
+      console.log('💾 Conversation data saved');
+      
+      // Send to webhook if we have scheduling info
+      if (this.conversationContext.daySelected && this.conversationContext.customerData.name) {
+        // Get the caller's phone number from the WebSocket connection or call metadata
+        const callerPhone = this.req.headers['x-caller-phone'] || 'Phone from call';
+        
         await sendSchedulingPreference(
-          this.conversationContext.customerData.name || 'Unknown',
-          this.conversationContext.customerData.email,
-          this.conversationContext.customerData.phone || '',
-          this.schedulingState.daySelected || 'Call ended',
+          this.conversationContext.customerData.name,
+          this.conversationContext.customerData.email || '',
+          callerPhone,
+          `${this.conversationContext.daySelected} ${this.conversationContext.timeSelected || ''}`,
           this.callId,
           conversationData
         );
       }
-      
-      console.log('💾 Conversation data saved');
     } catch (error) {
       console.error('Error saving conversation data:', error);
     }
   }
   
   handleError(error) {
-    console.error(`❌ WebSocket Error for ${this.config?.companyName || this.companyId}:`, error);
+    console.error(`❌ WebSocket Error:`, error);
   }
 }
 
