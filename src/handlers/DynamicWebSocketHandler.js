@@ -1,4 +1,4 @@
-// src/handlers/DynamicWebSocketHandler.js - FAST RESPONSE WITH PROPER BOOKING
+// src/handlers/DynamicWebSocketHandler.js - FIXED TIME SELECTION & BOOKING
 const configLoader = require('../services/config/ConfigurationLoader');
 const { 
   autoBookAppointment, 
@@ -126,13 +126,13 @@ class DynamicWebSocketHandler {
     switch (this.conversationPhase) {
       case 'greeting':
         this.conversationPhase = 'need';
-        if (lower.includes('good') || lower.includes('fine') || lower.includes('ok')) {
-          return "That's great! So what's happening with your roof? Need a repair, replacement, or just want a free inspection?";
+        if (lower.includes('good') || lower.includes('great') || lower.includes('fine') || lower.includes('ok')) {
+          return "That's great to hear! So what's happening with your roof? Need a repair, replacement, or just want a free inspection?";
         } else if (lower.includes('not') || lower.includes('bad')) {
           return "Sorry to hear that. Well, let me help make your day better - what's going on with your roof?";
         } else {
-          // Generic/unclear response like "Pepper"
-          return "I appreciate you taking the time. So what's going on with your roof - any leaks, damage, or just time for a replacement?";
+          // Response to "How are you?" etc
+          return "I'm doing great, thanks for asking! So what can I help you with today - any roofing issues?";
         }
         
       case 'need':
@@ -153,7 +153,7 @@ class DynamicWebSocketHandler {
         }
         
       case 'property':
-        if (lower.includes('home') || lower.includes('house') || lower.includes('yes')) {
+        if (lower.includes('home') || lower.includes('house') || lower.includes('yes') || lower.includes('from my')) {
           this.customerInfo.propertyType = 'residential';
           this.conversationPhase = 'urgency';
           return "Perfect. How soon do you need someone out there - is this urgent?";
@@ -166,7 +166,7 @@ class DynamicWebSocketHandler {
         }
         
       case 'urgency':
-        if (lower.includes('asap') || lower.includes('urgent') || lower.includes('soon') || 
+        if (lower.includes('urgent') || lower.includes('asap') || lower.includes('soon') || 
             lower.includes('emergency') || lower.includes('yes')) {
           this.customerInfo.urgency = 'urgent';
           this.conversationPhase = 'age';
@@ -182,17 +182,8 @@ class DynamicWebSocketHandler {
         }
         
       case 'age':
-        // Extract age info
-        if (lower.includes('thirty') || lower.includes('30')) {
-          this.customerInfo.roofAge = '30 years';
-        } else if (lower.includes('twenty') || lower.includes('20')) {
-          this.customerInfo.roofAge = '20 years';
-        } else if (lower.includes('old')) {
-          this.customerInfo.roofAge = 'very old';
-        } else {
-          this.customerInfo.roofAge = userMessage;
-        }
-        
+        // Store whatever they say about age
+        this.customerInfo.roofAge = userMessage;
         this.conversationPhase = 'name';
         return "Thanks! Let me get you on the schedule. What's your first name?";
         
@@ -238,6 +229,33 @@ class DynamicWebSocketHandler {
         }
         
       case 'scheduling':
+        // Handle questions about time before choosing day
+        if (lower.includes('what time') && !this.customerInfo.day) {
+          this.customerInfo.day = 'Tomorrow'; // Assume tomorrow if asking about time
+          this.conversationPhase = 'time_selection';
+          
+          // Get available slots
+          const targetDate = this.getNextDate('tomorrow');
+          const slots = await getAvailableTimeSlots(targetDate);
+          
+          if (slots.length > 0) {
+            this.customerInfo.availableSlots = slots;
+            this.waitingForTimeSelection = true;
+            
+            // List morning times
+            const morningSlots = slots.filter(s => s.displayTime.includes('AM'));
+            const afternoonSlots = slots.filter(s => s.displayTime.includes('PM') && !s.displayTime.startsWith('12'));
+            
+            if (morningSlots.length && afternoonSlots.length) {
+              return `For tomorrow I have ${morningSlots[0].displayTime} in the morning or ${afternoonSlots[0].displayTime} in the afternoon. Which works better?`;
+            } else {
+              const times = slots.slice(0, 3).map(s => s.displayTime).join(', ');
+              return `Tomorrow I have these times available: ${times}. Which works best?`;
+            }
+          }
+        }
+        
+        // Normal day selection
         const days = ['today', 'tomorrow', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
         const dayFound = days.find(day => lower.includes(day));
         
@@ -272,28 +290,48 @@ class DynamicWebSocketHandler {
         }
         
       case 'time_selection':
-        if (!this.waitingForTimeSelection) return null;
+        if (!this.waitingForTimeSelection || !this.customerInfo.availableSlots.length) return null;
         
         let selectedSlot = null;
         
-        // Check for specific time mentions
-        if (lower.includes('1 pm') || lower.includes('one pm') || lower.includes('1:00')) {
-          selectedSlot = this.customerInfo.availableSlots.find(s => s.displayTime === '1:00 PM');
-        } else if (lower.includes('10 am') || lower.includes('ten am') || lower.includes('10:00')) {
-          selectedSlot = this.customerInfo.availableSlots.find(s => s.displayTime === '10:00 AM');
-        } else if (lower.includes('morning')) {
-          selectedSlot = this.customerInfo.availableSlots.find(s => s.displayTime.includes('AM'));
-        } else if (lower.includes('afternoon')) {
-          selectedSlot = this.customerInfo.availableSlots.find(s => 
-            s.displayTime.includes('PM') && !s.displayTime.startsWith('12')
-          );
-        } else {
-          // Try to match any number mentioned
-          const timeMatch = userMessage.match(/(\d+)/);
-          if (timeMatch) {
-            const hour = timeMatch[1];
+        // ENHANCED TIME MATCHING
+        // Check for "8 AM", "eight AM", "8", "eight", etc.
+        const timePatterns = [
+          { pattern: /\b(8|eight)\s*(am|a\.m\.|o'?clock)?\b/i, hour: 8 },
+          { pattern: /\b(9|nine)\s*(am|a\.m\.|o'?clock)?\b/i, hour: 9 },
+          { pattern: /\b(10|ten)\s*(am|a\.m\.|o'?clock)?\b/i, hour: 10 },
+          { pattern: /\b(11|eleven)\s*(am|a\.m\.|o'?clock)?\b/i, hour: 11 },
+          { pattern: /\b(12|twelve)\s*(pm|p\.m\.|noon)?\b/i, hour: 12 },
+          { pattern: /\b(1|one)\s*(pm|p\.m\.|o'?clock)?\b/i, hour: 13 },
+          { pattern: /\b(2|two)\s*(pm|p\.m\.|o'?clock)?\b/i, hour: 14 },
+          { pattern: /\b(3|three)\s*(pm|p\.m\.|o'?clock)?\b/i, hour: 15 }
+        ];
+        
+        // First, try exact time matching
+        for (const {pattern, hour} of timePatterns) {
+          if (pattern.test(lower)) {
+            // Find slot that matches this hour
+            selectedSlot = this.customerInfo.availableSlots.find(slot => {
+              const slotHour = parseInt(slot.displayTime.split(':')[0]);
+              const slotIsPM = slot.displayTime.includes('PM');
+              const slotHour24 = slotIsPM && slotHour !== 12 ? slotHour + 12 : 
+                               !slotIsPM && slotHour === 12 ? 0 : slotHour;
+              
+              return slotHour24 === (hour < 12 ? hour : hour) || 
+                     (hour >= 13 && slotHour === hour - 12 && slotIsPM);
+            });
+            
+            if (selectedSlot) break;
+          }
+        }
+        
+        // If no exact match, check for morning/afternoon preference
+        if (!selectedSlot) {
+          if (lower.includes('morning') || lower.includes('first')) {
+            selectedSlot = this.customerInfo.availableSlots.find(s => s.displayTime.includes('AM'));
+          } else if (lower.includes('afternoon') || lower.includes('second')) {
             selectedSlot = this.customerInfo.availableSlots.find(s => 
-              s.displayTime.startsWith(hour + ':') || s.displayTime.startsWith(hour + ' ')
+              s.displayTime.includes('PM') && !s.displayTime.startsWith('12')
             );
           }
         }
@@ -304,30 +342,39 @@ class DynamicWebSocketHandler {
           this.waitingForTimeSelection = false;
           this.conversationPhase = 'booking';
           
-          // Book immediately
+          // CRITICAL: Book the appointment NOW
+          console.log(`📅 Booking appointment for ${this.customerInfo.day} at ${this.customerInfo.specificTime}`);
           const booked = await this.bookAppointment();
+          
           if (booked) {
             this.customerInfo.bookingConfirmed = true;
-            return `Perfect ${this.customerInfo.firstName}! You're all set for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. We'll call 30 minutes before we arrive. Any questions?`;
+            return `Perfect ${this.customerInfo.firstName}! You're all set for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. We'll call 30 minutes before we arrive. Sound good?`;
           } else {
-            return `Great! I've got you down for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. Our office will confirm shortly. Sound good?`;
+            // Booking failed but still confirm the time
+            return `Great! I've got you down for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. Our office will confirm this shortly. We'll call 30 minutes before arrival. Sound good?`;
           }
         } else {
-          // Couldn't understand time selection
+          // Still can't understand - be more specific
           const times = this.customerInfo.availableSlots.slice(0, 3).map(s => s.displayTime).join(', ');
           return `I have ${times} available. Which specific time works for you?`;
         }
         
       case 'booking':
-        if (lower.includes('question')) {
-          return "Sure, what would you like to know?";
+        if (lower.includes('sounds good') || lower.includes('yes') || lower.includes('perfect') || 
+            lower.includes('great') || lower.includes('ok')) {
+          return "Excellent! We'll see you then. Have a great rest of your day!";
         } else if (lower.includes('email')) {
           return "What's your email address for the confirmation?";
         } else if (lower.includes('@')) {
           this.customerInfo.email = userMessage;
           return "Perfect! You'll get a confirmation email shortly. Have a great day!";
+        } else if (lower.includes('no') || lower.includes('cancel')) {
+          this.conversationPhase = 'scheduling';
+          this.customerInfo.day = null;
+          this.customerInfo.selectedSlot = null;
+          return "No problem! What day would work better for you?";
         } else {
-          return "Sounds good! We'll see you then. Have a great day!";
+          return "Great! Is there anything else you need to know about the appointment?";
         }
         
       default:
@@ -338,28 +385,37 @@ class DynamicWebSocketHandler {
   async bookAppointment() {
     try {
       if (!isCalendarInitialized() || !this.customerInfo.selectedSlot) {
+        console.log('❌ Cannot book: Calendar not ready or no slot selected');
         return false;
       }
       
       const bookingDate = new Date(this.customerInfo.selectedSlot.startTime);
+      console.log('📅 Attempting to book:', bookingDate.toISOString());
       
       const result = await autoBookAppointment(
         this.customerInfo.name,
-        this.customerInfo.email || `${this.customerInfo.firstName.toLowerCase()}@halfpriceroof.com`,
-        this.customerInfo.phone || '',
+        this.customerInfo.email || `${this.customerInfo.firstName.toLowerCase()}@halfpriceroof-customer.com`,
+        this.customerInfo.phone || '+1234567890', // Default phone if not captured
         bookingDate,
         {
           service: this.customerInfo.issue,
           propertyType: this.customerInfo.propertyType,
           urgency: this.customerInfo.urgency,
           roofAge: this.customerInfo.roofAge,
-          company: this.config.companyName
+          company: this.config.companyName,
+          bookedTime: this.customerInfo.specificTime,
+          bookedDay: this.customerInfo.day
         }
       );
       
+      console.log('📅 Booking result:', result.success ? '✅ SUCCESS' : '❌ FAILED');
+      if (!result.success) {
+        console.log('📅 Booking error:', result.error);
+      }
+      
       return result.success;
     } catch (error) {
-      console.error('❌ Booking error:', error);
+      console.error('❌ Booking exception:', error);
       return false;
     }
   }
@@ -411,6 +467,8 @@ class DynamicWebSocketHandler {
           urgency: this.customerInfo.urgency,
           roofAge: this.customerInfo.roofAge,
           company: this.config.companyName,
+          specificTime: this.customerInfo.specificTime,
+          day: this.customerInfo.day,
           calendarBooked: this.customerInfo.bookingConfirmed
         }
       );
