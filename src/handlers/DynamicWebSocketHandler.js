@@ -45,10 +45,12 @@ class DynamicWebSocketHandler {
     this.hasGreeted = false;
     this.waitingForTimeSelection = false;
     this.waitingForEmail = false;
+    this.waitingForPhone = false;
     this.emailAttempts = 0;
+    this.phoneAttempts = 0;
     
-    // FAST response - only 500ms delay
-    this.responseDelay = 500;
+    // SLOWER response - 1.5 seconds delay to let user finish
+    this.responseDelay = 1500;
     this.pendingResponseTimeout = null;
     
     // Initialize ASAP
@@ -122,12 +124,117 @@ class DynamicWebSocketHandler {
     }));
   }
   
+  async handlePhoneCapture(userMessage) {
+    // Extract phone number
+    const phonePattern = /[\d\s\-\(\)\.]+/g;
+    const matches = userMessage.match(phonePattern);
+    let phone = null;
+    
+    if (matches) {
+      // Combine all numeric sequences
+      const combined = matches.join('');
+      const digits = combined.replace(/\D/g, '');
+      
+      // Check if we have 10 or 11 digits
+      if (digits.length === 10) {
+        phone = digits;
+      } else if (digits.length === 11 && digits.startsWith('1')) {
+        phone = digits.substring(1);
+      } else if (digits.length >= 10) {
+        // Take the last 10 digits
+        phone = digits.substring(digits.length - 10);
+      }
+    }
+    
+    if (phone) {
+      // Format as US phone number
+      this.customerInfo.phone = `+1${phone}`;
+      this.waitingForPhone = false;
+      this.conversationPhase = 'booking';
+      
+      console.log(`📱 Captured phone: ${this.customerInfo.phone}`);
+      
+      // Try to book without email
+      const booked = await this.bookAppointmentWithPhone();
+      
+      if (booked) {
+        this.customerInfo.bookingConfirmed = true;
+        return `Perfect! You're all set for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. We'll call ${this.formatPhoneDisplay(phone)} about 30 minutes before we arrive. Sound good?`;
+      } else {
+        return `Thanks! I've got you down for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. We'll call ${this.formatPhoneDisplay(phone)} to confirm. Sound good?`;
+      }
+    } else {
+      this.phoneAttempts++;
+      
+      if (this.phoneAttempts > 2) {
+        // Give up and just confirm without contact info
+        this.waitingForPhone = false;
+        this.conversationPhase = 'booking';
+        return `No problem, we have your address on file. You're scheduled for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. We'll see you then!`;
+      } else {
+        return "I didn't catch that phone number. Could you repeat it with the area code?";
+      }
+    }
+  }
+  
+  formatPhoneDisplay(phone) {
+    // Format as (XXX) XXX-XXXX
+    return `(${phone.substring(0, 3)}) ${phone.substring(3, 6)}-${phone.substring(6)}`;
+  }
+  
+  async bookAppointmentSimple() {
+    try {
+      if (!isCalendarInitialized() || !this.customerInfo.selectedSlot) {
+        console.log('❌ Cannot book: Missing requirements');
+        return false;
+      }
+      
+      // Create a simple email based on customer name
+      const simpleEmail = `${this.customerInfo.firstName.toLowerCase()}.${this.companyId}@customer.halfpriceroof.com`;
+      
+      const bookingDate = new Date(this.customerInfo.selectedSlot.startTime);
+      console.log('📅 Attempting simple booking:', bookingDate.toISOString());
+      console.log('📧 Using email:', simpleEmail);
+      
+      const result = await autoBookAppointment(
+        this.customerInfo.name,
+        simpleEmail, // Use generated email
+        this.customerInfo.phone || 'TBD',
+        bookingDate,
+        {
+          service: this.customerInfo.issue,
+          propertyType: this.customerInfo.propertyType,
+          urgency: this.customerInfo.urgency,
+          roofAge: this.customerInfo.roofAge,
+          company: this.config.companyName,
+          bookedTime: this.customerInfo.specificTime,
+          bookedDay: this.customerInfo.day
+        }
+      );
+      
+      console.log('📅 Booking result:', result.success ? '✅ SUCCESS' : '❌ FAILED');
+      if (!result.success) {
+        console.log('📅 Booking error:', result.error);
+      }
+      
+      return result.success;
+    } catch (error) {
+      console.error('❌ Booking exception:', error);
+      return false;
+    }
+  }
+  
   async getResponse(userMessage) {
     const lower = userMessage.toLowerCase();
     
     // Check if we're waiting for email
     if (this.waitingForEmail) {
       return this.handleEmailCapture(userMessage);
+    }
+    
+    // Check if we're waiting for phone
+    if (this.waitingForPhone) {
+      return this.handlePhoneCapture(userMessage);
     }
     
     switch (this.conversationPhase) {
@@ -347,11 +454,19 @@ class DynamicWebSocketHandler {
           this.customerInfo.selectedSlot = selectedSlot;
           this.customerInfo.specificTime = selectedSlot.displayTime;
           this.waitingForTimeSelection = false;
+          this.conversationPhase = 'booking';
           
-          // NOW ASK FOR EMAIL BEFORE BOOKING
-          this.conversationPhase = 'email';
-          this.waitingForEmail = true;
-          return `Perfect! ${this.customerInfo.day} at ${this.customerInfo.specificTime} it is. What's the best email to send your confirmation to?`;
+          // CRITICAL: Book the appointment NOW without email
+          console.log(`📅 Booking appointment for ${this.customerInfo.day} at ${this.customerInfo.specificTime}`);
+          const booked = await this.bookAppointmentSimple();
+          
+          if (booked) {
+            this.customerInfo.bookingConfirmed = true;
+            return `Perfect! I've got you scheduled for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. We'll call you 30 minutes before we arrive. Sound good?`;
+          } else {
+            // Booking failed but still confirm the time
+            return `Great! I've got you down for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. Our office will confirm this shortly. We'll call 30 minutes before arrival. Sound good?`;
+          }
         } else {
           // Still can't understand - be more specific
           const times = this.customerInfo.availableSlots.slice(0, 3).map(s => s.displayTime).join(', ');
@@ -363,16 +478,39 @@ class DynamicWebSocketHandler {
         return null;
         
       case 'booking':
-        if (lower.includes('sounds good') || lower.includes('yes') || lower.includes('perfect') || 
-            lower.includes('great') || lower.includes('ok')) {
-          return "Excellent! We'll see you then. Have a great rest of your day!";
+        if (lower.includes('sounds good') || lower.includes('yes') || lower.includes('yep') || 
+            lower.includes('perfect') || lower.includes('great') || lower.includes('ok') || 
+            lower.includes('okay') || lower.includes('sure')) {
+          // Check if they're asking for email/contact after booking
+          this.conversationPhase = 'contact_check';
+          return "Great! Would you like me to send you an email confirmation? If so, what's your email address?";
+        } else if (lower.includes('how long')) {
+          return "The inspection usually takes about 45 minutes to an hour, depending on the size of your roof. Our tech will go over everything with you when they're done.";
+        } else if (lower.includes('cost') || lower.includes('price') || lower.includes('how much')) {
+          return "The inspection is completely free! If we find any issues, we'll give you a detailed quote for repairs or replacement with multiple options.";
         } else if (lower.includes('no') || lower.includes('cancel')) {
           this.conversationPhase = 'scheduling';
           this.customerInfo.day = null;
           this.customerInfo.selectedSlot = null;
           return "No problem! What day would work better for you?";
         } else {
-          return "Great! Is there anything else you need to know about the appointment?";
+          return "Is there anything else you'd like to know about the appointment?";
+        }
+        
+      case 'contact_check':
+        // Handle optional email collection after booking
+        if (lower.includes('@') || lower.includes('yes')) {
+          this.waitingForEmail = true;
+          this.conversationPhase = 'email';
+          if (lower.includes('@')) {
+            return this.handleEmailCapture(userMessage);
+          } else {
+            return "What's your email address?";
+          }
+        } else if (lower.includes('no') || lower.includes('good') || lower.includes('ok')) {
+          return "Perfect! We'll see you tomorrow. Have a great rest of your day!";
+        } else {
+          return "Alright, we're all set! Have a great day!";
         }
         
       default:
@@ -381,11 +519,71 @@ class DynamicWebSocketHandler {
   }
   
   async handleEmailCapture(userMessage) {
+    // Enhanced email parsing to handle spelled-out emails
+    let email = null;
+    
+    // First try standard email pattern
     const emailPattern = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
     const emailMatch = userMessage.match(emailPattern);
     
     if (emailMatch) {
-      this.customerInfo.email = emailMatch[0];
+      email = emailMatch[0];
+    } else {
+      // Try to parse spelled-out email
+      // Replace common spelled-out patterns
+      let processedMessage = userMessage.toLowerCase()
+        .replace(/\s+/g, ' ') // normalize spaces
+        .replace(/\bat\b/g, '@')
+        .replace(/\bdot\b/g, '.')
+        .replace(/\bdot com\b/g, '.com')
+        .replace(/\bdot net\b/g, '.net')
+        .replace(/\bdot org\b/g, '.org')
+        .replace(/\bat gmail\b/g, '@gmail')
+        .replace(/\bat yahoo\b/g, '@yahoo')
+        .replace(/\bat hotmail\b/g, '@hotmail')
+        .replace(/\bc o\b/g, 'co') // "c o" -> "co"
+        .replace(/\s+@\s+/g, '@') // remove spaces around @
+        .replace(/\s+\.\s+/g, '.') // remove spaces around .
+        .replace(/(\w)@/g, '$1@') // ensure no space before @
+        .replace(/@(\w)/g, '@$1') // ensure no space after @
+        .replace(/(\w)\./g, '$1.') // ensure no space before .
+        .replace(/\.(\w)/g, '.$1'); // ensure no space after .
+      
+      // Remove all remaining spaces to create continuous email
+      const words = processedMessage.split(' ');
+      let potentialEmail = '';
+      
+      // Look for patterns that indicate email parts
+      for (let i = 0; i < words.length; i++) {
+        const word = words[i];
+        if (word.includes('@') || word.includes('.com') || word.includes('.net') || word.includes('.org')) {
+          // Found email indicator, build email around it
+          // Take previous word if no @ yet
+          if (!word.includes('@') && i > 0) {
+            potentialEmail = words[i-1] + word;
+          } else {
+            potentialEmail = word;
+          }
+          
+          // Add following words if they look like domain parts
+          if (i < words.length - 1 && !potentialEmail.includes('.com') && !potentialEmail.includes('.net')) {
+            potentialEmail += words[i+1];
+          }
+          break;
+        }
+      }
+      
+      // Clean up the potential email
+      potentialEmail = potentialEmail.replace(/[^a-zA-Z0-9@._-]/g, '');
+      
+      // Validate it looks like an email
+      if (potentialEmail.includes('@') && potentialEmail.includes('.') && potentialEmail.length > 5) {
+        email = potentialEmail;
+      }
+    }
+    
+    if (email) {
+      this.customerInfo.email = email;
       this.waitingForEmail = false;
       this.conversationPhase = 'booking';
       
@@ -405,12 +603,15 @@ class DynamicWebSocketHandler {
       this.emailAttempts++;
       
       if (this.emailAttempts > 2) {
-        // After 3 attempts, proceed without email
+        // After 3 attempts, ask for phone number instead
         this.waitingForEmail = false;
-        this.conversationPhase = 'booking';
-        return `No problem, we'll confirm the details when we call. You're scheduled for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. We'll call 30 minutes before arrival. Sound good?`;
+        this.conversationPhase = 'phone';
+        this.waitingForPhone = true;
+        return `No problem! What's the best phone number to reach you at for confirmation?`;
+      } else if (this.emailAttempts === 2) {
+        return "Could you spell that email one more time? For example: john at gmail dot com";
       } else {
-        return "I need a valid email address for your confirmation. What's your email?";
+        return "I didn't catch that email. Could you repeat it? You can say it like 'john smith at gmail dot com'";
       }
     }
   }
