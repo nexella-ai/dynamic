@@ -1,4 +1,4 @@
-// src/services/calendar/GoogleCalendarService.js - FIXED FOR EMAIL INVITATIONS
+// src/services/calendar/GoogleCalendarService.js - FIXED FOR EMAIL INVITATIONS WITH BETTER TIMEZONE LOGGING
 const { google } = require('googleapis');
 const config = require('../../config/environment');
 
@@ -233,8 +233,24 @@ class GoogleCalendarService {
   async createEvent(eventDetails) {
     try {
       console.log('📅 Creating calendar event:', eventDetails.summary);
-      console.log('🕐 Start time:', eventDetails.startTime);
-      console.log('🕐 End time:', eventDetails.endTime);
+      console.log('🕐 Start time (UTC):', eventDetails.startTime);
+      console.log('🕐 Start time (Arizona):', new Date(eventDetails.startTime).toLocaleString('en-US', { 
+        timeZone: 'America/Phoenix',
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      }));
+      console.log('🕐 End time (UTC):', eventDetails.endTime);
+      console.log('🕐 End time (Arizona):', new Date(eventDetails.endTime).toLocaleString('en-US', { 
+        timeZone: 'America/Phoenix',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      }));
       console.log('📧 Attendee:', eventDetails.attendeeEmail);
 
       // Validate inputs
@@ -383,6 +399,16 @@ Email: ${eventDetails.attendeeEmail}`,
         const createdEvent = response.data;
         console.log('✅ Event created successfully!');
         console.log('📅 Event ID:', createdEvent.id);
+        console.log('📅 Event time (Arizona):', new Date(createdEvent.start.dateTime).toLocaleString('en-US', {
+          timeZone: 'America/Phoenix',
+          weekday: 'long',
+          month: 'long',
+          day: 'numeric',
+          year: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true
+        }));
         
         const meetingLink = createdEvent.hangoutLink || 
                            createdEvent.conferenceData?.entryPoints?.[0]?.uri || '';
