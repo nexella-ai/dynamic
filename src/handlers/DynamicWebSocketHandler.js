@@ -675,6 +675,7 @@ class DynamicWebSocketHandler {
       
       console.log('📅 Attempting to book:', bookingDate.toISOString());
       console.log('📅 Arizona time:', bookingDate.toLocaleString('en-US', { timeZone: 'America/Phoenix' }));
+      console.log('📅 User requested:', this.customerInfo.day, 'at', this.customerInfo.specificTime);
       console.log('📧 Using placeholder email:', placeholderEmail);
       console.log('📱 Customer phone:', this.customerInfo.phone || 'No phone captured');
       
@@ -692,13 +693,16 @@ class DynamicWebSocketHandler {
           bookedTime: this.customerInfo.specificTime,
           bookedDay: this.customerInfo.day,
           callId: this.callId,
-          callerPhone: this.customerInfo.phone // Include original caller phone
+          callerPhone: this.customerInfo.phone,
+          requestedTimeArizona: this.customerInfo.specificTime // Add this for clarity
         }
       );
       
       console.log('📅 Booking result:', result.success ? '✅ SUCCESS' : '❌ FAILED');
       if (!result.success) {
         console.log('📅 Booking error:', result.error);
+      } else {
+        console.log('📅 Event created for:', result.displayTime);
       }
       
       return result.success;
