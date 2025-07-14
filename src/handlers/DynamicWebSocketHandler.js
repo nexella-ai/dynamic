@@ -24,7 +24,7 @@ class DynamicWebSocketHandler {
     this.customerInfo = {
       name: null,
       firstName: null,
-      phone: this.req.headers['x-caller-phone'] || null,
+      phone: this.extractPhoneFromHeaders(req),
       email: null, // Start with null, not empty string
       // Roofing specific info
       propertyType: null,
@@ -39,6 +39,8 @@ class DynamicWebSocketHandler {
       selectedSlot: null,
       bookingConfirmed: false
     };
+    
+    console.log(`📞 Caller phone number: ${this.customerInfo.phone || 'Unknown'}`);
     
     // Conversation state
     this.conversationPhase = 'waiting';
@@ -604,7 +606,7 @@ class DynamicWebSocketHandler {
       const result = await autoBookAppointment(
         this.customerInfo.name,
         placeholderEmail,
-        this.customerInfo.phone || 'TBD',
+        this.customerInfo.phone || 'No phone provided',
         bookingDate,
         {
           service: this.customerInfo.issue,
@@ -614,7 +616,8 @@ class DynamicWebSocketHandler {
           company: this.config.companyName,
           bookedTime: this.customerInfo.specificTime,
           bookedDay: this.customerInfo.day,
-          callId: this.callId
+          callId: this.callId,
+          callerPhone: this.customerInfo.phone // Include original caller phone
         }
       );
       
