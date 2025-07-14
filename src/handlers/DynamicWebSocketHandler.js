@@ -1,4 +1,4 @@
-// src/handlers/DynamicWebSocketHandler.js - FIXED TIME SELECTION & BOOKING
+// src/handlers/DynamicWebSocketHandler.js - FIXED WITH EMAIL COLLECTION
 const configLoader = require('../services/config/ConfigurationLoader');
 const { 
   autoBookAppointment, 
@@ -25,7 +25,7 @@ class DynamicWebSocketHandler {
       name: null,
       firstName: null,
       phone: this.req.headers['x-caller-phone'] || null,
-      email: '',
+      email: null, // Start with null, not empty string
       // Roofing specific info
       propertyType: null,
       roofAge: null,
@@ -44,6 +44,8 @@ class DynamicWebSocketHandler {
     this.conversationPhase = 'waiting';
     this.hasGreeted = false;
     this.waitingForTimeSelection = false;
+    this.waitingForEmail = false;
+    this.emailAttempts = 0;
     
     // FAST response - only 500ms delay
     this.responseDelay = 500;
@@ -122,6 +124,11 @@ class DynamicWebSocketHandler {
   
   async getResponse(userMessage) {
     const lower = userMessage.toLowerCase();
+    
+    // Check if we're waiting for email
+    if (this.waitingForEmail) {
+      return this.handleEmailCapture(userMessage);
+    }
     
     switch (this.conversationPhase) {
       case 'greeting':
@@ -340,34 +347,25 @@ class DynamicWebSocketHandler {
           this.customerInfo.selectedSlot = selectedSlot;
           this.customerInfo.specificTime = selectedSlot.displayTime;
           this.waitingForTimeSelection = false;
-          this.conversationPhase = 'booking';
           
-          // CRITICAL: Book the appointment NOW
-          console.log(`📅 Booking appointment for ${this.customerInfo.day} at ${this.customerInfo.specificTime}`);
-          const booked = await this.bookAppointment();
-          
-          if (booked) {
-            this.customerInfo.bookingConfirmed = true;
-            return `Perfect ${this.customerInfo.firstName}! You're all set for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. We'll call 30 minutes before we arrive. Sound good?`;
-          } else {
-            // Booking failed but still confirm the time
-            return `Great! I've got you down for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. Our office will confirm this shortly. We'll call 30 minutes before arrival. Sound good?`;
-          }
+          // NOW ASK FOR EMAIL BEFORE BOOKING
+          this.conversationPhase = 'email';
+          this.waitingForEmail = true;
+          return `Perfect! ${this.customerInfo.day} at ${this.customerInfo.specificTime} it is. What's the best email to send your confirmation to?`;
         } else {
           // Still can't understand - be more specific
           const times = this.customerInfo.availableSlots.slice(0, 3).map(s => s.displayTime).join(', ');
           return `I have ${times} available. Which specific time works for you?`;
         }
         
+      case 'email':
+        // This is handled by handleEmailCapture
+        return null;
+        
       case 'booking':
         if (lower.includes('sounds good') || lower.includes('yes') || lower.includes('perfect') || 
             lower.includes('great') || lower.includes('ok')) {
           return "Excellent! We'll see you then. Have a great rest of your day!";
-        } else if (lower.includes('email')) {
-          return "What's your email address for the confirmation?";
-        } else if (lower.includes('@')) {
-          this.customerInfo.email = userMessage;
-          return "Perfect! You'll get a confirmation email shortly. Have a great day!";
         } else if (lower.includes('no') || lower.includes('cancel')) {
           this.conversationPhase = 'scheduling';
           this.customerInfo.day = null;
@@ -382,20 +380,59 @@ class DynamicWebSocketHandler {
     }
   }
   
+  async handleEmailCapture(userMessage) {
+    const emailPattern = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
+    const emailMatch = userMessage.match(emailPattern);
+    
+    if (emailMatch) {
+      this.customerInfo.email = emailMatch[0];
+      this.waitingForEmail = false;
+      this.conversationPhase = 'booking';
+      
+      console.log(`📧 Captured email: ${this.customerInfo.email}`);
+      
+      // NOW book the appointment with the real email
+      const booked = await this.bookAppointment();
+      
+      if (booked) {
+        this.customerInfo.bookingConfirmed = true;
+        return `Great! I'm booking you for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. You'll receive a confirmation at ${this.customerInfo.email}. We'll also call 30 minutes before arrival. Sound good?`;
+      } else {
+        // Booking failed but still confirm
+        return `Thanks! I've got you down for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. Our office will send a confirmation to ${this.customerInfo.email} shortly. We'll call 30 minutes before arrival. Sound good?`;
+      }
+    } else {
+      this.emailAttempts++;
+      
+      if (this.emailAttempts > 2) {
+        // After 3 attempts, proceed without email
+        this.waitingForEmail = false;
+        this.conversationPhase = 'booking';
+        return `No problem, we'll confirm the details when we call. You're scheduled for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. We'll call 30 minutes before arrival. Sound good?`;
+      } else {
+        return "I need a valid email address for your confirmation. What's your email?";
+      }
+    }
+  }
+  
   async bookAppointment() {
     try {
-      if (!isCalendarInitialized() || !this.customerInfo.selectedSlot) {
-        console.log('❌ Cannot book: Calendar not ready or no slot selected');
+      if (!isCalendarInitialized() || !this.customerInfo.selectedSlot || !this.customerInfo.email) {
+        console.log('❌ Cannot book: Missing requirements');
+        console.log('  Calendar ready:', isCalendarInitialized());
+        console.log('  Slot selected:', !!this.customerInfo.selectedSlot);
+        console.log('  Email:', this.customerInfo.email);
         return false;
       }
       
       const bookingDate = new Date(this.customerInfo.selectedSlot.startTime);
       console.log('📅 Attempting to book:', bookingDate.toISOString());
+      console.log('📧 Customer email:', this.customerInfo.email);
       
       const result = await autoBookAppointment(
         this.customerInfo.name,
-        this.customerInfo.email || `${this.customerInfo.firstName.toLowerCase()}@halfpriceroof-customer.com`,
-        this.customerInfo.phone || '+1234567890', // Default phone if not captured
+        this.customerInfo.email, // Now using real email
+        this.customerInfo.phone || 'Not provided',
         bookingDate,
         {
           service: this.customerInfo.issue,
@@ -448,6 +485,7 @@ class DynamicWebSocketHandler {
     console.log('🔌 Call ended');
     console.log(`📊 Summary:`);
     console.log(`  - Customer: ${this.customerInfo.firstName}`);
+    console.log(`  - Email: ${this.customerInfo.email || 'Not collected'}`);
     console.log(`  - Issue: ${this.customerInfo.issue}`);
     console.log(`  - Scheduled: ${this.customerInfo.day} at ${this.customerInfo.specificTime}`);
     console.log(`  - Booked: ${this.customerInfo.bookingConfirmed ? '✅' : '❌'}`);
@@ -455,7 +493,7 @@ class DynamicWebSocketHandler {
     if (this.customerInfo.firstName && this.customerInfo.issue) {
       await sendSchedulingPreference(
         this.customerInfo.name,
-        this.customerInfo.email || '',
+        this.customerInfo.email || '', // Now we have real email
         this.customerInfo.phone || 'Unknown',
         this.customerInfo.day && this.customerInfo.specificTime ? 
           `${this.customerInfo.day} at ${this.customerInfo.specificTime}` : 
