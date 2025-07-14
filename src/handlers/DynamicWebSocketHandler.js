@@ -44,10 +44,6 @@ class DynamicWebSocketHandler {
     this.conversationPhase = 'waiting';
     this.hasGreeted = false;
     this.waitingForTimeSelection = false;
-    this.waitingForEmail = false;
-    this.waitingForPhone = false;
-    this.emailAttempts = 0;
-    this.phoneAttempts = 0;
     
     // SLOWER response - 1.5 seconds delay to let user finish
     this.responseDelay = 1500;
@@ -226,16 +222,6 @@ class DynamicWebSocketHandler {
   
   async getResponse(userMessage) {
     const lower = userMessage.toLowerCase();
-    
-    // Check if we're waiting for email
-    if (this.waitingForEmail) {
-      return this.handleEmailCapture(userMessage);
-    }
-    
-    // Check if we're waiting for phone
-    if (this.waitingForPhone) {
-      return this.handlePhoneCapture(userMessage);
-    }
     
     switch (this.conversationPhase) {
       case 'greeting':
@@ -456,13 +442,13 @@ class DynamicWebSocketHandler {
           this.waitingForTimeSelection = false;
           this.conversationPhase = 'booking';
           
-          // CRITICAL: Book the appointment NOW without email
+          // CRITICAL: Book the appointment NOW
           console.log(`📅 Booking appointment for ${this.customerInfo.day} at ${this.customerInfo.specificTime}`);
-          const booked = await this.bookAppointmentSimple();
+          const booked = await this.bookAppointment();
           
           if (booked) {
             this.customerInfo.bookingConfirmed = true;
-            return `Perfect! I've got you scheduled for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. We'll call you 30 minutes before we arrive. Sound good?`;
+            return `Perfect! I've got you booked for ${this.customerInfo.day} at ${this.customerInfo.specificTime} Arizona time. We'll call you 30 minutes before we arrive. Sound good?`;
           } else {
             // Booking failed but still confirm the time
             return `Great! I've got you down for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. Our office will confirm this shortly. We'll call 30 minutes before arrival. Sound good?`;
@@ -480,10 +466,8 @@ class DynamicWebSocketHandler {
       case 'booking':
         if (lower.includes('sounds good') || lower.includes('yes') || lower.includes('yep') || 
             lower.includes('perfect') || lower.includes('great') || lower.includes('ok') || 
-            lower.includes('okay') || lower.includes('sure')) {
-          // Check if they're asking for email/contact after booking
-          this.conversationPhase = 'contact_check';
-          return "Great! Would you like me to send you an email confirmation? If so, what's your email address?";
+            lower.includes('okay') || lower.includes('sure') || lower.includes('thank')) {
+          return "Excellent! We'll see you then. Have a great rest of your day!";
         } else if (lower.includes('how long')) {
           return "The inspection usually takes about 45 minutes to an hour, depending on the size of your roof. Our tech will go over everything with you when they're done.";
         } else if (lower.includes('cost') || lower.includes('price') || lower.includes('how much')) {
@@ -495,22 +479,6 @@ class DynamicWebSocketHandler {
           return "No problem! What day would work better for you?";
         } else {
           return "Is there anything else you'd like to know about the appointment?";
-        }
-        
-      case 'contact_check':
-        // Handle optional email collection after booking
-        if (lower.includes('@') || lower.includes('yes')) {
-          this.waitingForEmail = true;
-          this.conversationPhase = 'email';
-          if (lower.includes('@')) {
-            return this.handleEmailCapture(userMessage);
-          } else {
-            return "What's your email address?";
-          }
-        } else if (lower.includes('no') || lower.includes('good') || lower.includes('ok')) {
-          return "Perfect! We'll see you tomorrow. Have a great rest of your day!";
-        } else {
-          return "Alright, we're all set! Have a great day!";
         }
         
       default:
@@ -618,22 +586,25 @@ class DynamicWebSocketHandler {
   
   async bookAppointment() {
     try {
-      if (!isCalendarInitialized() || !this.customerInfo.selectedSlot || !this.customerInfo.email) {
-        console.log('❌ Cannot book: Missing requirements');
-        console.log('  Calendar ready:', isCalendarInitialized());
-        console.log('  Slot selected:', !!this.customerInfo.selectedSlot);
-        console.log('  Email:', this.customerInfo.email);
+      if (!isCalendarInitialized() || !this.customerInfo.selectedSlot) {
+        console.log('❌ Cannot book: Calendar not ready or no slot selected');
         return false;
       }
       
+      // Use the start time from the selected slot (already in correct timezone)
       const bookingDate = new Date(this.customerInfo.selectedSlot.startTime);
+      
+      // Generate a simple placeholder email
+      const placeholderEmail = `${this.customerInfo.firstName.toLowerCase()}.${this.callId}@halfpriceroof.com`;
+      
       console.log('📅 Attempting to book:', bookingDate.toISOString());
-      console.log('📧 Customer email:', this.customerInfo.email);
+      console.log('📅 Arizona time:', bookingDate.toLocaleString('en-US', { timeZone: 'America/Phoenix' }));
+      console.log('📧 Using placeholder email:', placeholderEmail);
       
       const result = await autoBookAppointment(
         this.customerInfo.name,
-        this.customerInfo.email, // Now using real email
-        this.customerInfo.phone || 'Not provided',
+        placeholderEmail,
+        this.customerInfo.phone || 'TBD',
         bookingDate,
         {
           service: this.customerInfo.issue,
@@ -642,7 +613,8 @@ class DynamicWebSocketHandler {
           roofAge: this.customerInfo.roofAge,
           company: this.config.companyName,
           bookedTime: this.customerInfo.specificTime,
-          bookedDay: this.customerInfo.day
+          bookedDay: this.customerInfo.day,
+          callId: this.callId
         }
       );
       
@@ -686,15 +658,18 @@ class DynamicWebSocketHandler {
     console.log('🔌 Call ended');
     console.log(`📊 Summary:`);
     console.log(`  - Customer: ${this.customerInfo.firstName}`);
-    console.log(`  - Email: ${this.customerInfo.email || 'Not collected'}`);
     console.log(`  - Issue: ${this.customerInfo.issue}`);
     console.log(`  - Scheduled: ${this.customerInfo.day} at ${this.customerInfo.specificTime}`);
     console.log(`  - Booked: ${this.customerInfo.bookingConfirmed ? '✅' : '❌'}`);
     
     if (this.customerInfo.firstName && this.customerInfo.issue) {
+      // Generate placeholder email for webhook
+      const placeholderEmail = this.customerInfo.bookingConfirmed ? 
+        `${this.customerInfo.firstName.toLowerCase()}.${this.callId}@halfpriceroof.com` : '';
+      
       await sendSchedulingPreference(
         this.customerInfo.name,
-        this.customerInfo.email || '', // Now we have real email
+        placeholderEmail, // Use placeholder email for successful bookings
         this.customerInfo.phone || 'Unknown',
         this.customerInfo.day && this.customerInfo.specificTime ? 
           `${this.customerInfo.day} at ${this.customerInfo.specificTime}` : 
