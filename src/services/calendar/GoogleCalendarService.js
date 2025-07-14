@@ -1,4 +1,4 @@
-// src/services/calendar/GoogleCalendarService.js - FIXED FOR EMAIL INVITATIONS WITH BETTER TIMEZONE LOGGING
+// src/services/calendar/GoogleCalendarService.js - FIXED FOR MST/ARIZONA TIME ONLY
 const { google } = require('googleapis');
 const config = require('../../config/environment');
 
@@ -13,8 +13,8 @@ class GoogleCalendarService {
     
     // Business hours in Arizona
     this.businessHours = {
-      start: 8,   // 8 AM
-      end: 16,    // 4 PM
+      start: 8,   // 8 AM MST
+      end: 16,    // 4 PM MST
       days: [1, 2, 3, 4, 5], // Monday to Friday
       availableHours: [8, 9, 10, 11, 13, 14, 15] // Skip noon for lunch
     };
@@ -61,7 +61,6 @@ class GoogleCalendarService {
         privateKey = privateKey.replace(/\\n/g, '\n');
       }
       
-      // Check if we should use impersonation
       const useImpersonation = config.GOOGLE_IMPERSONATE_EMAIL || config.GOOGLE_SUBJECT_EMAIL;
       
       if (useImpersonation) {
@@ -88,7 +87,6 @@ class GoogleCalendarService {
         ]
       };
       
-      // Add subject for domain-wide delegation if configured
       if (useImpersonation) {
         authConfig.subject = config.GOOGLE_IMPERSONATE_EMAIL || config.GOOGLE_SUBJECT_EMAIL;
       }
@@ -135,27 +133,34 @@ class GoogleCalendarService {
       }
 
       // Check if it's in the past
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      if (targetDate < today) {
+      const now = new Date();
+      const todayInArizona = new Date(now.toLocaleString("en-US", {timeZone: this.timezone}));
+      const targetInArizona = new Date(targetDate.toLocaleString("en-US", {timeZone: this.timezone}));
+      
+      if (targetInArizona < todayInArizona) {
         console.log('📅 Date is in the past');
         return [];
       }
 
-      // Get start and end of day
-      const startOfDay = new Date(targetDate);
-      startOfDay.setHours(0, 0, 0, 0);
+      // Create date range in Arizona time
+      const startOfDayAZ = new Date(targetDate);
+      startOfDayAZ.setHours(0, 0, 0, 0);
       
-      const endOfDay = new Date(targetDate);
-      endOfDay.setHours(23, 59, 59, 999);
+      const endOfDayAZ = new Date(targetDate);
+      endOfDayAZ.setHours(23, 59, 59, 999);
+
+      // Convert to ISO strings for API call
+      const timeMin = new Date(startOfDayAZ.toLocaleString("en-US", {timeZone: this.timezone})).toISOString();
+      const timeMax = new Date(endOfDayAZ.toLocaleString("en-US", {timeZone: this.timezone})).toISOString();
 
       // Get existing events
       const response = await this.calendar.events.list({
         calendarId: this.calendarId,
-        timeMin: startOfDay.toISOString(),
-        timeMax: endOfDay.toISOString(),
+        timeMin: timeMin,
+        timeMax: timeMax,
         singleEvents: true,
-        orderBy: 'startTime'
+        orderBy: 'startTime',
+        timeZone: this.timezone
       });
 
       const existingEvents = response.data.items || [];
@@ -163,18 +168,20 @@ class GoogleCalendarService {
 
       // Generate available slots
       const availableSlots = [];
-      const now = new Date();
+      const currentTimeAZ = new Date(now.toLocaleString("en-US", {timeZone: this.timezone}));
       
       for (const hour of this.businessHours.availableHours) {
+        // Create slot time in Arizona timezone
         const slotStart = new Date(targetDate);
         slotStart.setHours(hour, 0, 0, 0);
         
         const slotEnd = new Date(targetDate);
         slotEnd.setHours(hour + 1, 0, 0, 0);
         
-        // Skip if in the past
-        if (slotStart <= now) {
-          console.log(`⏰ Skipping past time: ${hour}:00`);
+        // Skip if in the past (comparing in Arizona time)
+        const slotStartAZ = new Date(slotStart.toLocaleString("en-US", {timeZone: this.timezone}));
+        if (slotStartAZ <= currentTimeAZ) {
+          console.log(`⏰ Skipping past time: ${hour}:00 MST`);
           continue;
         }
         
@@ -190,11 +197,17 @@ class GoogleCalendarService {
           availableSlots.push({
             startTime: slotStart.toISOString(),
             endTime: slotEnd.toISOString(),
-            displayTime: `${hour > 12 ? hour - 12 : hour}:00 ${hour >= 12 ? 'PM' : 'AM'}`
+            displayTime: `${hour > 12 ? hour - 12 : hour}:00 ${hour >= 12 ? 'PM' : 'AM'}`,
+            arizonaTime: slotStart.toLocaleString('en-US', {
+              timeZone: this.timezone,
+              hour: 'numeric',
+              minute: '2-digit',
+              hour12: true
+            })
           });
-          console.log(`✅ Available slot: ${hour}:00`);
+          console.log(`✅ Available slot: ${hour}:00 MST (${availableSlots[availableSlots.length - 1].arizonaTime})`);
         } else {
-          console.log(`❌ Slot conflict at ${hour}:00`);
+          console.log(`❌ Slot conflict at ${hour}:00 MST`);
         }
       }
 
@@ -215,7 +228,8 @@ class GoogleCalendarService {
         calendarId: this.calendarId,
         timeMin: startTime,
         timeMax: endTime,
-        singleEvents: true
+        singleEvents: true,
+        timeZone: this.timezone
       });
 
       const events = response.data.items || [];
@@ -226,27 +240,25 @@ class GoogleCalendarService {
 
     } catch (error) {
       console.error('❌ Error checking slot availability:', error.message);
-      return true; // Assume available if can't check
+      return true;
     }
   }
 
   async createEvent(eventDetails) {
     try {
       console.log('📅 Creating calendar event:', eventDetails.summary);
-      console.log('🕐 Start time (UTC):', eventDetails.startTime);
-      console.log('🕐 Start time (Arizona):', new Date(eventDetails.startTime).toLocaleString('en-US', { 
-        timeZone: 'America/Phoenix',
+      
+      // CRITICAL: Convert the provided time to ensure it's treated as Arizona time
+      const startDate = new Date(eventDetails.startTime);
+      const endDate = new Date(eventDetails.endTime);
+      
+      console.log('🕐 Requested start time:', startDate.toString());
+      console.log('🕐 Start time (Arizona):', startDate.toLocaleString('en-US', { 
+        timeZone: this.timezone,
         weekday: 'long',
         year: 'numeric',
         month: 'long',
         day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true
-      }));
-      console.log('🕐 End time (UTC):', eventDetails.endTime);
-      console.log('🕐 End time (Arizona):', new Date(eventDetails.endTime).toLocaleString('en-US', { 
-        timeZone: 'America/Phoenix',
         hour: 'numeric',
         minute: '2-digit',
         hour12: true
@@ -268,10 +280,20 @@ class GoogleCalendarService {
         };
       }
 
-      // Create the event with a workaround for email invitations
+      // Create the event with Arizona timezone specified
       const event = {
         summary: eventDetails.summary || 'Nexella AI Consultation Call',
         description: `${eventDetails.description || 'Discovery call scheduled via Nexella AI'}
+
+APPOINTMENT TIME: ${startDate.toLocaleString('en-US', { 
+  timeZone: this.timezone,
+  weekday: 'long',
+  month: 'long',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+  hour12: true
+})} MST
 
 CUSTOMER PHONE: ${eventDetails.attendeePhone || 'No phone provided'}
 Customer Name: ${eventDetails.attendeeName || 'Not provided'}
@@ -279,13 +301,12 @@ Email: ${eventDetails.attendeeEmail}`,
         location: eventDetails.attendeePhone ? `Call: ${eventDetails.attendeePhone}` : 'Phone Call',
         start: {
           dateTime: eventDetails.startTime,
-          timeZone: this.timezone
+          timeZone: this.timezone // CRITICAL: Specify Arizona timezone
         },
         end: {
           dateTime: eventDetails.endTime,
-          timeZone: this.timezone
+          timeZone: this.timezone // CRITICAL: Specify Arizona timezone
         },
-        // Add attendees with additional parameters
         attendees: [
           {
             email: eventDetails.attendeeEmail,
@@ -295,9 +316,6 @@ Email: ${eventDetails.attendeeEmail}`,
             comment: eventDetails.attendeePhone || ''
           }
         ],
-        // Removed conferenceData to avoid "Invalid conference type value" error
-        // If you need Google Meet links, ensure the calendar has conferencing enabled
-        // Enhanced reminders
         reminders: {
           useDefault: false,
           overrides: [
@@ -306,39 +324,36 @@ Email: ${eventDetails.attendeeEmail}`,
             { method: 'popup', minutes: 30 }       // 30 minutes before
           ]
         },
-        // Add guest permissions
         guestsCanModify: false,
         guestsCanInviteOthers: false,
         guestsCanSeeOtherGuests: false
       };
 
-      console.log('📅 Creating event...');
+      console.log('📅 Creating event with timezone:', this.timezone);
       
-      // Try different approaches based on configuration
       let response;
       let eventCreated = false;
       
-      // Approach 1: Try with sendUpdates (if we have domain-wide delegation)
+      // Try with email invitations if we have impersonation
       if (config.GOOGLE_IMPERSONATE_EMAIL || config.GOOGLE_SUBJECT_EMAIL) {
         try {
           response = await this.calendar.events.insert({
             calendarId: this.calendarId,
             resource: event,
             conferenceDataVersion: 1,
-            sendUpdates: 'all', // Send invitations
+            sendUpdates: 'all',
             sendNotifications: true
           });
           eventCreated = true;
-          console.log('✅ Event created with email invitations (using impersonation)');
+          console.log('✅ Event created with email invitations');
         } catch (error) {
           console.log('⚠️ Failed with impersonation, trying alternative approach');
         }
       }
       
-      // Approach 2: Try without attendees first, then update
+      // Alternative approach without email invitations
       if (!eventCreated) {
         try {
-          // First create event without attendees
           const eventWithoutAttendees = { ...event };
           delete eventWithoutAttendees.attendees;
           
@@ -348,9 +363,9 @@ Email: ${eventDetails.attendeeEmail}`,
             conferenceDataVersion: 1
           });
           
-          console.log('✅ Base event created, attempting to add attendee...');
+          console.log('✅ Base event created');
           
-          // Then try to update with attendees
+          // Try to add attendees
           try {
             const updateResponse = await this.calendar.events.patch({
               calendarId: this.calendarId,
@@ -365,42 +380,33 @@ Email: ${eventDetails.attendeeEmail}`,
             console.log('✅ Attendee added with email invitation');
           } catch (updateError) {
             console.log('⚠️ Could not add attendee with email:', updateError.message);
-            console.log('📧 Manual invitation required');
-            
-            // Add note about manual invitation
             response.data.manualInvitationRequired = true;
           }
           
           eventCreated = true;
         } catch (error) {
-          console.error('❌ Failed to create event:', error.message);
-        }
-      }
-      
-      // Approach 3: Create without sending emails as last resort
-      if (!eventCreated) {
-        try {
+          // Last resort - create without sending emails
           response = await this.calendar.events.insert({
             calendarId: this.calendarId,
             resource: event,
             conferenceDataVersion: 1,
-            sendUpdates: 'none' // Don't send emails
+            sendUpdates: 'none'
           });
           
           eventCreated = true;
-          console.log('✅ Event created (without automatic email invitations)');
+          console.log('✅ Event created without automatic email invitations');
           response.data.manualInvitationRequired = true;
-        } catch (error) {
-          throw error;
         }
       }
 
       if (eventCreated && response?.data) {
         const createdEvent = response.data;
+        const eventStartTime = new Date(createdEvent.start.dateTime);
+        
         console.log('✅ Event created successfully!');
         console.log('📅 Event ID:', createdEvent.id);
-        console.log('📅 Event time (Arizona):', new Date(createdEvent.start.dateTime).toLocaleString('en-US', {
-          timeZone: 'America/Phoenix',
+        console.log('📅 Event time (MST):', eventStartTime.toLocaleString('en-US', {
+          timeZone: this.timezone,
           weekday: 'long',
           month: 'long',
           day: 'numeric',
@@ -423,6 +429,16 @@ Email: ${eventDetails.attendeeEmail}`,
           customerName: eventDetails.attendeeName,
           startTime: eventDetails.startTime,
           endTime: eventDetails.endTime,
+          displayTime: eventStartTime.toLocaleString('en-US', {
+            timeZone: this.timezone,
+            weekday: 'long',
+            month: 'long',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true
+          }),
+          timezone: this.timezone,
           manualInvitationRequired: createdEvent.manualInvitationRequired || false
         };
       } else {
@@ -432,7 +448,6 @@ Email: ${eventDetails.attendeeEmail}`,
     } catch (error) {
       console.error('❌ Error creating calendar event:', error.message);
       
-      // Provide specific error messages
       if (error.message?.includes('Domain-Wide Delegation')) {
         return {
           success: false,
