@@ -1,4 +1,4 @@
-// src/handlers/DynamicWebSocketHandler.js - FIXED WITH EMAIL COLLECTION
+// src/handlers/DynamicWebSocketHandler.js - FIXED WITH EMAIL COLLECTION AND PHONE EXTRACTION
 const configLoader = require('../services/config/ConfigurationLoader');
 const { 
   autoBookAppointment, 
@@ -53,6 +53,80 @@ class DynamicWebSocketHandler {
     
     // Initialize ASAP
     this.initialize();
+  }
+  
+  extractPhoneFromHeaders(req) {
+    // Try multiple sources to get the phone number
+    
+    // 1. Check Retell-specific headers
+    const retellPhone = req.headers['x-retell-phone-number'] || 
+                       req.headers['x-retell-caller-number'] ||
+                       req.headers['x-retell-from-number'];
+    if (retellPhone) {
+      console.log('📱 Found phone in Retell headers:', retellPhone);
+      return retellPhone;
+    }
+    
+    // 2. Check generic phone headers
+    const genericPhone = req.headers['x-customer-phone'] || 
+                        req.headers['x-phone-number'] ||
+                        req.headers['x-caller-id'] ||
+                        req.headers['x-from-number'] ||
+                        req.headers['from'];
+    if (genericPhone) {
+      console.log('📱 Found phone in generic headers:', genericPhone);
+      return genericPhone;
+    }
+    
+    // 3. Try to extract from URL parameters
+    try {
+      const url = new URL(req.url, `http://${req.headers.host}`);
+      const phoneParam = url.searchParams.get('phone') || 
+                        url.searchParams.get('caller') ||
+                        url.searchParams.get('from_number') ||
+                        url.searchParams.get('customer_phone');
+      if (phoneParam) {
+        console.log('📱 Found phone in URL params:', phoneParam);
+        return decodeURIComponent(phoneParam);
+      }
+    } catch (error) {
+      // URL parsing failed, continue
+    }
+    
+    // 4. Check if phone is embedded in the call ID or URL path
+    const urlMatch = req.url.match(/phone[_-]?([+]?1?[0-9]{10,})/i);
+    if (urlMatch) {
+      console.log('📱 Found phone in URL path:', urlMatch[1]);
+      return urlMatch[1];
+    }
+    
+    // 5. Check authorization or custom headers that might contain metadata
+    const authHeader = req.headers['authorization'];
+    if (authHeader) {
+      try {
+        // If using JWT or similar, phone might be in the token
+        const token = authHeader.replace('Bearer ', '');
+        const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+        if (payload.phone || payload.customer_phone) {
+          console.log('📱 Found phone in auth token:', payload.phone || payload.customer_phone);
+          return payload.phone || payload.customer_phone;
+        }
+      } catch (e) {
+        // Token parsing failed, continue
+      }
+    }
+    
+    // 6. Check for Twilio-style headers
+    const twilioPhone = req.headers['x-twilio-from'] || 
+                       req.headers['x-twilio-caller'];
+    if (twilioPhone) {
+      console.log('📱 Found phone in Twilio headers:', twilioPhone);
+      return twilioPhone;
+    }
+    
+    console.log('📱 No phone number found in headers or URL');
+    console.log('Available headers:', Object.keys(req.headers));
+    return null;
   }
   
   async initialize() {
@@ -602,6 +676,7 @@ class DynamicWebSocketHandler {
       console.log('📅 Attempting to book:', bookingDate.toISOString());
       console.log('📅 Arizona time:', bookingDate.toLocaleString('en-US', { timeZone: 'America/Phoenix' }));
       console.log('📧 Using placeholder email:', placeholderEmail);
+      console.log('📱 Customer phone:', this.customerInfo.phone || 'No phone captured');
       
       const result = await autoBookAppointment(
         this.customerInfo.name,
@@ -661,6 +736,7 @@ class DynamicWebSocketHandler {
     console.log('🔌 Call ended');
     console.log(`📊 Summary:`);
     console.log(`  - Customer: ${this.customerInfo.firstName}`);
+    console.log(`  - Phone: ${this.customerInfo.phone || 'Not captured'}`);
     console.log(`  - Issue: ${this.customerInfo.issue}`);
     console.log(`  - Scheduled: ${this.customerInfo.day} at ${this.customerInfo.specificTime}`);
     console.log(`  - Booked: ${this.customerInfo.bookingConfirmed ? '✅' : '❌'}`);
@@ -686,7 +762,8 @@ class DynamicWebSocketHandler {
           company: this.config.companyName,
           specificTime: this.customerInfo.specificTime,
           day: this.customerInfo.day,
-          calendarBooked: this.customerInfo.bookingConfirmed
+          calendarBooked: this.customerInfo.bookingConfirmed,
+          callerPhone: this.customerInfo.phone // Include the phone in webhook data
         }
       );
     }
