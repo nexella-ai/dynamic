@@ -1,4 +1,4 @@
-// src/handlers/DynamicWebSocketHandler.js - FIXED WITH EMAIL COLLECTION AND PHONE EXTRACTION
+// src/handlers/DynamicWebSocketHandler.js - FIXED WITH PROPER TIMEZONE HANDLING
 const configLoader = require('../services/config/ConfigurationLoader');
 const { 
   autoBookAppointment, 
@@ -25,7 +25,7 @@ class DynamicWebSocketHandler {
       name: null,
       firstName: null,
       phone: this.extractPhoneFromHeaders(req),
-      email: null, // Start with null, not empty string
+      email: null,
       // Roofing specific info
       propertyType: null,
       roofAge: null,
@@ -37,7 +37,8 @@ class DynamicWebSocketHandler {
       specificTime: null,
       availableSlots: [],
       selectedSlot: null,
-      bookingConfirmed: false
+      bookingConfirmed: false,
+      bookingDate: null // Store the actual booking date
     };
     
     console.log(`📞 Caller phone number: ${this.customerInfo.phone || 'Unknown'}`);
@@ -47,18 +48,16 @@ class DynamicWebSocketHandler {
     this.hasGreeted = false;
     this.waitingForTimeSelection = false;
     
-    // SLOWER response - 1.5 seconds delay to let user finish
+    // Response delay
     this.responseDelay = 1500;
     this.pendingResponseTimeout = null;
     
-    // Initialize ASAP
+    // Initialize
     this.initialize();
   }
   
   extractPhoneFromHeaders(req) {
     // Try multiple sources to get the phone number
-    
-    // 1. Check Retell-specific headers
     const retellPhone = req.headers['x-retell-phone-number'] || 
                        req.headers['x-retell-caller-number'] ||
                        req.headers['x-retell-from-number'];
@@ -67,7 +66,6 @@ class DynamicWebSocketHandler {
       return retellPhone;
     }
     
-    // 2. Check generic phone headers
     const genericPhone = req.headers['x-customer-phone'] || 
                         req.headers['x-phone-number'] ||
                         req.headers['x-caller-id'] ||
@@ -78,7 +76,6 @@ class DynamicWebSocketHandler {
       return genericPhone;
     }
     
-    // 3. Try to extract from URL parameters
     try {
       const url = new URL(req.url, `http://${req.headers.host}`);
       const phoneParam = url.searchParams.get('phone') || 
@@ -90,38 +87,7 @@ class DynamicWebSocketHandler {
         return decodeURIComponent(phoneParam);
       }
     } catch (error) {
-      // URL parsing failed, continue
-    }
-    
-    // 4. Check if phone is embedded in the call ID or URL path
-    const urlMatch = req.url.match(/phone[_-]?([+]?1?[0-9]{10,})/i);
-    if (urlMatch) {
-      console.log('📱 Found phone in URL path:', urlMatch[1]);
-      return urlMatch[1];
-    }
-    
-    // 5. Check authorization or custom headers that might contain metadata
-    const authHeader = req.headers['authorization'];
-    if (authHeader) {
-      try {
-        // If using JWT or similar, phone might be in the token
-        const token = authHeader.replace('Bearer ', '');
-        const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
-        if (payload.phone || payload.customer_phone) {
-          console.log('📱 Found phone in auth token:', payload.phone || payload.customer_phone);
-          return payload.phone || payload.customer_phone;
-        }
-      } catch (e) {
-        // Token parsing failed, continue
-      }
-    }
-    
-    // 6. Check for Twilio-style headers
-    const twilioPhone = req.headers['x-twilio-from'] || 
-                       req.headers['x-twilio-caller'];
-    if (twilioPhone) {
-      console.log('📱 Found phone in Twilio headers:', twilioPhone);
-      return twilioPhone;
+      // URL parsing failed
     }
     
     console.log('📱 No phone number found in headers or URL');
@@ -131,7 +97,7 @@ class DynamicWebSocketHandler {
   
   async initialize() {
     try {
-      // Load config and init calendar in parallel for speed
+      // Load config and init calendar in parallel
       const [configResult] = await Promise.all([
         configLoader.loadCompanyConfig(this.companyId),
         isCalendarInitialized() ? Promise.resolve() : initializeCalendarService()
@@ -146,12 +112,11 @@ class DynamicWebSocketHandler {
         try {
           const parsed = JSON.parse(data);
           if (parsed.interaction_type === 'response_required') {
-            // IMMEDIATE response for hello
             const userMessage = parsed.transcript[parsed.transcript.length - 1]?.content || "";
             console.log(`🗣️ User: ${userMessage}`);
             
             if (!this.hasGreeted && userMessage.toLowerCase().includes('hello')) {
-              // Respond IMMEDIATELY to hello
+              // Respond immediately to hello
               this.hasGreeted = true;
               this.conversationPhase = 'greeting';
               await this.sendResponse("Hey there! Mike from Half Price Roof. Thanks for calling - how's your day going?", parsed.response_id);
@@ -196,104 +161,9 @@ class DynamicWebSocketHandler {
     }));
   }
   
-  async handlePhoneCapture(userMessage) {
-    // Extract phone number
-    const phonePattern = /[\d\s\-\(\)\.]+/g;
-    const matches = userMessage.match(phonePattern);
-    let phone = null;
-    
-    if (matches) {
-      // Combine all numeric sequences
-      const combined = matches.join('');
-      const digits = combined.replace(/\D/g, '');
-      
-      // Check if we have 10 or 11 digits
-      if (digits.length === 10) {
-        phone = digits;
-      } else if (digits.length === 11 && digits.startsWith('1')) {
-        phone = digits.substring(1);
-      } else if (digits.length >= 10) {
-        // Take the last 10 digits
-        phone = digits.substring(digits.length - 10);
-      }
-    }
-    
-    if (phone) {
-      // Format as US phone number
-      this.customerInfo.phone = `+1${phone}`;
-      this.waitingForPhone = false;
-      this.conversationPhase = 'booking';
-      
-      console.log(`📱 Captured phone: ${this.customerInfo.phone}`);
-      
-      // Try to book without email
-      const booked = await this.bookAppointmentWithPhone();
-      
-      if (booked) {
-        this.customerInfo.bookingConfirmed = true;
-        return `Perfect! You're all set for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. We'll call ${this.formatPhoneDisplay(phone)} about 30 minutes before we arrive. Sound good?`;
-      } else {
-        return `Thanks! I've got you down for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. We'll call ${this.formatPhoneDisplay(phone)} to confirm. Sound good?`;
-      }
-    } else {
-      this.phoneAttempts++;
-      
-      if (this.phoneAttempts > 2) {
-        // Give up and just confirm without contact info
-        this.waitingForPhone = false;
-        this.conversationPhase = 'booking';
-        return `No problem, we have your address on file. You're scheduled for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. We'll see you then!`;
-      } else {
-        return "I didn't catch that phone number. Could you repeat it with the area code?";
-      }
-    }
-  }
-  
   formatPhoneDisplay(phone) {
     // Format as (XXX) XXX-XXXX
     return `(${phone.substring(0, 3)}) ${phone.substring(3, 6)}-${phone.substring(6)}`;
-  }
-  
-  async bookAppointmentSimple() {
-    try {
-      if (!isCalendarInitialized() || !this.customerInfo.selectedSlot) {
-        console.log('❌ Cannot book: Missing requirements');
-        return false;
-      }
-      
-      // Create a simple email based on customer name
-      const simpleEmail = `${this.customerInfo.firstName.toLowerCase()}.${this.companyId}@customer.halfpriceroof.com`;
-      
-      const bookingDate = new Date(this.customerInfo.selectedSlot.startTime);
-      console.log('📅 Attempting simple booking:', bookingDate.toISOString());
-      console.log('📧 Using email:', simpleEmail);
-      
-      const result = await autoBookAppointment(
-        this.customerInfo.name,
-        simpleEmail, // Use generated email
-        this.customerInfo.phone || 'TBD',
-        bookingDate,
-        {
-          service: this.customerInfo.issue,
-          propertyType: this.customerInfo.propertyType,
-          urgency: this.customerInfo.urgency,
-          roofAge: this.customerInfo.roofAge,
-          company: this.config.companyName,
-          bookedTime: this.customerInfo.specificTime,
-          bookedDay: this.customerInfo.day
-        }
-      );
-      
-      console.log('📅 Booking result:', result.success ? '✅ SUCCESS' : '❌ FAILED');
-      if (!result.success) {
-        console.log('📅 Booking error:', result.error);
-      }
-      
-      return result.success;
-    } catch (error) {
-      console.error('❌ Booking exception:', error);
-      return false;
-    }
   }
   
   async getResponse(userMessage) {
@@ -307,7 +177,6 @@ class DynamicWebSocketHandler {
         } else if (lower.includes('not') || lower.includes('bad')) {
           return "Sorry to hear that. Well, let me help make your day better - what's going on with your roof?";
         } else {
-          // Response to "How are you?" etc
           return "I'm doing great, thanks for asking! So what can I help you with today - any roofing issues?";
         }
         
@@ -329,7 +198,7 @@ class DynamicWebSocketHandler {
         }
         
       case 'property':
-        if (lower.includes('home') || lower.includes('house') || lower.includes('yes') || lower.includes('from my')) {
+        if (lower.includes('home') || lower.includes('house') || lower.includes('yes')) {
           this.customerInfo.propertyType = 'residential';
           this.conversationPhase = 'urgency';
           return "Perfect. How soon do you need someone out there - is this urgent?";
@@ -407,18 +276,18 @@ class DynamicWebSocketHandler {
       case 'scheduling':
         // Handle questions about time before choosing day
         if (lower.includes('what time') && !this.customerInfo.day) {
-          this.customerInfo.day = 'Tomorrow'; // Assume tomorrow if asking about time
+          this.customerInfo.day = 'Tomorrow';
           this.conversationPhase = 'time_selection';
           
-          // Get available slots
+          // Get available slots for tomorrow
           const targetDate = this.getNextDate('tomorrow');
           const slots = await getAvailableTimeSlots(targetDate);
           
           if (slots.length > 0) {
             this.customerInfo.availableSlots = slots;
+            this.customerInfo.bookingDate = targetDate; // Store the actual date
             this.waitingForTimeSelection = true;
             
-            // List morning times
             const morningSlots = slots.filter(s => s.displayTime.includes('AM'));
             const afternoonSlots = slots.filter(s => s.displayTime.includes('PM') && !s.displayTime.startsWith('12'));
             
@@ -441,13 +310,15 @@ class DynamicWebSocketHandler {
           
           // Get available slots
           const targetDate = this.getNextDate(dayFound);
+          this.customerInfo.bookingDate = targetDate; // Store the actual date
+          
+          console.log(`📅 Getting slots for ${dayFound}:`, targetDate.toISOString());
           const slots = await getAvailableTimeSlots(targetDate);
           
           if (slots.length > 0) {
             this.customerInfo.availableSlots = slots;
             this.waitingForTimeSelection = true;
             
-            // Offer morning and afternoon options
             const morningSlots = slots.filter(s => s.displayTime.includes('AM'));
             const afternoonSlots = slots.filter(s => s.displayTime.includes('PM') && !s.displayTime.startsWith('12'));
             
@@ -459,6 +330,7 @@ class DynamicWebSocketHandler {
             }
           } else {
             this.customerInfo.day = null;
+            this.customerInfo.bookingDate = null;
             return `I don't have any openings ${dayFound}. What about the next day?`;
           }
         } else {
@@ -470,8 +342,7 @@ class DynamicWebSocketHandler {
         
         let selectedSlot = null;
         
-        // ENHANCED TIME MATCHING
-        // Check for "8 AM", "eight AM", "8", "eight", etc.
+        // Enhanced time matching
         const timePatterns = [
           { pattern: /\b(8|eight)\s*(am|a\.m\.|o'?clock)?\b/i, hour: 8 },
           { pattern: /\b(9|nine)\s*(am|a\.m\.|o'?clock)?\b/i, hour: 9 },
@@ -483,7 +354,7 @@ class DynamicWebSocketHandler {
           { pattern: /\b(3|three)\s*(pm|p\.m\.|o'?clock)?\b/i, hour: 15 }
         ];
         
-        // First, try exact time matching
+        // Try exact time matching
         for (const {pattern, hour} of timePatterns) {
           if (pattern.test(lower)) {
             // Find slot that matches this hour
@@ -493,11 +364,14 @@ class DynamicWebSocketHandler {
               const slotHour24 = slotIsPM && slotHour !== 12 ? slotHour + 12 : 
                                !slotIsPM && slotHour === 12 ? 0 : slotHour;
               
-              return slotHour24 === (hour < 12 ? hour : hour) || 
+              return slotHour24 === hour || 
                      (hour >= 13 && slotHour === hour - 12 && slotIsPM);
             });
             
-            if (selectedSlot) break;
+            if (selectedSlot) {
+              console.log(`✅ Matched time pattern for hour ${hour}, found slot: ${selectedSlot.displayTime}`);
+              break;
+            }
           }
         }
         
@@ -518,7 +392,7 @@ class DynamicWebSocketHandler {
           this.waitingForTimeSelection = false;
           this.conversationPhase = 'booking';
           
-          // CRITICAL: Book the appointment NOW
+          // Book the appointment NOW
           console.log(`📅 Booking appointment for ${this.customerInfo.day} at ${this.customerInfo.specificTime}`);
           const booked = await this.bookAppointment();
           
@@ -526,18 +400,12 @@ class DynamicWebSocketHandler {
             this.customerInfo.bookingConfirmed = true;
             return `Perfect! I've got you booked for ${this.customerInfo.day} at ${this.customerInfo.specificTime} Arizona time. We'll call you 30 minutes before we arrive. Sound good?`;
           } else {
-            // Booking failed but still confirm the time
             return `Great! I've got you down for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. Our office will confirm this shortly. We'll call 30 minutes before arrival. Sound good?`;
           }
         } else {
-          // Still can't understand - be more specific
           const times = this.customerInfo.availableSlots.slice(0, 3).map(s => s.displayTime).join(', ');
           return `I have ${times} available. Which specific time works for you?`;
         }
-        
-      case 'email':
-        // This is handled by handleEmailCapture
-        return null;
         
       case 'booking':
         if (lower.includes('sounds good') || lower.includes('yes') || lower.includes('yep') || 
@@ -552,6 +420,7 @@ class DynamicWebSocketHandler {
           this.conversationPhase = 'scheduling';
           this.customerInfo.day = null;
           this.customerInfo.selectedSlot = null;
+          this.customerInfo.bookingDate = null;
           return "No problem! What day would work better for you?";
         } else {
           return "Is there anything else you'd like to know about the appointment?";
@@ -562,104 +431,6 @@ class DynamicWebSocketHandler {
     }
   }
   
-  async handleEmailCapture(userMessage) {
-    // Enhanced email parsing to handle spelled-out emails
-    let email = null;
-    
-    // First try standard email pattern
-    const emailPattern = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
-    const emailMatch = userMessage.match(emailPattern);
-    
-    if (emailMatch) {
-      email = emailMatch[0];
-    } else {
-      // Try to parse spelled-out email
-      // Replace common spelled-out patterns
-      let processedMessage = userMessage.toLowerCase()
-        .replace(/\s+/g, ' ') // normalize spaces
-        .replace(/\bat\b/g, '@')
-        .replace(/\bdot\b/g, '.')
-        .replace(/\bdot com\b/g, '.com')
-        .replace(/\bdot net\b/g, '.net')
-        .replace(/\bdot org\b/g, '.org')
-        .replace(/\bat gmail\b/g, '@gmail')
-        .replace(/\bat yahoo\b/g, '@yahoo')
-        .replace(/\bat hotmail\b/g, '@hotmail')
-        .replace(/\bc o\b/g, 'co') // "c o" -> "co"
-        .replace(/\s+@\s+/g, '@') // remove spaces around @
-        .replace(/\s+\.\s+/g, '.') // remove spaces around .
-        .replace(/(\w)@/g, '$1@') // ensure no space before @
-        .replace(/@(\w)/g, '@$1') // ensure no space after @
-        .replace(/(\w)\./g, '$1.') // ensure no space before .
-        .replace(/\.(\w)/g, '.$1'); // ensure no space after .
-      
-      // Remove all remaining spaces to create continuous email
-      const words = processedMessage.split(' ');
-      let potentialEmail = '';
-      
-      // Look for patterns that indicate email parts
-      for (let i = 0; i < words.length; i++) {
-        const word = words[i];
-        if (word.includes('@') || word.includes('.com') || word.includes('.net') || word.includes('.org')) {
-          // Found email indicator, build email around it
-          // Take previous word if no @ yet
-          if (!word.includes('@') && i > 0) {
-            potentialEmail = words[i-1] + word;
-          } else {
-            potentialEmail = word;
-          }
-          
-          // Add following words if they look like domain parts
-          if (i < words.length - 1 && !potentialEmail.includes('.com') && !potentialEmail.includes('.net')) {
-            potentialEmail += words[i+1];
-          }
-          break;
-        }
-      }
-      
-      // Clean up the potential email
-      potentialEmail = potentialEmail.replace(/[^a-zA-Z0-9@._-]/g, '');
-      
-      // Validate it looks like an email
-      if (potentialEmail.includes('@') && potentialEmail.includes('.') && potentialEmail.length > 5) {
-        email = potentialEmail;
-      }
-    }
-    
-    if (email) {
-      this.customerInfo.email = email;
-      this.waitingForEmail = false;
-      this.conversationPhase = 'booking';
-      
-      console.log(`📧 Captured email: ${this.customerInfo.email}`);
-      
-      // NOW book the appointment with the real email
-      const booked = await this.bookAppointment();
-      
-      if (booked) {
-        this.customerInfo.bookingConfirmed = true;
-        return `Great! I'm booking you for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. You'll receive a confirmation at ${this.customerInfo.email}. We'll also call 30 minutes before arrival. Sound good?`;
-      } else {
-        // Booking failed but still confirm
-        return `Thanks! I've got you down for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. Our office will send a confirmation to ${this.customerInfo.email} shortly. We'll call 30 minutes before arrival. Sound good?`;
-      }
-    } else {
-      this.emailAttempts++;
-      
-      if (this.emailAttempts > 2) {
-        // After 3 attempts, ask for phone number instead
-        this.waitingForEmail = false;
-        this.conversationPhase = 'phone';
-        this.waitingForPhone = true;
-        return `No problem! What's the best phone number to reach you at for confirmation?`;
-      } else if (this.emailAttempts === 2) {
-        return "Could you spell that email one more time? For example: john at gmail dot com";
-      } else {
-        return "I didn't catch that email. Could you repeat it? You can say it like 'john smith at gmail dot com'";
-      }
-    }
-  }
-  
   async bookAppointment() {
     try {
       if (!isCalendarInitialized() || !this.customerInfo.selectedSlot) {
@@ -667,17 +438,30 @@ class DynamicWebSocketHandler {
         return false;
       }
       
-      // Use the start time from the selected slot (already in correct timezone)
+      // CRITICAL: Use the exact start time from the selected slot
+      // The slot already has the correct UTC time that represents the desired Arizona time
       const bookingDate = new Date(this.customerInfo.selectedSlot.startTime);
       
-      // Generate a simple placeholder email
+      // Generate a placeholder email
       const placeholderEmail = `${this.customerInfo.firstName.toLowerCase()}.${this.callId}@halfpriceroof.com`;
       
-      console.log('📅 Attempting to book:', bookingDate.toISOString());
-      console.log('📅 Arizona time:', bookingDate.toLocaleString('en-US', { timeZone: 'America/Phoenix' }));
-      console.log('📅 User requested:', this.customerInfo.day, 'at', this.customerInfo.specificTime);
-      console.log('📧 Using placeholder email:', placeholderEmail);
-      console.log('📱 Customer phone:', this.customerInfo.phone || 'No phone captured');
+      // Debug logging to verify times
+      console.log('🔍 BOOKING DEBUG:');
+      console.log('  - Selected slot:', this.customerInfo.selectedSlot);
+      console.log('  - Display time:', this.customerInfo.selectedSlot.displayTime);
+      console.log('  - Start time (ISO):', this.customerInfo.selectedSlot.startTime);
+      console.log('  - Booking date:', bookingDate.toString());
+      console.log('  - Arizona time:', bookingDate.toLocaleString('en-US', { 
+        timeZone: 'America/Phoenix',
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      }));
+      console.log('  - Customer requested:', `${this.customerInfo.day} at ${this.customerInfo.specificTime}`);
       
       const result = await autoBookAppointment(
         this.customerInfo.name,
@@ -694,15 +478,20 @@ class DynamicWebSocketHandler {
           bookedDay: this.customerInfo.day,
           callId: this.callId,
           callerPhone: this.customerInfo.phone,
-          requestedTimeArizona: this.customerInfo.specificTime // Add this for clarity
+          requestedTimeArizona: this.customerInfo.specificTime,
+          slotStartTime: this.customerInfo.selectedSlot.startTime // Pass the original slot time
         }
       );
       
       console.log('📅 Booking result:', result.success ? '✅ SUCCESS' : '❌ FAILED');
       if (!result.success) {
         console.log('📅 Booking error:', result.error);
+        console.log('📅 Booking message:', result.message);
       } else {
-        console.log('📅 Event created for:', result.displayTime);
+        console.log('📅 Event created successfully!');
+        console.log('📅 Event ID:', result.eventId);
+        console.log('📅 Display time:', result.displayTime);
+        console.log('📅 Arizona time confirmation:', result.displayTime);
       }
       
       return result.success;
@@ -715,7 +504,10 @@ class DynamicWebSocketHandler {
   getNextDate(dayName) {
     const today = new Date();
     
-    if (dayName === 'today') return today;
+    if (dayName === 'today') {
+      return today;
+    }
+    
     if (dayName === 'tomorrow') {
       const tomorrow = new Date(today);
       tomorrow.setDate(today.getDate() + 1);
@@ -739,10 +531,10 @@ class DynamicWebSocketHandler {
   async handleClose() {
     console.log('🔌 Call ended');
     console.log(`📊 Summary:`);
-    console.log(`  - Customer: ${this.customerInfo.firstName}`);
+    console.log(`  - Customer: ${this.customerInfo.firstName || 'Unknown'}`);
     console.log(`  - Phone: ${this.customerInfo.phone || 'Not captured'}`);
-    console.log(`  - Issue: ${this.customerInfo.issue}`);
-    console.log(`  - Scheduled: ${this.customerInfo.day} at ${this.customerInfo.specificTime}`);
+    console.log(`  - Issue: ${this.customerInfo.issue || 'Not specified'}`);
+    console.log(`  - Scheduled: ${this.customerInfo.day || 'Not scheduled'} at ${this.customerInfo.specificTime || 'No time'}`);
     console.log(`  - Booked: ${this.customerInfo.bookingConfirmed ? '✅' : '❌'}`);
     
     if (this.customerInfo.firstName && this.customerInfo.issue) {
@@ -750,13 +542,17 @@ class DynamicWebSocketHandler {
       const placeholderEmail = this.customerInfo.bookingConfirmed ? 
         `${this.customerInfo.firstName.toLowerCase()}.${this.callId}@halfpriceroof.com` : '';
       
+      // Prepare scheduling info
+      let schedulingInfo = 'Not scheduled';
+      if (this.customerInfo.day && this.customerInfo.specificTime) {
+        schedulingInfo = `${this.customerInfo.day} at ${this.customerInfo.specificTime}`;
+      }
+      
       await sendSchedulingPreference(
-        this.customerInfo.name,
-        placeholderEmail, // Use placeholder email for successful bookings
+        this.customerInfo.name || this.customerInfo.firstName,
+        placeholderEmail,
         this.customerInfo.phone || 'Unknown',
-        this.customerInfo.day && this.customerInfo.specificTime ? 
-          `${this.customerInfo.day} at ${this.customerInfo.specificTime}` : 
-          'Not scheduled',
+        schedulingInfo,
         this.callId,
         {
           service: this.customerInfo.issue,
@@ -767,9 +563,13 @@ class DynamicWebSocketHandler {
           specificTime: this.customerInfo.specificTime,
           day: this.customerInfo.day,
           calendarBooked: this.customerInfo.bookingConfirmed,
-          callerPhone: this.customerInfo.phone // Include the phone in webhook data
+          callerPhone: this.customerInfo.phone,
+          bookingDate: this.customerInfo.bookingDate?.toISOString(),
+          selectedSlotStartTime: this.customerInfo.selectedSlot?.startTime
         }
       );
+      
+      console.log('✅ Webhook sent with scheduling details');
     }
   }
 }
