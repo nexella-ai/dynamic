@@ -274,14 +274,8 @@ class GoogleCalendarService {
             optional: false
           }
         ],
-        conferenceData: {
-          createRequest: {
-            requestId: `nexella_${Date.now()}`,
-            conferenceSolutionKey: {
-              type: 'hangoutsMeet'
-            }
-          }
-        },
+        // Removed conferenceData to avoid "Invalid conference type value" error
+        // If you need Google Meet links, ensure the calendar has conferencing enabled
         // Enhanced reminders
         reminders: {
           useDefault: false,
