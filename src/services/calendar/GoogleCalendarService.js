@@ -255,8 +255,12 @@ class GoogleCalendarService {
       // Create the event with a workaround for email invitations
       const event = {
         summary: eventDetails.summary || 'Nexella AI Consultation Call',
-        description: eventDetails.description || 'Discovery call scheduled via Nexella AI',
-        location: 'Phone Call / Video Conference',
+        description: `${eventDetails.description || 'Discovery call scheduled via Nexella AI'}
+
+CUSTOMER PHONE: ${eventDetails.attendeePhone || 'No phone provided'}
+Customer Name: ${eventDetails.attendeeName || 'Not provided'}
+Email: ${eventDetails.attendeeEmail}`,
+        location: eventDetails.attendeePhone ? `Call: ${eventDetails.attendeePhone}` : 'Phone Call',
         start: {
           dateTime: eventDetails.startTime,
           timeZone: this.timezone
@@ -271,7 +275,8 @@ class GoogleCalendarService {
             email: eventDetails.attendeeEmail,
             displayName: eventDetails.attendeeName || 'Guest',
             responseStatus: 'needsAction',
-            optional: false
+            optional: false,
+            comment: eventDetails.attendeePhone || ''
           }
         ],
         // Removed conferenceData to avoid "Invalid conference type value" error
