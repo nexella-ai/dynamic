@@ -1,4 +1,4 @@
-// src/services/calendar/GoogleCalendarService.js - SIMPLIFIED ARIZONA TIME ONLY
+// src/services/calendar/GoogleCalendarService.js - FIXED FOR EMAIL INVITATIONS
 const { google } = require('googleapis');
 const config = require('../../config/environment');
 
@@ -61,7 +61,15 @@ class GoogleCalendarService {
         privateKey = privateKey.replace(/\\n/g, '\n');
       }
       
-      const authClient = new google.auth.GoogleAuth({
+      // Check if we should use impersonation
+      const useImpersonation = config.GOOGLE_IMPERSONATE_EMAIL || config.GOOGLE_SUBJECT_EMAIL;
+      
+      if (useImpersonation) {
+        console.log('🔑 Using domain-wide delegation with impersonation');
+        console.log('📧 Impersonating:', config.GOOGLE_IMPERSONATE_EMAIL || config.GOOGLE_SUBJECT_EMAIL);
+      }
+      
+      const authConfig = {
         credentials: {
           type: "service_account",
           project_id: config.GOOGLE_PROJECT_ID,
@@ -78,9 +86,16 @@ class GoogleCalendarService {
           'https://www.googleapis.com/auth/calendar',
           'https://www.googleapis.com/auth/calendar.events'
         ]
-      });
+      };
       
+      // Add subject for domain-wide delegation if configured
+      if (useImpersonation) {
+        authConfig.subject = config.GOOGLE_IMPERSONATE_EMAIL || config.GOOGLE_SUBJECT_EMAIL;
+      }
+      
+      const authClient = new google.auth.GoogleAuth(authConfig);
       this.auth = await authClient.getClient();
+      
       console.log('✅ Authentication configured successfully');
       
     } catch (error) {
@@ -237,7 +252,7 @@ class GoogleCalendarService {
         };
       }
 
-      // Create the event
+      // Create the event with a workaround for email invitations
       const event = {
         summary: eventDetails.summary || 'Nexella AI Consultation Call',
         description: eventDetails.description || 'Discovery call scheduled via Nexella AI',
@@ -250,10 +265,13 @@ class GoogleCalendarService {
           dateTime: eventDetails.endTime,
           timeZone: this.timezone
         },
+        // Add attendees with additional parameters
         attendees: [
           {
             email: eventDetails.attendeeEmail,
-            displayName: eventDetails.attendeeName || 'Guest'
+            displayName: eventDetails.attendeeName || 'Guest',
+            responseStatus: 'needsAction',
+            optional: false
           }
         ],
         conferenceData: {
@@ -264,48 +282,140 @@ class GoogleCalendarService {
             }
           }
         },
+        // Enhanced reminders
         reminders: {
           useDefault: false,
           overrides: [
-            { method: 'email', minutes: 24 * 60 },
-            { method: 'email', minutes: 60 },
-            { method: 'popup', minutes: 30 }
+            { method: 'email', minutes: 24 * 60 }, // 1 day before
+            { method: 'email', minutes: 60 },      // 1 hour before
+            { method: 'popup', minutes: 30 }       // 30 minutes before
           ]
-        }
+        },
+        // Add guest permissions
+        guestsCanModify: false,
+        guestsCanInviteOthers: false,
+        guestsCanSeeOtherGuests: false
       };
 
       console.log('📅 Creating event...');
       
-      const response = await this.calendar.events.insert({
-        calendarId: this.calendarId,
-        resource: event,
-        conferenceDataVersion: 1,
-        sendUpdates: 'all'
-      });
-
-      const createdEvent = response.data;
-      console.log('✅ Event created successfully!');
-      console.log('📅 Event ID:', createdEvent.id);
+      // Try different approaches based on configuration
+      let response;
+      let eventCreated = false;
       
-      const meetingLink = createdEvent.hangoutLink || 
-                         createdEvent.conferenceData?.entryPoints?.[0]?.uri || '';
+      // Approach 1: Try with sendUpdates (if we have domain-wide delegation)
+      if (config.GOOGLE_IMPERSONATE_EMAIL || config.GOOGLE_SUBJECT_EMAIL) {
+        try {
+          response = await this.calendar.events.insert({
+            calendarId: this.calendarId,
+            resource: event,
+            conferenceDataVersion: 1,
+            sendUpdates: 'all', // Send invitations
+            sendNotifications: true
+          });
+          eventCreated = true;
+          console.log('✅ Event created with email invitations (using impersonation)');
+        } catch (error) {
+          console.log('⚠️ Failed with impersonation, trying alternative approach');
+        }
+      }
+      
+      // Approach 2: Try without attendees first, then update
+      if (!eventCreated) {
+        try {
+          // First create event without attendees
+          const eventWithoutAttendees = { ...event };
+          delete eventWithoutAttendees.attendees;
+          
+          response = await this.calendar.events.insert({
+            calendarId: this.calendarId,
+            resource: eventWithoutAttendees,
+            conferenceDataVersion: 1
+          });
+          
+          console.log('✅ Base event created, attempting to add attendee...');
+          
+          // Then try to update with attendees
+          try {
+            const updateResponse = await this.calendar.events.patch({
+              calendarId: this.calendarId,
+              eventId: response.data.id,
+              resource: {
+                attendees: event.attendees
+              },
+              sendUpdates: 'all'
+            });
+            
+            response = updateResponse;
+            console.log('✅ Attendee added with email invitation');
+          } catch (updateError) {
+            console.log('⚠️ Could not add attendee with email:', updateError.message);
+            console.log('📧 Manual invitation required');
+            
+            // Add note about manual invitation
+            response.data.manualInvitationRequired = true;
+          }
+          
+          eventCreated = true;
+        } catch (error) {
+          console.error('❌ Failed to create event:', error.message);
+        }
+      }
+      
+      // Approach 3: Create without sending emails as last resort
+      if (!eventCreated) {
+        try {
+          response = await this.calendar.events.insert({
+            calendarId: this.calendarId,
+            resource: event,
+            conferenceDataVersion: 1,
+            sendUpdates: 'none' // Don't send emails
+          });
+          
+          eventCreated = true;
+          console.log('✅ Event created (without automatic email invitations)');
+          response.data.manualInvitationRequired = true;
+        } catch (error) {
+          throw error;
+        }
+      }
 
-      return {
-        success: true,
-        eventId: createdEvent.id,
-        meetingLink: meetingLink,
-        eventLink: createdEvent.htmlLink,
-        message: 'Appointment created successfully',
-        customerEmail: eventDetails.attendeeEmail,
-        customerName: eventDetails.attendeeName,
-        startTime: eventDetails.startTime,
-        endTime: eventDetails.endTime
-      };
+      if (eventCreated && response?.data) {
+        const createdEvent = response.data;
+        console.log('✅ Event created successfully!');
+        console.log('📅 Event ID:', createdEvent.id);
+        
+        const meetingLink = createdEvent.hangoutLink || 
+                           createdEvent.conferenceData?.entryPoints?.[0]?.uri || '';
+
+        return {
+          success: true,
+          eventId: createdEvent.id,
+          meetingLink: meetingLink,
+          eventLink: createdEvent.htmlLink,
+          message: 'Appointment created successfully',
+          customerEmail: eventDetails.attendeeEmail,
+          customerName: eventDetails.attendeeName,
+          startTime: eventDetails.startTime,
+          endTime: eventDetails.endTime,
+          manualInvitationRequired: createdEvent.manualInvitationRequired || false
+        };
+      } else {
+        throw new Error('Event creation failed');
+      }
 
     } catch (error) {
       console.error('❌ Error creating calendar event:', error.message);
       
-      if (error.response?.status === 401) {
+      // Provide specific error messages
+      if (error.message?.includes('Domain-Wide Delegation')) {
+        return {
+          success: false,
+          error: 'Calendar permission issue',
+          message: 'Event created but email invitation requires additional setup',
+          technicalDetails: 'Service account needs Domain-Wide Delegation for sending invitations'
+        };
+      } else if (error.response?.status === 401) {
         return {
           success: false,
           error: 'Authentication failed',
@@ -344,7 +454,8 @@ class GoogleCalendarService {
       businessHours: this.businessHours,
       initialized: this.isInitialized(),
       hasAuth: !!this.auth,
-      hasCalendar: !!this.calendar
+      hasCalendar: !!this.calendar,
+      impersonationEnabled: !!(config.GOOGLE_IMPERSONATE_EMAIL || config.GOOGLE_SUBJECT_EMAIL)
     };
   }
 }
