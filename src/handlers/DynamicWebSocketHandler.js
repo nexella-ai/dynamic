@@ -179,13 +179,24 @@ class DynamicWebSocketHandler {
     
     switch (this.conversationPhase) {
       case 'greeting':
-        this.conversationPhase = 'need';
-        if (lower.includes('good') || lower.includes('great') || lower.includes('fine') || lower.includes('ok')) {
+        // Only move to 'need' phase after we get a real response about their day
+        if (lower.includes('good') || lower.includes('great') || lower.includes('fine') || lower.includes('ok') || 
+            lower.includes('well') || lower.includes('alright') || lower.includes('doing ok')) {
+          this.conversationPhase = 'need';
           return "That's great to hear! So what's happening with your roof? Need a repair, replacement, or just want a free inspection?";
-        } else if (lower.includes('not') || lower.includes('bad')) {
+        } else if (lower.includes('not') || lower.includes('bad') || lower.includes('terrible') || 
+                   lower.includes('been better')) {
+          this.conversationPhase = 'need';
           return "Sorry to hear that. Well, let me help make your day better - what's going on with your roof?";
+        } else if (lower.includes('hello') || lower.includes('hi') || lower.includes('hey')) {
+          // They're just saying hello again, stay in greeting phase
+          return "Hi there! How's your day going so far?";
+        } else if (lower.includes('how are you') || lower.includes('and you')) {
+          // They're asking about us
+          return "I'm doing great, thanks for asking! How about you - how's your day going?";
         } else {
-          return "I'm doing great, thanks for asking! So what can I help you with today - any roofing issues?";
+          // For any other response that doesn't clearly answer the question
+          return "How are you doing today?";
         }
         
       case 'need':
@@ -205,8 +216,12 @@ class DynamicWebSocketHandler {
           this.customerInfo.issue = 'repair';
           this.conversationPhase = 'property';
           return "Roof repair - we can definitely help with that. Is this for a residential or commercial property?";
+        } else if (lower.includes('roof')) {
+          // They mentioned roof but not specific issue
+          return "I can help with that! Are you looking for a repair, replacement, or just a free inspection?";
         } else {
-          return "I can help with repairs, replacements, or free inspections. Which one do you need?";
+          // They haven't mentioned anything roof-related yet
+          return "What's going on with your roof? Are you dealing with any leaks, damage, or just looking for an inspection?";
         }
         
       case 'property':
