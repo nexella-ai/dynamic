@@ -63,40 +63,101 @@ class DynamicWebSocketHandler {
   
   extractPhoneFromHeaders(req) {
     // Try multiple sources to get the phone number
+    
+    // 1. Check Retell-specific headers
     const retellPhone = req.headers['x-retell-phone-number'] || 
                        req.headers['x-retell-caller-number'] ||
-                       req.headers['x-retell-from-number'];
+                       req.headers['x-retell-from-number'] ||
+                       req.headers['x-retell-to-number'] ||
+                       req.headers['x-retell-customer-phone'];
     if (retellPhone) {
       console.log('📱 Found phone in Retell headers:', retellPhone);
       return retellPhone;
     }
     
+    // 2. Check generic phone headers
     const genericPhone = req.headers['x-customer-phone'] || 
                         req.headers['x-phone-number'] ||
                         req.headers['x-caller-id'] ||
                         req.headers['x-from-number'] ||
-                        req.headers['from'];
+                        req.headers['x-to-number'] ||
+                        req.headers['from'] ||
+                        req.headers['to'] ||
+                        req.headers['caller'];
     if (genericPhone) {
       console.log('📱 Found phone in generic headers:', genericPhone);
       return genericPhone;
     }
     
+    // 3. Try to extract from URL parameters
     try {
       const url = new URL(req.url, `http://${req.headers.host}`);
       const phoneParam = url.searchParams.get('phone') || 
                         url.searchParams.get('caller') ||
                         url.searchParams.get('from_number') ||
-                        url.searchParams.get('customer_phone');
+                        url.searchParams.get('to_number') ||
+                        url.searchParams.get('customer_phone') ||
+                        url.searchParams.get('from') ||
+                        url.searchParams.get('to');
       if (phoneParam) {
         console.log('📱 Found phone in URL params:', phoneParam);
         return decodeURIComponent(phoneParam);
       }
     } catch (error) {
-      // URL parsing failed
+      // URL parsing failed, continue
+    }
+    
+    // 4. Check if phone is embedded in the call ID or URL path
+    const urlMatch = req.url.match(/phone[_-]?([+]?1?[0-9]{10,})/i);
+    if (urlMatch) {
+      console.log('📱 Found phone in URL path:', urlMatch[1]);
+      return urlMatch[1];
+    }
+    
+    // 5. Check authorization or custom headers that might contain metadata
+    const authHeader = req.headers['authorization'];
+    if (authHeader) {
+      try {
+        // If using JWT or similar, phone might be in the token
+        const token = authHeader.replace('Bearer ', '');
+        const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+        if (payload.phone || payload.customer_phone || payload.from || payload.to) {
+          const foundPhone = payload.phone || payload.customer_phone || payload.from || payload.to;
+          console.log('📱 Found phone in auth token:', foundPhone);
+          return foundPhone;
+        }
+      } catch (e) {
+        // Token parsing failed, continue
+      }
+    }
+    
+    // 6. Check for Twilio-style headers
+    const twilioPhone = req.headers['x-twilio-from'] || 
+                       req.headers['x-twilio-caller'] ||
+                       req.headers['x-twilio-to'];
+    if (twilioPhone) {
+      console.log('📱 Found phone in Twilio headers:', twilioPhone);
+      return twilioPhone;
+    }
+    
+    // 7. Check all headers for anything that looks like a phone number
+    for (const [key, value] of Object.entries(req.headers)) {
+      if (typeof value === 'string' && value.match(/^\+?1?\d{10}$/)) {
+        console.log(`📱 Found phone-like value in header '${key}':`, value);
+        return value;
+      }
     }
     
     console.log('📱 No phone number found in headers or URL');
     console.log('Available headers:', Object.keys(req.headers));
+    
+    // TEMPORARY: Return a mock phone number for testing
+    // Remove this in production
+    if (process.env.NODE_ENV === 'development') {
+      console.log('📱 Using mock phone number for development');
+      return '+12099387088';
+    }
+    
     return null;
   }
   
@@ -124,7 +185,7 @@ class DynamicWebSocketHandler {
               // Respond immediately to hello
               this.hasGreeted = true;
               this.conversationPhase = 'greeting';
-              await this.sendResponse("Hey there! Mike from Half Price Roof. Thanks for calling - how's your day going?", parsed.response_id);
+              await this.sendResponse("Hey there! Alyssa from Half Price Roof. Thanks for calling - how's your day going?", parsed.response_id);
             } else {
               // Quick delay for other messages
               if (this.pendingResponseTimeout) clearTimeout(this.pendingResponseTimeout);
@@ -367,28 +428,71 @@ class DynamicWebSocketHandler {
         }
         
       case 'phone_number':
+        // Check if they want to use the number they're calling from
+        if ((lower.includes('this') || lower.includes('same')) && 
+            (lower.includes('number') || lower.includes('phone')) && 
+            (lower.includes('calling') || lower.includes('from'))) {
+          // Use the phone number from headers if available
+          if (this.customerInfo.phone) {
+            this.customerInfo.bestPhone = this.customerInfo.phone;
+            this.conversationPhase = 'address';
+            // Extract just the digits for display
+            const displayPhone = this.customerInfo.phone.replace(/\D/g, '').slice(-10);
+            return `Perfect, I'll use ${this.formatPhoneDisplay(displayPhone)}. And what's the address of the property we'll be looking at?`;
+          } else {
+            // We don't have their phone number from headers
+            // In this case, we need to ask them to provide it
+            return "I need to get your phone number for our records. Could you please tell me the 10-digit number?";
+          }
+        }
+        
+        // Convert spelled-out numbers to digits
+        let processedMessage = userMessage.toLowerCase()
+          .replace(/\bzero\b/g, '0')
+          .replace(/\bone\b/g, '1')
+          .replace(/\btwo\b/g, '2')
+          .replace(/\bthree\b/g, '3')
+          .replace(/\bfour\b/g, '4')
+          .replace(/\bfive\b/g, '5')
+          .replace(/\bsix\b/g, '6')
+          .replace(/\bseven\b/g, '7')
+          .replace(/\beight\b/g, '8')
+          .replace(/\bnine\b/g, '9')
+          .replace(/\bten\b/g, '10')
+          .replace(/\bo\b/g, '0'); // Handle "o" as zero
+        
+        // Also remove common separators in spoken numbers
+        processedMessage = processedMessage.replace(/\s+/g, ''); // Remove all spaces
+        
         // Extract phone number
         const phonePattern = /[\d\s\-\(\)\.]+/g;
-        const matches = userMessage.match(phonePattern);
+        const matches = processedMessage.match(phonePattern);
         let phone = null;
         
         if (matches) {
           const combined = matches.join('');
           const digits = combined.replace(/\D/g, '');
           
+          console.log(`📱 Extracted digits: ${digits} (length: ${digits.length})`);
+          
           if (digits.length === 10) {
             phone = digits;
           } else if (digits.length === 11 && digits.startsWith('1')) {
             phone = digits.substring(1);
+          } else if (digits.length > 10) {
+            // Try to extract the last 10 digits
+            phone = digits.slice(-10);
           }
         }
         
-        if (phone) {
+        if (phone && phone.length === 10) {
           this.customerInfo.bestPhone = `+1${phone}`;
           this.conversationPhase = 'address';
+          console.log(`✅ Captured phone: ${this.customerInfo.bestPhone}`);
           return `Got it - ${this.formatPhoneDisplay(phone)}. And what's the address of the property we'll be looking at?`;
         } else {
-          return "I didn't catch that phone number. Could you give me the 10-digit number including area code?";
+          // If we still can't parse it, be more specific
+          return "I'm having trouble catching that. Could you please say your 10-digit phone number slowly, starting with the area code?";
         }
         
       case 'address':
