@@ -240,9 +240,15 @@ class DynamicWebSocketHandler {
     
     switch (this.conversationPhase) {
       case 'greeting':
+        // Check if they're asking about us
+        if (lower.includes('how are you') || lower.includes('and you') || lower.includes('are you')) {
+          this.conversationPhase = 'need';
+          return "I'm doing great, thanks for asking! So what's happening with your roof? Need a repair, replacement, or just want a free inspection?";
+        } 
         // Only move to 'need' phase after we get a real response about their day
-        if (lower.includes('good') || lower.includes('great') || lower.includes('fine') || lower.includes('ok') || 
-            lower.includes('well') || lower.includes('alright') || lower.includes('doing ok')) {
+        else if (lower.includes('good') || lower.includes('great') || lower.includes('fine') || lower.includes('ok') || 
+            lower.includes('well') || lower.includes('alright') || lower.includes('doing ok') || 
+            lower.includes('going good') || lower.includes('going great') || lower.includes('doing good')) {
           this.conversationPhase = 'need';
           return "That's great to hear! So what's happening with your roof? Need a repair, replacement, or just want a free inspection?";
         } else if (lower.includes('not') || lower.includes('bad') || lower.includes('terrible') || 
@@ -252,11 +258,16 @@ class DynamicWebSocketHandler {
         } else if (lower.includes('hello') || lower.includes('hi') || lower.includes('hey')) {
           // They're just saying hello again, stay in greeting phase
           return "Hi there! How's your day going so far?";
-        } else if (lower.includes('how are you') || lower.includes('and you')) {
-          // They're asking about us
-          return "I'm doing great, thanks for asking! How about you - how's your day going?";
+        } else if (lower.includes('thanks for asking')) {
+          // They said thanks for asking - move on
+          this.conversationPhase = 'need';
+          return "Of course! So what's happening with your roof? Need a repair, replacement, or just want a free inspection?";
         } else {
-          // For any other response that doesn't clearly answer the question
+          // For responses we don't recognize, still move forward after 2 exchanges
+          if (this.messageCount > 2) {
+            this.conversationPhase = 'need';
+            return "So what's happening with your roof? Need a repair, replacement, or just want a free inspection?";
+          }
           return "How are you doing today?";
         }
         
