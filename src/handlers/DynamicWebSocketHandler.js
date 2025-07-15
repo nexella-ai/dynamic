@@ -1,4 +1,4 @@
-// src/handlers/DynamicWebSocketHandler.js - FIXED WITH PROPER TIMEZONE HANDLING
+// src/handlers/DynamicWebSocketHandler.js - ENHANCED WITH COMPLETE DISCOVERY FLOW
 const configLoader = require('../services/config/ConfigurationLoader');
 const { 
   autoBookAppointment, 
@@ -31,19 +31,24 @@ class DynamicWebSocketHandler {
       roofAge: null,
       issue: null,
       urgency: null,
-      insuranceClaim: null,
+      // NEW DISCOVERY FIELDS
+      roofType: null,
+      ownershipStatus: null,
+      insurancePlans: null,
+      propertyAddress: null,
+      bestPhone: null,
       // Scheduling
       day: null,
       specificTime: null,
       availableSlots: [],
       selectedSlot: null,
       bookingConfirmed: false,
-      bookingDate: null // Store the actual booking date
+      bookingDate: null
     };
     
     console.log(`📞 Caller phone number: ${this.customerInfo.phone || 'Unknown'}`);
     
-    // Conversation state
+    // Conversation state - Enhanced flow
     this.conversationPhase = 'waiting';
     this.hasGreeted = false;
     this.waitingForTimeSelection = false;
@@ -163,7 +168,10 @@ class DynamicWebSocketHandler {
   
   formatPhoneDisplay(phone) {
     // Format as (XXX) XXX-XXXX
-    return `(${phone.substring(0, 3)}) ${phone.substring(3, 6)}-${phone.substring(6)}`;
+    if (phone.length === 10) {
+      return `(${phone.substring(0, 3)}) ${phone.substring(3, 6)}-${phone.substring(6)}`;
+    }
+    return phone;
   }
   
   async getResponse(userMessage) {
@@ -193,44 +201,119 @@ class DynamicWebSocketHandler {
           this.customerInfo.issue = 'inspection';
           this.conversationPhase = 'property';
           return "Smart to get it checked! Is this for your home or business?";
+        } else if (lower.includes('repair')) {
+          this.customerInfo.issue = 'repair';
+          this.conversationPhase = 'property';
+          return "Roof repair - we can definitely help with that. Is this for a residential or commercial property?";
         } else {
           return "I can help with repairs, replacements, or free inspections. Which one do you need?";
         }
         
       case 'property':
-        if (lower.includes('home') || lower.includes('house') || lower.includes('yes')) {
+        if (lower.includes('home') || lower.includes('house') || lower.includes('yes') || lower.includes('residential')) {
           this.customerInfo.propertyType = 'residential';
-          this.conversationPhase = 'urgency';
-          return "Perfect. How soon do you need someone out there - is this urgent?";
+          this.conversationPhase = 'ownership_status';
+          return "Perfect. Quick question - are you the homeowner, or are you a property manager?";
         } else if (lower.includes('business') || lower.includes('commercial')) {
           this.customerInfo.propertyType = 'commercial';
-          this.conversationPhase = 'urgency';
-          return "We handle lots of commercial properties. How urgent is this?";
+          this.conversationPhase = 'ownership_status';
+          return "We handle lots of commercial properties. Are you the property owner or the property manager?";
         } else {
           return "Just to clarify - is this for a home or business property?";
         }
         
+      case 'ownership_status':
+        if (lower.includes('owner') || lower.includes('yes') || lower.includes('i am') || lower.includes('i own')) {
+          this.customerInfo.ownershipStatus = 'owner';
+          this.conversationPhase = 'roof_type';
+          return "Great! What type of roof do you currently have - asphalt shingles, metal, tile, or something else?";
+        } else if (lower.includes('manager') || lower.includes('property manager') || lower.includes('manage')) {
+          this.customerInfo.ownershipStatus = 'property_manager';
+          this.conversationPhase = 'roof_type';
+          return "Got it, thanks for letting me know. What type of roof is on the property - shingles, metal, tile?";
+        } else if (lower.includes('rent') || lower.includes('tenant')) {
+          this.customerInfo.ownershipStatus = 'tenant';
+          this.conversationPhase = 'roof_type';
+          return "I see. Well, we can still take a look. Do you know what type of roof it is - asphalt shingles, metal, or tile?";
+        } else {
+          return "Are you the property owner, or do you manage the property?";
+        }
+        
+      case 'roof_type':
+        // Store whatever they say about roof type
+        const roofTypes = {
+          'shingle': 'asphalt shingles',
+          'asphalt': 'asphalt shingles',
+          'metal': 'metal',
+          'tile': 'tile',
+          'slate': 'slate',
+          'flat': 'flat/membrane',
+          'rubber': 'rubber/EPDM',
+          'wood': 'wood shake'
+        };
+        
+        let foundType = null;
+        for (const [key, value] of Object.entries(roofTypes)) {
+          if (lower.includes(key)) {
+            foundType = value;
+            break;
+          }
+        }
+        
+        if (foundType) {
+          this.customerInfo.roofType = foundType;
+        } else if (lower.includes("don't know") || lower.includes("not sure") || lower.includes("no idea")) {
+          this.customerInfo.roofType = 'unknown';
+        } else {
+          this.customerInfo.roofType = userMessage; // Store whatever they said
+        }
+        
+        this.conversationPhase = 'urgency';
+        return "Thanks! Now, how urgent is this? Do you need someone out there right away, or are you planning ahead?";
+        
       case 'urgency':
         if (lower.includes('urgent') || lower.includes('asap') || lower.includes('soon') || 
-            lower.includes('emergency') || lower.includes('yes')) {
+            lower.includes('emergency') || lower.includes('right away') || lower.includes('today')) {
           this.customerInfo.urgency = 'urgent';
-          this.conversationPhase = 'age';
-          return "We'll prioritize this. Quick question - about how old is your roof?";
-        } else if (lower.includes('not') || lower.includes('planning')) {
+          this.conversationPhase = 'insurance';
+          
+          if (this.customerInfo.issue === 'leak') {
+            return "We'll definitely prioritize this. Quick question - are you planning to work with your insurance company on this leak repair?";
+          } else {
+            return "We'll get someone out there quickly. Are you planning to go through insurance for this?";
+          }
+        } else if (lower.includes('not') || lower.includes('planning') || lower.includes('whenever')) {
           this.customerInfo.urgency = 'planning';
-          this.conversationPhase = 'age';
-          return "Good to plan ahead! Do you know roughly how old your roof is?";
+          this.conversationPhase = 'insurance';
+          return "Good to plan ahead! Are you thinking about using insurance for this project?";
         } else {
           this.customerInfo.urgency = 'soon';
+          this.conversationPhase = 'insurance';
+          return "Got it. Will you be working with your insurance company on this?";
+        }
+        
+      case 'insurance':
+        if (lower.includes('yes') || lower.includes('yeah') || lower.includes('yep') || lower.includes('insurance')) {
+          this.customerInfo.insurancePlans = 'yes';
           this.conversationPhase = 'age';
-          return "Got it. About how old is your current roof?";
+          return "Perfect - we work with all the major insurance companies and can help with that process. About how old is your roof?";
+        } else if (lower.includes('no') || lower.includes('nope') || lower.includes('cash') || lower.includes('out of pocket')) {
+          this.customerInfo.insurancePlans = 'no';
+          this.conversationPhase = 'age';
+          return "No problem at all. About how old is your current roof?";
+        } else if (lower.includes('maybe') || lower.includes('not sure') || lower.includes('depends')) {
+          this.customerInfo.insurancePlans = 'maybe';
+          this.conversationPhase = 'age';
+          return "That's fine - we can discuss options when we come out. Do you know roughly how old your roof is?";
+        } else {
+          return "Will insurance be involved, or will this be out of pocket?";
         }
         
       case 'age':
         // Store whatever they say about age
         this.customerInfo.roofAge = userMessage;
         this.conversationPhase = 'name';
-        return "Thanks! Let me get you on the schedule. What's your first name?";
+        return "Thanks for that info! Let me get you on the schedule. What's your first name?";
         
       case 'name':
         // Better name extraction
@@ -262,15 +345,46 @@ class DynamicWebSocketHandler {
         if (extractedName) {
           this.customerInfo.firstName = extractedName;
           this.customerInfo.name = extractedName;
-          this.conversationPhase = 'scheduling';
-          
-          if (this.customerInfo.urgency === 'urgent') {
-            return `Got it, ${extractedName}! Since this is urgent, I can get someone there today or tomorrow. Which works better?`;
-          } else {
-            return `Perfect, ${extractedName}! Let me check what we have available. What day works best this week?`;
-          }
+          this.conversationPhase = 'phone_number';
+          return `Nice to meet you, ${extractedName}! What's the best phone number to reach you at?`;
         } else {
           return "I didn't catch that - could you tell me your first name please?";
+        }
+        
+      case 'phone_number':
+        // Extract phone number
+        const phonePattern = /[\d\s\-\(\)\.]+/g;
+        const matches = userMessage.match(phonePattern);
+        let phone = null;
+        
+        if (matches) {
+          const combined = matches.join('');
+          const digits = combined.replace(/\D/g, '');
+          
+          if (digits.length === 10) {
+            phone = digits;
+          } else if (digits.length === 11 && digits.startsWith('1')) {
+            phone = digits.substring(1);
+          }
+        }
+        
+        if (phone) {
+          this.customerInfo.bestPhone = `+1${phone}`;
+          this.conversationPhase = 'address';
+          return `Got it - ${this.formatPhoneDisplay(phone)}. And what's the address of the property we'll be looking at?`;
+        } else {
+          return "I didn't catch that phone number. Could you give me the 10-digit number including area code?";
+        }
+        
+      case 'address':
+        // Store the full address as given
+        this.customerInfo.propertyAddress = userMessage.trim();
+        this.conversationPhase = 'scheduling';
+        
+        if (this.customerInfo.urgency === 'urgent') {
+          return `Perfect, ${this.customerInfo.firstName}! I've got all your information. Since this is urgent, I can get someone out to ${this.customerInfo.propertyAddress} today or tomorrow. Which works better?`;
+        } else {
+          return `Great, ${this.customerInfo.firstName}! I have all your details. Let me check our schedule for ${this.customerInfo.propertyAddress}. What day works best for you this week?`;
         }
         
       case 'scheduling':
@@ -285,14 +399,14 @@ class DynamicWebSocketHandler {
           
           if (slots.length > 0) {
             this.customerInfo.availableSlots = slots;
-            this.customerInfo.bookingDate = targetDate; // Store the actual date
+            this.customerInfo.bookingDate = targetDate;
             this.waitingForTimeSelection = true;
             
             const morningSlots = slots.filter(s => s.displayTime.includes('AM'));
             const afternoonSlots = slots.filter(s => s.displayTime.includes('PM') && !s.displayTime.startsWith('12'));
             
             if (morningSlots.length && afternoonSlots.length) {
-              return `For tomorrow I have ${morningSlots[0].displayTime} in the morning or ${afternoonSlots[0].displayTime} in the afternoon. Which works better?`;
+              return `For tomorrow I have ${morningSlots[0].displayTime} in the morning or ${afternoonSlots[0].displayTime} in the afternoon. Which works better for you?`;
             } else {
               const times = slots.slice(0, 3).map(s => s.displayTime).join(', ');
               return `Tomorrow I have these times available: ${times}. Which works best?`;
@@ -310,7 +424,7 @@ class DynamicWebSocketHandler {
           
           // Get available slots
           const targetDate = this.getNextDate(dayFound);
-          this.customerInfo.bookingDate = targetDate; // Store the actual date
+          this.customerInfo.bookingDate = targetDate;
           
           console.log(`📅 Getting slots for ${dayFound}:`, targetDate.toISOString());
           const slots = await getAvailableTimeSlots(targetDate);
@@ -323,10 +437,10 @@ class DynamicWebSocketHandler {
             const afternoonSlots = slots.filter(s => s.displayTime.includes('PM') && !s.displayTime.startsWith('12'));
             
             if (morningSlots.length && afternoonSlots.length) {
-              return `Great! For ${this.customerInfo.day} I have ${morningSlots[0].displayTime} in the morning or ${afternoonSlots[0].displayTime} in the afternoon. Which works better?`;
+              return `Great! For ${this.customerInfo.day} I have ${morningSlots[0].displayTime} in the morning or ${afternoonSlots[0].displayTime} in the afternoon. Which works better for you?`;
             } else {
               const times = slots.slice(0, 3).map(s => s.displayTime).join(', ');
-              return `For ${this.customerInfo.day} I have these times available: ${times}. Which works best?`;
+              return `For ${this.customerInfo.day} I have these times available: ${times}. Which time works best?`;
             }
           } else {
             this.customerInfo.day = null;
@@ -357,7 +471,6 @@ class DynamicWebSocketHandler {
         // Try exact time matching
         for (const {pattern, hour} of timePatterns) {
           if (pattern.test(lower)) {
-            // Find slot that matches this hour
             selectedSlot = this.customerInfo.availableSlots.find(slot => {
               const slotHour = parseInt(slot.displayTime.split(':')[0]);
               const slotIsPM = slot.displayTime.includes('PM');
@@ -398,9 +511,9 @@ class DynamicWebSocketHandler {
           
           if (booked) {
             this.customerInfo.bookingConfirmed = true;
-            return `Perfect! I've got you booked for ${this.customerInfo.day} at ${this.customerInfo.specificTime} Arizona time. We'll call you 30 minutes before we arrive. Sound good?`;
+            return `Perfect! I've got you all set for ${this.customerInfo.day} at ${this.customerInfo.specificTime} Arizona time. Our tech will come out to ${this.customerInfo.propertyAddress} and we'll call ${this.formatPhoneDisplay(this.customerInfo.bestPhone.substring(2))} about 30 minutes before arrival. Sound good?`;
           } else {
-            return `Great! I've got you down for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. Our office will confirm this shortly. We'll call 30 minutes before arrival. Sound good?`;
+            return `Great! I've got you down for ${this.customerInfo.day} at ${this.customerInfo.specificTime} at ${this.customerInfo.propertyAddress}. Our office will confirm this shortly and we'll call ${this.formatPhoneDisplay(this.customerInfo.bestPhone.substring(2))} before we arrive. Sound good?`;
           }
         } else {
           const times = this.customerInfo.availableSlots.slice(0, 3).map(s => s.displayTime).join(', ');
@@ -411,11 +524,11 @@ class DynamicWebSocketHandler {
         if (lower.includes('sounds good') || lower.includes('yes') || lower.includes('yep') || 
             lower.includes('perfect') || lower.includes('great') || lower.includes('ok') || 
             lower.includes('okay') || lower.includes('sure') || lower.includes('thank')) {
-          return "Excellent! We'll see you then. Have a great rest of your day!";
+          return `Excellent! Just to confirm - we'll inspect your ${this.customerInfo.roofType === 'unknown' ? 'roof' : this.customerInfo.roofType} for ${this.customerInfo.issue === 'leak' ? 'leak repair' : this.customerInfo.issue}. ${this.customerInfo.insurancePlans === 'yes' ? "We'll also help document everything for your insurance claim." : ""} Have a great rest of your day!`;
         } else if (lower.includes('how long')) {
           return "The inspection usually takes about 45 minutes to an hour, depending on the size of your roof. Our tech will go over everything with you when they're done.";
         } else if (lower.includes('cost') || lower.includes('price') || lower.includes('how much')) {
-          return "The inspection is completely free! If we find any issues, we'll give you a detailed quote for repairs or replacement with multiple options.";
+          return "The inspection is completely free! If we find any issues, we'll give you a detailed quote with multiple options. And if you're going through insurance, we'll help with that whole process.";
         } else if (lower.includes('no') || lower.includes('cancel')) {
           this.conversationPhase = 'scheduling';
           this.customerInfo.day = null;
@@ -438,14 +551,12 @@ class DynamicWebSocketHandler {
         return false;
       }
       
-      // CRITICAL: Use the exact start time from the selected slot
-      // The slot already has the correct UTC time that represents the desired Arizona time
       const bookingDate = new Date(this.customerInfo.selectedSlot.startTime);
       
       // Generate a placeholder email
       const placeholderEmail = `${this.customerInfo.firstName.toLowerCase()}.${this.callId}@halfpriceroof.com`;
       
-      // Debug logging to verify times
+      // Debug logging
       console.log('🔍 BOOKING DEBUG:');
       console.log('  - Selected slot:', this.customerInfo.selectedSlot);
       console.log('  - Display time:', this.customerInfo.selectedSlot.displayTime);
@@ -466,20 +577,27 @@ class DynamicWebSocketHandler {
       const result = await autoBookAppointment(
         this.customerInfo.name,
         placeholderEmail,
-        this.customerInfo.phone || 'No phone provided',
+        this.customerInfo.bestPhone || this.customerInfo.phone || 'No phone provided',
         bookingDate,
         {
+          // All discovery data
           service: this.customerInfo.issue,
           propertyType: this.customerInfo.propertyType,
           urgency: this.customerInfo.urgency,
           roofAge: this.customerInfo.roofAge,
+          roofType: this.customerInfo.roofType,
+          ownershipStatus: this.customerInfo.ownershipStatus,
+          insurancePlans: this.customerInfo.insurancePlans,
+          propertyAddress: this.customerInfo.propertyAddress,
+          bestPhone: this.customerInfo.bestPhone,
+          // Company and booking info
           company: this.config.companyName,
           bookedTime: this.customerInfo.specificTime,
           bookedDay: this.customerInfo.day,
           callId: this.callId,
           callerPhone: this.customerInfo.phone,
           requestedTimeArizona: this.customerInfo.specificTime,
-          slotStartTime: this.customerInfo.selectedSlot.startTime // Pass the original slot time
+          slotStartTime: this.customerInfo.selectedSlot.startTime
         }
       );
       
@@ -491,7 +609,6 @@ class DynamicWebSocketHandler {
         console.log('📅 Event created successfully!');
         console.log('📅 Event ID:', result.eventId);
         console.log('📅 Display time:', result.displayTime);
-        console.log('📅 Arizona time confirmation:', result.displayTime);
       }
       
       return result.success;
@@ -532,8 +649,12 @@ class DynamicWebSocketHandler {
     console.log('🔌 Call ended');
     console.log(`📊 Summary:`);
     console.log(`  - Customer: ${this.customerInfo.firstName || 'Unknown'}`);
-    console.log(`  - Phone: ${this.customerInfo.phone || 'Not captured'}`);
+    console.log(`  - Phone: ${this.customerInfo.bestPhone || this.customerInfo.phone || 'Not captured'}`);
     console.log(`  - Issue: ${this.customerInfo.issue || 'Not specified'}`);
+    console.log(`  - Property: ${this.customerInfo.propertyAddress || 'Not captured'}`);
+    console.log(`  - Roof Type: ${this.customerInfo.roofType || 'Not specified'}`);
+    console.log(`  - Owner Status: ${this.customerInfo.ownershipStatus || 'Not specified'}`);
+    console.log(`  - Insurance: ${this.customerInfo.insurancePlans || 'Not specified'}`);
     console.log(`  - Scheduled: ${this.customerInfo.day || 'Not scheduled'} at ${this.customerInfo.specificTime || 'No time'}`);
     console.log(`  - Booked: ${this.customerInfo.bookingConfirmed ? '✅' : '❌'}`);
     
@@ -551,14 +672,21 @@ class DynamicWebSocketHandler {
       await sendSchedulingPreference(
         this.customerInfo.name || this.customerInfo.firstName,
         placeholderEmail,
-        this.customerInfo.phone || 'Unknown',
+        this.customerInfo.bestPhone || this.customerInfo.phone || 'Unknown',
         schedulingInfo,
         this.callId,
         {
+          // All discovery data
           service: this.customerInfo.issue,
           propertyType: this.customerInfo.propertyType,
           urgency: this.customerInfo.urgency,
           roofAge: this.customerInfo.roofAge,
+          roofType: this.customerInfo.roofType,
+          ownershipStatus: this.customerInfo.ownershipStatus,
+          insurancePlans: this.customerInfo.insurancePlans,
+          propertyAddress: this.customerInfo.propertyAddress,
+          bestPhone: this.customerInfo.bestPhone,
+          // Company and booking info
           company: this.config.companyName,
           specificTime: this.customerInfo.specificTime,
           day: this.customerInfo.day,
@@ -569,7 +697,7 @@ class DynamicWebSocketHandler {
         }
       );
       
-      console.log('✅ Webhook sent with scheduling details');
+      console.log('✅ Webhook sent with complete discovery data');
     }
   }
 }
