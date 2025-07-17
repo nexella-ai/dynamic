@@ -11,52 +11,6 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// Add this to server.js in the WebSocket connection handler
-
-wss.on('connection', async (ws, req) => {
-  console.log('🔗 New WebSocket connection established');
-  
-  try {
-    const companyId = extractCompanyId(req);
-    
-    if (!companyId) {
-      console.error('❌ No company ID provided');
-      ws.send(JSON.stringify({
-        error: 'Company ID required'
-      }));
-      ws.close(1008, 'Company ID required');
-      return;
-    }
-    
-    console.log(`🏢 Company ID: ${companyId}`);
-
-    // In server.js, around line 31
-if (config.businessType === 'dealership' || companyId.includes('dealership') || companyId.includes('ford')) {
-  const DealershipWebSocketHandler = require('./src/handlers/DealershipWebSocketHandler');
-  handler = new DealershipWebSocketHandler(ws, req, companyId);
-  console.log('🚗 Using Dealership handler');
-}
-    
-    // Load config to determine handler type
-    const config = await configLoader.loadCompanyConfig(companyId);
-    
-    // Choose handler based on business type
-    let handler;
-    if (config.businessType === 'dealership' || companyId.includes('dealership') || companyId.includes('ford')) {
-      const DealershipWebSocketHandler = require('./src/handlers/DealershipWebSocketHandler');
-      handler = new DealershipWebSocketHandler(ws, req, companyId);
-      console.log('🚗 Using Dealership handler');
-    } else {
-      handler = new DynamicWebSocketHandler(ws, req, companyId);
-      console.log('🏠 Using default handler');
-    }
-    
-  } catch (error) {
-    console.error('❌ Error initializing connection:', error);
-    ws.close(1011, 'Initialization failed');
-  }
-});
-
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -165,19 +119,55 @@ wss.on('connection', async (ws, req) => {
     
     console.log(`🏢 Initializing handler for company: ${companyId}`);
     
-    // Create dynamic handler for this company
-    const handler = new DynamicWebSocketHandler(ws, req, companyId);
+    // Extract phone number from headers
+    const phoneNumber = extractPhoneFromHeaders(req);
+    console.log(`📞 Caller phone number: ${phoneNumber || 'Unknown'}`);
+    
+    // Load configuration first
+    console.log(`📋 Loading configuration for company: ${companyId}`);
+    let companyConfig;
+    try {
+      companyConfig = await configLoader.loadCompanyConfig(companyId);
+      console.log(`✅ Configuration loaded for: ${companyConfig.companyName}`);
+    } catch (configError) {
+      console.error('❌ Error loading configuration:', configError);
+      ws.send(JSON.stringify({
+        error: 'Configuration error',
+        message: 'Failed to load company configuration'
+      }));
+      ws.close(1011, 'Configuration failed');
+      return;
+    }
+    
+    // Choose handler based on business type
+    let handler;
+    if (companyConfig.businessType === 'dealership' || 
+        companyId.includes('dealership') || 
+        companyId.includes('ford') ||
+        companyId.includes('auto') ||
+        companyId.includes('car')) {
+      console.log('🚗 Detected dealership business type');
+      const DealershipWebSocketHandler = require('./src/handlers/DealershipWebSocketHandler');
+      handler = new DealershipWebSocketHandler(ws, req, companyId);
+      console.log('🚗 Using Dealership handler');
+    } else {
+      console.log('🏠 Using default handler for business type:', companyConfig.businessType || 'general');
+      handler = new DynamicWebSocketHandler(ws, req, companyId);
+    }
     
     // Send initial connection success message
     ws.send(JSON.stringify({
       type: 'connection_established',
       companyId: companyId,
-      message: 'Connected to Nexella AI',
+      companyName: companyConfig.companyName,
+      handler: handler.constructor.name,
+      message: `Connected to ${companyConfig.companyName} AI`,
       timestamp: new Date().toISOString()
     }));
     
   } catch (error) {
     console.error('❌ Error initializing connection:', error);
+    console.error('Stack trace:', error.stack);
     ws.send(JSON.stringify({
       error: 'Initialization failed',
       message: error.message
@@ -233,6 +223,66 @@ function extractCompanyId(req) {
     return defaultCompany;
   }
   
+  return null;
+}
+
+// Helper function to extract phone from headers
+function extractPhoneFromHeaders(req) {
+  // Try multiple sources to get the phone number
+  
+  // 1. Check Retell-specific headers
+  const retellPhone = req.headers['x-retell-phone-number'] || 
+                     req.headers['x-retell-caller-number'] ||
+                     req.headers['x-retell-from-number'] ||
+                     req.headers['x-retell-to-number'] ||
+                     req.headers['x-retell-customer-phone'];
+  if (retellPhone) {
+    console.log('📱 Found phone in Retell headers:', retellPhone);
+    return retellPhone;
+  }
+  
+  // 2. Check generic phone headers
+  const genericPhone = req.headers['x-customer-phone'] || 
+                      req.headers['x-phone-number'] ||
+                      req.headers['x-caller-id'] ||
+                      req.headers['x-from-number'] ||
+                      req.headers['x-to-number'] ||
+                      req.headers['from'] ||
+                      req.headers['to'] ||
+                      req.headers['caller'];
+  if (genericPhone) {
+    console.log('📱 Found phone in generic headers:', genericPhone);
+    return genericPhone;
+  }
+  
+  // 3. Try to extract from URL parameters
+  try {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const phoneParam = url.searchParams.get('phone') || 
+                      url.searchParams.get('caller') ||
+                      url.searchParams.get('from_number') ||
+                      url.searchParams.get('to_number') ||
+                      url.searchParams.get('customer_phone');
+    if (phoneParam) {
+      console.log('📱 Found phone in URL params:', phoneParam);
+      return decodeURIComponent(phoneParam);
+    }
+  } catch (error) {
+    // URL parsing failed, continue
+  }
+  
+  // 4. Look for phone-like values in all headers (but not timestamps)
+  for (const [key, value] of Object.entries(req.headers)) {
+    // Skip timestamp-like headers
+    if (key.includes('time') || key.includes('date')) continue;
+    
+    if (typeof value === 'string' && value.match(/^\+?1?\d{10}$/)) {
+      console.log(`📱 Found phone-like value in header '${key}':`, value);
+      return value;
+    }
+  }
+  
+  console.log('📱 No phone number found in headers or URL');
   return null;
 }
 
