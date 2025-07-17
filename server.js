@@ -29,6 +29,13 @@ wss.on('connection', async (ws, req) => {
     }
     
     console.log(`🏢 Company ID: ${companyId}`);
+
+    // In server.js, around line 31
+if (config.businessType === 'dealership' || companyId.includes('dealership') || companyId.includes('ford')) {
+  const DealershipWebSocketHandler = require('./src/handlers/DealershipWebSocketHandler');
+  handler = new DealershipWebSocketHandler(ws, req, companyId);
+  console.log('🚗 Using Dealership handler');
+}
     
     // Load config to determine handler type
     const config = await configLoader.loadCompanyConfig(companyId);
