@@ -1,4 +1,4 @@
-// src/handlers/DealershipWebSocketHandler.js
+// src/handlers/DealershipWebSocketHandler.js - Fixed version
 const configLoader = require('../services/config/ConfigurationLoader');
 const { 
   autoBookAppointment, 
@@ -55,9 +55,27 @@ class DealershipWebSocketHandler {
   
   async initialize() {
     try {
+      // Load configuration
       this.config = await configLoader.loadCompanyConfig(this.companyId);
       console.log(`🚗 ${this.config.companyName} ready`);
       console.log(`📅 Calendar: ${isCalendarInitialized() ? '✅' : '❌'}`);
+      
+      // Validate configuration structure
+      if (!this.config.vehicleInventory) {
+        console.warn('⚠️ vehicleInventory not found in config, using defaults');
+        this.config.vehicleInventory = {
+          popularModels: ["F-150", "Explorer", "Escape", "Edge", "Bronco", "Mustang"],
+          trimLevels: {},
+          commonColors: ["Oxford White", "Agate Black", "Iconic Silver", "Carbonized Gray"]
+        };
+      }
+      
+      if (!this.config.salesTeam) {
+        console.warn('⚠️ salesTeam not found in config, using defaults');
+        this.config.salesTeam = [
+          { name: "Sales Consultant", specialties: ["All Vehicles"], schedule: "all" }
+        ];
+      }
       
       // Set up message handler
       this.ws.on('message', async (data) => {
@@ -107,7 +125,7 @@ class DealershipWebSocketHandler {
       case 'greeting':
         if (!this.hasGreeted) {
           this.hasGreeted = true;
-          return this.config.aiAgent.greeting;
+          return this.config.aiAgent?.greeting || "Hi! This is Sarah from Tim Short Ford. How can I help you today?";
         }
         // Customer states their interest
         if (this.detectVehicleInterest(userMessage)) {
@@ -142,8 +160,11 @@ class DealershipWebSocketHandler {
   
   detectVehicleInterest(message) {
     const lower = message.toLowerCase();
-    const keywords = ['looking', 'interested', 'website', 'test drive', 'schedule', 'appointment'];
-    const models = this.config.vehicleInventory.popularModels.map(m => m.toLowerCase());
+    const keywords = ['looking', 'interested', 'website', 'test drive', 'schedule', 'appointment', 'mustang', 'f-150', 'explorer'];
+    
+    // Check if config has vehicleInventory
+    const models = this.config.vehicleInventory?.popularModels || 
+                   ["F-150", "Explorer", "Escape", "Edge", "Bronco", "Mustang", "Maverick", "Expedition", "Ranger"];
     
     const hasKeyword = keywords.some(k => lower.includes(k));
     const hasModel = models.some(m => lower.includes(m.toLowerCase()));
@@ -153,7 +174,8 @@ class DealershipWebSocketHandler {
   
   handleVehicleInterest(message) {
     // Extract vehicle model if mentioned
-    const models = this.config.vehicleInventory.popularModels;
+    const models = this.config.vehicleInventory?.popularModels || 
+                   ["F-150", "Explorer", "Escape", "Edge", "Bronco", "Mustang"];
     let foundModel = null;
     
     for (const model of models) {
@@ -202,7 +224,7 @@ class DealershipWebSocketHandler {
       
       // If we know the model, ask about trim
       if (this.customerInfo.modelInterest) {
-        const trimLevels = this.config.vehicleInventory.trimLevels[this.customerInfo.modelInterest];
+        const trimLevels = this.config.vehicleInventory?.trimLevels?.[this.customerInfo.modelInterest];
         if (trimLevels && trimLevels.length > 0) {
           return `Great ${name}! For the ${this.customerInfo.modelInterest}, are you interested in the ${trimLevels.slice(0, 3).join(', ')} trim level?`;
         }
@@ -218,14 +240,14 @@ class DealershipWebSocketHandler {
     const lower = message.toLowerCase();
     
     // Check for trim level
-    if (this.customerInfo.modelInterest) {
+    if (this.customerInfo.modelInterest && this.config.vehicleInventory?.trimLevels) {
       const trimLevels = this.config.vehicleInventory.trimLevels[this.customerInfo.modelInterest] || [];
       for (const trim of trimLevels) {
         if (lower.includes(trim.toLowerCase())) {
           this.customerInfo.trimInterest = trim;
           this.conversationPhase = 'color_preference';
           
-          const colors = this.config.vehicleInventory.commonColors.slice(0, 3).join(', ');
+          const colors = (this.config.vehicleInventory?.commonColors || ["Oxford White", "Agate Black", "Iconic Silver"]).slice(0, 3).join(', ');
           return `Perfect! I see we have several ${trim} models in stock - ${colors}. Do you have a color preference?`;
         }
       }
@@ -234,7 +256,7 @@ class DealershipWebSocketHandler {
     // If no trim mentioned but they answered, move to color
     if (this.customerInfo.modelInterest) {
       this.conversationPhase = 'color_preference';
-      const colors = this.config.vehicleInventory.commonColors.slice(0, 3).join(', ');
+      const colors = (this.config.vehicleInventory?.commonColors || ["Oxford White", "Agate Black", "Iconic Silver"]).slice(0, 3).join(', ');
       return `Great choice! We have several in stock - ${colors}. Do you have a color preference?`;
     }
     
@@ -243,7 +265,7 @@ class DealershipWebSocketHandler {
   
   handleColorPreference(message) {
     // Store color preference
-    const colors = this.config.vehicleInventory.commonColors;
+    const colors = this.config.vehicleInventory?.commonColors || ["Oxford White", "Agate Black", "Iconic Silver"];
     for (const color of colors) {
       if (message.toLowerCase().includes(color.toLowerCase())) {
         this.customerInfo.colorPreference = color;
@@ -363,23 +385,23 @@ class DealershipWebSocketHandler {
   
   getAvailableSalesConsultant() {
     // Simple logic to assign consultant based on vehicle type
-    const consultants = this.config.salesTeam;
+    const consultants = this.config.salesTeam || [{ name: "our sales consultant", specialties: ["All Vehicles"], schedule: "all" }];
     
     if (this.customerInfo.modelInterest) {
       if (['F-150', 'Ranger', 'Maverick'].includes(this.customerInfo.modelInterest)) {
-        return consultants.find(c => c.specialties.includes('Trucks')) || consultants[0];
+        return consultants.find(c => c.specialties?.includes('Trucks')) || consultants[0];
       } else if (['Mustang'].includes(this.customerInfo.modelInterest)) {
-        return consultants.find(c => c.specialties.includes('Performance')) || consultants[0];
+        return consultants.find(c => c.specialties?.includes('Performance')) || consultants[0];
       } else if (['Explorer', 'Escape', 'Edge', 'Expedition'].includes(this.customerInfo.modelInterest)) {
-        return consultants.find(c => c.specialties.includes('SUVs')) || consultants[0];
+        return consultants.find(c => c.specialties?.includes('SUVs')) || consultants[0];
       }
     }
     
-    return consultants[0]; // Default consultant
+    return consultants[0] || { name: "our sales consultant" }; // Default consultant
   }
   
   async sendResponse(content, responseId) {
-    console.log(`🤖 ${this.config.aiAgent.name}: ${content}`);
+    console.log(`🤖 ${this.config.aiAgent?.name || 'Sarah'}: ${content}`);
     
     this.ws.send(JSON.stringify({
       content: content,
