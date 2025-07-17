@@ -11,6 +11,45 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+// Add this to server.js in the WebSocket connection handler
+
+wss.on('connection', async (ws, req) => {
+  console.log('🔗 New WebSocket connection established');
+  
+  try {
+    const companyId = extractCompanyId(req);
+    
+    if (!companyId) {
+      console.error('❌ No company ID provided');
+      ws.send(JSON.stringify({
+        error: 'Company ID required'
+      }));
+      ws.close(1008, 'Company ID required');
+      return;
+    }
+    
+    console.log(`🏢 Company ID: ${companyId}`);
+    
+    // Load config to determine handler type
+    const config = await configLoader.loadCompanyConfig(companyId);
+    
+    // Choose handler based on business type
+    let handler;
+    if (config.businessType === 'dealership' || companyId.includes('dealership') || companyId.includes('ford')) {
+      const DealershipWebSocketHandler = require('./src/handlers/DealershipWebSocketHandler');
+      handler = new DealershipWebSocketHandler(ws, req, companyId);
+      console.log('🚗 Using Dealership handler');
+    } else {
+      handler = new DynamicWebSocketHandler(ws, req, companyId);
+      console.log('🏠 Using default handler');
+    }
+    
+  } catch (error) {
+    console.error('❌ Error initializing connection:', error);
+    ws.close(1011, 'Initialization failed');
+  }
+});
+
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
