@@ -1,0 +1,178 @@
+// configs/timshort_ford_lafollette.json
+{
+  "companyId": "timshort_ford_lafollette",
+  "companyName": "Tim Short Ford of LaFollette",
+  "companyPhone": "+14235621234",
+  "companyEmail": "info@timshortford.com",
+  "website": "https://www.timshortford.com",
+  "address": {
+    "street": "2440 Jacksboro Pike",
+    "city": "LaFollette",
+    "state": "TN",
+    "zip": "37766"
+  },
+  
+  "businessHours": {
+    "timezone": "America/New_York",
+    "days": {
+      "monday": { "open": "08:30", "close": "19:00", "isOpen": true },
+      "tuesday": { "open": "08:30", "close": "19:00", "isOpen": true },
+      "wednesday": { "open": "08:30", "close": "19:00", "isOpen": true },
+      "thursday": { "open": "08:30", "close": "19:00", "isOpen": true },
+      "friday": { "open": "08:30", "close": "19:00", "isOpen": true },
+      "saturday": { "open": "08:30", "close": "18:00", "isOpen": true },
+      "sunday": { "open": "12:00", "close": "17:00", "isOpen": true }
+    }
+  },
+  
+  "services": {
+    "testDrive": {
+      "name": "Test Drive Scheduling",
+      "description": "Schedule test drives for new and used vehicles",
+      "keywords": ["test drive", "drive", "try", "test", "appointment"],
+      "features": ["Immediate scheduling", "Vehicle preparation", "Trade-in evaluation"]
+    },
+    "vehicleInquiry": {
+      "name": "Vehicle Information",
+      "description": "Get details on inventory, pricing, and availability",
+      "keywords": ["price", "cost", "available", "stock", "inventory", "models"]
+    },
+    "financing": {
+      "name": "Financing Pre-Approval",
+      "description": "Get pre-approved for auto financing",
+      "keywords": ["finance", "loan", "payment", "credit", "monthly payment"]
+    },
+    "tradeIn": {
+      "name": "Trade-In Evaluation",
+      "description": "Get your vehicle's trade-in value",
+      "keywords": ["trade", "trade-in", "sell my car", "value", "worth"]
+    },
+    "service": {
+      "name": "Service Department",
+      "description": "Schedule maintenance and repairs",
+      "keywords": ["service", "oil change", "repair", "maintenance", "fix"]
+    }
+  },
+  
+  "aiAgent": {
+    "name": "Sarah",
+    "role": "Sales Assistant at Tim Short Ford",
+    "personality": "friendly, knowledgeable about Ford vehicles, helpful, professional",
+    "greeting": "Hi! This is Sarah from Tim Short Ford of LaFollette. How can I help you today?",
+    "voiceSettings": {
+      "speed": 1.0,
+      "pitch": 1.0,
+      "voice": "female-professional"
+    }
+  },
+  
+  "qualificationQuestions": [
+    {
+      "id": "vehicle_interest",
+      "question": "Which Ford model are you interested in?",
+      "field": "vehicle_interest",
+      "required": true,
+      "type": "open"
+    },
+    {
+      "id": "new_or_used",
+      "question": "Are you looking for a new or used vehicle?",
+      "field": "new_or_used",
+      "required": true,
+      "type": "choice",
+      "options": ["New", "Used", "Not sure yet"]
+    },
+    {
+      "id": "timeline",
+      "question": "When are you looking to purchase?",
+      "field": "timeline",
+      "required": true,
+      "type": "choice",
+      "options": ["This week", "This month", "Next 3 months", "Just researching"]
+    },
+    {
+      "id": "trade_in",
+      "question": "Do you have a vehicle to trade in?",
+      "field": "trade_in",
+      "required": false,
+      "type": "choice",
+      "options": ["Yes", "No"]
+    }
+  ],
+  
+  "vehicleInventory": {
+    "popularModels": [
+      "F-150", "Explorer", "Escape", "Edge", "Bronco", "Maverick", 
+      "Mustang", "Expedition", "Ranger", "Bronco Sport"
+    ],
+    "trimLevels": {
+      "F-150": ["Regular Cab", "SuperCab", "SuperCrew", "Raptor", "Lightning"],
+      "Explorer": ["Base", "XLT", "Limited", "ST", "Platinum", "King Ranch"],
+      "Escape": ["S", "SE", "SEL", "Titanium", "ST-Line", "Plug-in Hybrid"],
+      "Mustang": ["EcoBoost", "GT", "Mach 1", "Shelby GT500"]
+    },
+    "commonColors": ["Oxford White", "Agate Black", "Iconic Silver", "Carbonized Gray", "Rapid Red", "Atlas Blue"]
+  },
+  
+  "scripts": {
+    "vehicleInquiry": {
+      "model_interest": "Great choice! The {model} is one of our most popular vehicles. We have several in stock.",
+      "trim_question": "Are you interested in a specific trim level, or would you like me to tell you what we have available?",
+      "color_preference": "Do you have a color preference? We typically stock {commonColors}.",
+      "feature_highlight": "The {model} {trim} comes with some fantastic features like {features}."
+    },
+    
+    "testDriveScheduling": {
+      "availability_check": "I can definitely schedule a test drive for you! Let me check our sales consultant availability.",
+      "time_options": "I have {consultant} available {day} at {time1} or {day2} at {time2}. Which works better for you?",
+      "confirmation": "Perfect! You're all set for {day} at {time}. {consultant} will have the {color} {model} {trim} ready for your test drive.",
+      "preparation": "They'll also prepare pricing and financing options. Is there anything specific you'd like them to prepare?"
+    },
+    
+    "tradeInHandling": {
+      "trade_inquiry": "I'll make sure {consultant} has trade-in values ready for your {year} {make} {model}.",
+      "trade_details": "To give you the most accurate trade-in value, can you tell me the approximate mileage and condition?",
+      "trade_confirmation": "Great! We'll have a preliminary trade-in value ready when you arrive."
+    },
+    
+    "objectionHandling": {
+      "just_looking": "No pressure at all! Feel free to browse our inventory online, or I can answer any questions you have about our vehicles.",
+      "price_concern": "I understand price is important. {consultant} can go over all our current incentives and financing options to find something that fits your budget.",
+      "need_to_think": "Of course! Take your time. Would you like me to send you some information about the {model} to review?",
+      "comparing_dealers": "That's smart shopping! We pride ourselves on our no-haggle pricing and excellent service. Plus, we have the largest Ford inventory in the area."
+    }
+  },
+  
+  "calendar": {
+    "provider": "google",
+    "appointmentDuration": 60,
+    "bufferTime": 15,
+    "testDriveSlots": {
+      "weekday": ["9:00", "10:00", "11:00", "14:00", "15:00", "16:00", "17:00"],
+      "saturday": ["9:00", "10:00", "11:00", "13:00", "14:00", "15:00"],
+      "sunday": ["13:00", "14:00", "15:00", "16:00"]
+    }
+  },
+  
+  "salesTeam": [
+    { "name": "Jake", "specialties": ["Trucks", "Commercial"], "schedule": "weekdays" },
+    { "name": "Maria", "specialties": ["SUVs", "Family vehicles"], "schedule": "all" },
+    { "name": "Tom", "specialties": ["Performance", "Mustang"], "schedule": "all" },
+    { "name": "Lisa", "specialties": ["Hybrid", "Electric"], "schedule": "weekdays" }
+  ],
+  
+  "dealershipSettings": {
+    "certifications": ["Ford Certified", "Blue Oval Certified"],
+    "financing": {
+      "partners": ["Ford Credit", "Local Credit Unions", "Bank Financing"],
+      "minCreditScore": "No minimum - we work with all credit types"
+    },
+    "serviceArea": ["LaFollette", "Jacksboro", "Caryville", "Jellico", "Clinton", "Knoxville area"],
+    "specialOffers": {
+      "military": "Military appreciation discount",
+      "college": "Recent college graduate program",
+      "firstResponder": "First responder bonus cash",
+      "loyalty": "Ford owner loyalty bonus"
+    }
+  }
+}
