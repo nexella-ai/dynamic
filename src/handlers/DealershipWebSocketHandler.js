@@ -1,4 +1,4 @@
-// src/handlers/DealershipWebSocketHandler.js - UPDATED WITH DELAYS AND BETTER TRACKING
+// src/handlers/DealershipWebSocketHandler.js - FIXED CONVERSATION FLOW
 const configLoader = require('../services/config/ConfigurationLoader');
 const { 
   autoBookAppointment, 
@@ -32,6 +32,7 @@ class DealershipWebSocketHandler {
       tradeIn: null,
       tradeInDetails: null,
       timeline: null,
+      wantsTestDrive: null,
       // Scheduling
       day: null,
       specificTime: null,
@@ -199,11 +200,17 @@ class DealershipWebSocketHandler {
       case 'new_or_used':
         return this.handleNewOrUsed(userMessage);
         
+      case 'process_explanation':
+        return this.handleProcessExplanation(userMessage);
+        
       case 'trade_in':
         return this.handleTradeIn(userMessage);
         
       case 'timeline':
         return this.handleTimeline(userMessage);
+        
+      case 'test_drive_offer':
+        return this.handleTestDriveOffer(userMessage);
         
       case 'name':
         return this.handleName(userMessage);
@@ -290,18 +297,18 @@ class DealershipWebSocketHandler {
       if (script) {
         return script.replace('{model}', foundModel);
       }
-      return `Great choice! The ${foundModel} is one of our most popular vehicles. Are you looking for a new or used ${foundModel}?`;
+      return `Great choice! The ${foundModel} is one of our most popular vehicles. We have several in stock.`;
     } else if (lower.includes('truck')) {
       this.customerInfo.vehicleInterest = 'truck'; // Store general interest
-      this.conversationPhase = 'new_or_used';
+      this.conversationPhase = 'vehicle_selection';
       return "Excellent choice! We have the F-150, Ranger, and Maverick. Which size truck works best for your needs?";
     } else if (lower.includes('suv')) {
       this.customerInfo.vehicleInterest = 'SUV'; // Store general interest
-      this.conversationPhase = 'new_or_used';
+      this.conversationPhase = 'vehicle_selection';
       return "Great! We have everything from the compact Escape to the full-size Expedition. What size SUV are you looking for?";
     } else if (lower.includes('car') || lower.includes('sedan')) {
       this.customerInfo.vehicleInterest = 'car'; // Store general interest
-      this.conversationPhase = 'new_or_used';  
+      this.conversationPhase = 'vehicle_selection';  
       return "We have several great cars including the Mustang. Which model interests you most?";
     } else {
       // If they mention wanting to test drive or buy but don't specify
@@ -315,16 +322,31 @@ class DealershipWebSocketHandler {
   handleNewOrUsed(userMessage) {
     const lower = userMessage.toLowerCase();
     
+    // Check if they're asking about the process
+    if (lower.includes('how') && (lower.includes('process') || lower.includes('work'))) {
+      this.conversationPhase = 'process_explanation';
+      return this.handleProcessExplanation(userMessage);
+    }
+    
     if (lower.includes('new')) {
       this.customerInfo.newOrUsed = 'new';
     } else if (lower.includes('used')) {
       this.customerInfo.newOrUsed = 'used';
     } else {
-      this.customerInfo.newOrUsed = 'both';
+      // Default to asking the question again if unclear
+      return "Are you looking for a new or used " + (this.customerInfo.vehicleInterest || 'vehicle') + "?";
     }
     
     this.conversationPhase = 'trade_in';
     return "Perfect! Do you have a vehicle you'd like to trade in?";
+  }
+  
+  handleProcessExplanation(userMessage) {
+    // Explain the process and then continue
+    this.conversationPhase = 'trade_in';
+    return `Great question! Here's how it works: First, I'll gather some basic information about what you're looking for. Then I can schedule you for a test drive where you'll meet with one of our sales consultants. They'll show you the ${this.customerInfo.vehicleInterest || 'vehicles'}, answer all your questions, and go over pricing and financing options. The whole process is no-pressure and focused on finding the right vehicle for you. 
+
+So, do you have a vehicle you'd like to trade in?`;
   }
   
   handleTradeIn(userMessage) {
@@ -334,10 +356,13 @@ class DealershipWebSocketHandler {
       this.customerInfo.tradeIn = true;
       this.conversationPhase = 'timeline';
       return "Great! We'll make sure to have our appraisal team ready. When are you looking to make a purchase - this week, this month, or just starting your research?";
-    } else {
+    } else if (lower.includes('no')) {
       this.customerInfo.tradeIn = false;
       this.conversationPhase = 'timeline';
       return "No problem! When are you looking to make a purchase - this week, this month, or just starting your research?";
+    } else {
+      // Handle unclear responses
+      return "Do you have a vehicle you'd like to trade in? Just say yes or no.";
     }
   }
   
@@ -346,15 +371,34 @@ class DealershipWebSocketHandler {
     
     if (lower.includes('this week') || lower.includes('soon') || lower.includes('asap')) {
       this.customerInfo.timeline = 'this week';
-    } else if (lower.includes('this month')) {
+    } else if (lower.includes('this month') || lower.includes('month')) {
       this.customerInfo.timeline = 'this month';
+    } else if (lower.includes('research') || lower.includes('looking') || lower.includes('browsing')) {
+      this.customerInfo.timeline = 'researching';
     } else {
       // Default to researching for unclear responses
       this.customerInfo.timeline = 'researching';
     }
     
-    this.conversationPhase = 'name';
-    return "I'd love to help you find the perfect vehicle! What's your first name?";
+    // Now offer test drive
+    this.conversationPhase = 'test_drive_offer';
+    return `Perfect! Would you like to schedule a test drive for the ${this.customerInfo.vehicleInterest || 'vehicle you\'re interested in'}? It's the best way to see if it's the right fit for you.`;
+  }
+  
+  handleTestDriveOffer(userMessage) {
+    const lower = userMessage.toLowerCase();
+    
+    if (lower.includes('yes') || lower.includes('yeah') || lower.includes('sure') || lower.includes('ok') || lower.includes('sounds good')) {
+      this.customerInfo.wantsTestDrive = true;
+      this.conversationPhase = 'name';
+      return "Excellent! Let me get that scheduled for you. What's your first name?";
+    } else if (lower.includes('no') || lower.includes('not')) {
+      this.customerInfo.wantsTestDrive = false;
+      return "No problem! Feel free to browse our inventory online, and if you change your mind or have any questions, just give us a call. Is there anything else I can help you with today?";
+    } else {
+      // Unclear response
+      return "Would you like me to schedule a test drive for you? It's a great way to experience the vehicle firsthand.";
+    }
   }
   
   handleName(userMessage) {
@@ -381,9 +425,9 @@ class DealershipWebSocketHandler {
       this.conversationPhase = 'scheduling';
       
       const vehicleText = this.customerInfo.vehicleInterest ? 
-        `the ${this.customerInfo.vehicleInterest}` : 'some vehicles';
+        `the ${this.customerInfo.vehicleInterest}` : 'the vehicle';
       
-      return `Nice to meet you, ${extractedName}! I'd love to schedule a time for you to come in and ${this.customerInfo.tradeIn ? 'get your trade-in appraised and ' : ''}test drive ${vehicleText}. What day works best for you?`;
+      return `Nice to meet you, ${extractedName}! I'd love to get you scheduled for a test drive of ${vehicleText}. ${this.customerInfo.tradeIn ? 'We\'ll also have our appraisal team ready to evaluate your trade-in. ' : ''}What day works best for you?`;
     } else {
       return "I didn't catch that - could you tell me your first name please?";
     }
@@ -594,6 +638,7 @@ class DealershipWebSocketHandler {
     console.log(`  - New/Used: ${this.customerInfo.newOrUsed || 'Not specified'}`);
     console.log(`  - Trade-In: ${this.customerInfo.tradeIn ? 'Yes' : 'No'}`);
     console.log(`  - Timeline: ${this.customerInfo.timeline || 'Not specified'}`);
+    console.log(`  - Wants Test Drive: ${this.customerInfo.wantsTestDrive === null ? 'Not asked' : this.customerInfo.wantsTestDrive ? 'Yes' : 'No'}`);
     console.log(`  - Test Drive: ${this.customerInfo.day || 'Not scheduled'} at ${this.customerInfo.specificTime || 'No time'}`);
     console.log(`  - Booked: ${this.customerInfo.bookingConfirmed ? '✅' : '❌'}`);
     
@@ -611,6 +656,7 @@ class DealershipWebSocketHandler {
           new_or_used: this.customerInfo.newOrUsed,
           trade_in: this.customerInfo.tradeIn,
           timeline: this.customerInfo.timeline,
+          wants_test_drive: this.customerInfo.wantsTestDrive,
           salesperson: this.customerInfo.preferredSalesperson,
           appointment_type: 'Test Drive',
           specificTime: this.customerInfo.specificTime,
