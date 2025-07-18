@@ -298,7 +298,7 @@ class DealershipWebSocketHandler {
       // Use configured script if available
       const script = this.config.scripts?.vehicleInquiry?.model_interest;
       if (script) {
-        return script.replace('{model}', foundModel);
+        return script.replace('{model}', foundModel) + ` Are you looking for a new or used ${foundModel}?`;
       }
       return `Great choice! The ${foundModel} is one of our most popular vehicles. We have several in stock. Are you looking for a new or used ${foundModel}?`;
     } else if (lower.includes('truck')) {
@@ -504,18 +504,50 @@ So, do you have a vehicle you'd like to trade in?`;
         this.customerInfo.availableSlots = slots;
         this.waitingForTimeSelection = true;
         
-        // Use configured test drive slots if available
-        const configSlots = this.config.calendar?.testDriveSlots;
-        let availableText = '';
+        // Get morning and afternoon slots
+        const morningSlots = slots.filter(s => {
+          const hour = parseInt(s.displayTime.split(':')[0]);
+          const isPM = s.displayTime.includes('PM');
+          return !isPM || (isPM && hour === 12);
+        });
         
-        if (configSlots && configSlots[dayFound === 'saturday' ? 'saturday' : dayFound === 'sunday' ? 'sunday' : 'weekday']) {
-          availableText = "I have appointments available throughout the day.";
-        } else {
-          const times = slots.slice(0, 3).map(s => s.displayTime).join(', ');
-          availableText = `I have ${times} available.`;
+        const afternoonSlots = slots.filter(s => {
+          const hour = parseInt(s.displayTime.split(':')[0]);
+          const isPM = s.displayTime.includes('PM');
+          return isPM && hour !== 12;
+        });
+        
+        // Build response with specific times
+        let response = `Great! For ${this.customerInfo.day} I have `;
+        
+        if (morningSlots.length > 0 && afternoonSlots.length > 0) {
+          // Offer both morning and afternoon options
+          const morningTime = morningSlots[0].displayTime;
+          const afternoonTime = afternoonSlots[0].displayTime;
+          response += `${morningTime} in the morning or ${afternoonTime} in the afternoon. Which works better for you?`;
+        } else if (morningSlots.length > 0) {
+          // Only morning slots available
+          const times = morningSlots.slice(0, 3).map(s => s.displayTime);
+          if (times.length === 1) {
+            response += `${times[0]} available. Does that work for you?`;
+          } else if (times.length === 2) {
+            response += `${times[0]} or ${times[1]} available. Which time works best?`;
+          } else {
+            response += `${times[0]}, ${times[1]}, or ${times[2]} available. Which time works best?`;
+          }
+        } else if (afternoonSlots.length > 0) {
+          // Only afternoon slots available
+          const times = afternoonSlots.slice(0, 3).map(s => s.displayTime);
+          if (times.length === 1) {
+            response += `${times[0]} available. Does that work for you?`;
+          } else if (times.length === 2) {
+            response += `${times[0]} or ${times[1]} available. Which time works best?`;
+          } else {
+            response += `${times[0]}, ${times[1]}, or ${times[2]} available. Which time works best?`;
+          }
         }
         
-        return `${availableText} What time works best for you?`;
+        return response;
       } else {
         // Reset state and stay in scheduling phase
         this.customerInfo.day = null;
@@ -548,29 +580,65 @@ So, do you have a vehicle you'd like to trade in?`;
     let selectedSlot = null;
     const lower = userMessage.toLowerCase();
     
-    // Time matching
+    // Time matching patterns
     const timePatterns = [
       { pattern: /\b(morning|first)\b/i, preference: 'morning' },
       { pattern: /\b(afternoon|second|lunch)\b/i, preference: 'afternoon' },
-      { pattern: /\b(\d{1,2})\s*(am|pm|o'?clock)?\b/i, preference: 'specific' }
+      { pattern: /\b(\d{1,2})\s*(am|pm|o'?clock)?\b/i, preference: 'specific' },
+      { pattern: /\b(early)\b/i, preference: 'early' },
+      { pattern: /\b(late|later)\b/i, preference: 'late' }
     ];
     
     for (const {pattern, preference} of timePatterns) {
       const match = lower.match(pattern);
       if (match) {
-        if (preference === 'morning') {
-          selectedSlot = this.customerInfo.availableSlots.find(s => s.displayTime.includes('AM'));
-        } else if (preference === 'afternoon') {
-          selectedSlot = this.customerInfo.availableSlots.find(s => s.displayTime.includes('PM'));
+        if (preference === 'morning' || preference === 'early') {
+          // Get the earliest morning slot
+          selectedSlot = this.customerInfo.availableSlots.find(s => {
+            const hour = parseInt(s.displayTime.split(':')[0]);
+            const isPM = s.displayTime.includes('PM');
+            return !isPM || (isPM && hour === 12);
+          });
+        } else if (preference === 'afternoon' || preference === 'late') {
+          // Get an afternoon slot
+          selectedSlot = this.customerInfo.availableSlots.find(s => {
+            const hour = parseInt(s.displayTime.split(':')[0]);
+            const isPM = s.displayTime.includes('PM');
+            return isPM && hour !== 12;
+          });
         } else if (preference === 'specific' && match[1]) {
           const hour = parseInt(match[1]);
+          const isPM = match[2] && match[2].toLowerCase().includes('p');
+          const isAM = match[2] && match[2].toLowerCase().includes('a');
+          
           selectedSlot = this.customerInfo.availableSlots.find(s => {
             const slotHour = parseInt(s.displayTime.split(':')[0]);
-            return slotHour === hour || (hour < 8 && slotHour === hour + 12);
+            const slotIsPM = s.displayTime.includes('PM');
+            
+            // Direct hour match
+            if (slotHour === hour) {
+              // If AM/PM specified, must match
+              if (isAM && !slotIsPM) return true;
+              if (isPM && slotIsPM) return true;
+              // If no AM/PM specified, assume business hours context
+              if (!isAM && !isPM) return true;
+            }
+            
+            // Handle 12-hour conversion
+            if (hour < 8 && slotHour === hour + 12 && slotIsPM) {
+              return true;
+            }
+            
+            return false;
           });
         }
         break;
       }
+    }
+    
+    // If no slot selected, check for "yes" or confirmation to first available
+    if (!selectedSlot && (lower.includes('yes') || lower.includes('sure') || lower.includes('ok') || lower.includes('that works'))) {
+      selectedSlot = this.customerInfo.availableSlots[0];
     }
     
     if (selectedSlot) {
@@ -593,8 +661,16 @@ So, do you have a vehicle you'd like to trade in?`;
         return `Great! I have you down for ${this.customerInfo.day} at ${this.customerInfo.specificTime}. Our team will contact you shortly to confirm.`;
       }
     } else {
-      const times = this.customerInfo.availableSlots.slice(0, 3).map(s => s.displayTime).join(', ');
-      return `I have ${times} available. Which specific time works for you?`;
+      // Offer the times again with more guidance
+      const morningSlots = this.customerInfo.availableSlots.filter(s => !s.displayTime.includes('PM') || s.displayTime.startsWith('12'));
+      const afternoonSlots = this.customerInfo.availableSlots.filter(s => s.displayTime.includes('PM') && !s.displayTime.startsWith('12'));
+      
+      if (morningSlots.length > 0 && afternoonSlots.length > 0) {
+        return `I have ${morningSlots[0].displayTime} in the morning or ${afternoonSlots[0].displayTime} in the afternoon. Just let me know which you prefer - morning or afternoon?`;
+      } else {
+        const times = this.customerInfo.availableSlots.slice(0, 3).map(s => s.displayTime).join(', ');
+        return `I have ${times} available. Which specific time works for you?`;
+      }
     }
   }
   
