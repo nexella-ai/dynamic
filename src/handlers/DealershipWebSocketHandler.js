@@ -229,10 +229,36 @@ class DealershipWebSocketHandler {
     const popularModels = this.config.vehicleInventory?.popularModels || [];
     let foundModel = null;
     
+    // Make the search more flexible
     for (const model of popularModels) {
+      // Check if the message contains the model name (case-insensitive)
       if (lower.includes(model.toLowerCase())) {
         foundModel = model;
         break;
+      }
+    }
+    
+    // Also check for partial matches for common model names
+    const modelKeywords = {
+      'mustang': 'Mustang',
+      'f-150': 'F-150',
+      'f150': 'F-150',
+      'explorer': 'Explorer',
+      'escape': 'Escape',
+      'bronco': 'Bronco',
+      'ranger': 'Ranger',
+      'expedition': 'Expedition',
+      'edge': 'Edge',
+      'maverick': 'Maverick'
+    };
+    
+    // If we didn't find an exact match, check keywords
+    if (!foundModel) {
+      for (const [keyword, modelName] of Object.entries(modelKeywords)) {
+        if (lower.includes(keyword)) {
+          foundModel = modelName;
+          break;
+        }
       }
     }
     
@@ -252,7 +278,14 @@ class DealershipWebSocketHandler {
     } else if (lower.includes('suv')) {
       this.conversationPhase = 'new_or_used';
       return "Great! We have everything from the compact Escape to the full-size Expedition. What size SUV are you looking for?";
+    } else if (lower.includes('car') || lower.includes('sedan')) {
+      this.conversationPhase = 'new_or_used';  
+      return "We have several great cars including the Mustang. Which model interests you most?";
     } else {
+      // If they mention wanting to test drive but don't specify, ask again more specifically
+      if (lower.includes('test drive') || lower.includes('drive')) {
+        return "I'd be happy to schedule a test drive for you! Which specific Ford model were you interested in? We have trucks like the F-150, SUVs like the Explorer, or cars like the Mustang.";
+      }
       return "What type of vehicle are you interested in? We have a great selection of trucks, SUVs, and cars.";
     }
   }
