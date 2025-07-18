@@ -356,7 +356,7 @@ So, do you have a vehicle you'd like to trade in?`;
       this.customerInfo.tradeIn = true;
       this.conversationPhase = 'timeline';
       return "Great! We'll make sure to have our appraisal team ready. When are you looking to make a purchase - this week, this month, or just starting your research?";
-    } else if (lower.includes('no')) {
+    } else if (lower.includes('no') || lower.includes("don't") || lower.includes("do not")) {
       this.customerInfo.tradeIn = false;
       this.conversationPhase = 'timeline';
       return "No problem! When are you looking to make a purchase - this week, this month, or just starting your research?";
@@ -388,7 +388,7 @@ So, do you have a vehicle you'd like to trade in?`;
   handleTestDriveOffer(userMessage) {
     const lower = userMessage.toLowerCase();
     
-    if (lower.includes('yes') || lower.includes('yeah') || lower.includes('sure') || lower.includes('ok') || lower.includes('sounds good')) {
+    if (lower.includes('yes') || lower.includes('yeah') || lower.includes('sure') || lower.includes('ok') || lower.includes('sounds good') || lower.includes('that would') || lower.includes('yep') || lower.includes("let's do")) {
       this.customerInfo.wantsTestDrive = true;
       this.conversationPhase = 'name';
       return "Excellent! Let me get that scheduled for you. What's your first name?";
@@ -440,15 +440,16 @@ So, do you have a vehicle you'd like to trade in?`;
     
     if (dayFound) {
       this.customerInfo.day = dayFound.charAt(0).toUpperCase() + dayFound.slice(1);
-      this.conversationPhase = 'time_selection';
       
       // Get available slots
       const targetDate = this.getNextDate(dayFound);
       this.customerInfo.bookingDate = targetDate;
       
+      console.log(`📅 Getting slots for ${dayFound}:`, targetDate.toISOString());
       const slots = await getAvailableTimeSlots(targetDate);
       
       if (slots.length > 0) {
+        this.conversationPhase = 'time_selection';
         this.customerInfo.availableSlots = slots;
         this.waitingForTimeSelection = true;
         
@@ -465,7 +466,11 @@ So, do you have a vehicle you'd like to trade in?`;
         
         return `${availableText} What time works best for you?`;
       } else {
+        // Reset state and stay in scheduling phase
         this.customerInfo.day = null;
+        this.customerInfo.bookingDate = null;
+        // Stay in scheduling phase instead of moving to time_selection
+        this.conversationPhase = 'scheduling';
         return `I don't have any openings on ${dayFound}. What other day would work for you?`;
       }
     } else {
@@ -474,7 +479,20 @@ So, do you have a vehicle you'd like to trade in?`;
   }
   
   async handleTimeSelection(userMessage) {
-    if (!this.waitingForTimeSelection || !this.customerInfo.availableSlots.length) return null;
+    // If we're not actually waiting for time selection, try scheduling again
+    if (!this.waitingForTimeSelection || !this.customerInfo.availableSlots.length) {
+      // If the user said a day while we're in time_selection incorrectly, handle it
+      const lower = userMessage.toLowerCase();
+      const days = ['today', 'tomorrow', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+      const dayFound = days.find(day => lower.includes(day));
+      
+      if (dayFound) {
+        this.conversationPhase = 'scheduling';
+        return await this.handleScheduling(userMessage);
+      }
+      
+      return "What day works best for you?";
+    }
     
     let selectedSlot = null;
     const lower = userMessage.toLowerCase();
