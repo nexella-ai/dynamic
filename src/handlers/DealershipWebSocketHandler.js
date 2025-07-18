@@ -1,4 +1,4 @@
-// src/handlers/DealershipWebSocketHandler.js - PROPER DEALERSHIP HANDLER
+// src/handlers/DealershipWebSocketHandler.js - UPDATED WITH DELAYS AND BETTER TRACKING
 const configLoader = require('../services/config/ConfigurationLoader');
 const { 
   autoBookAppointment, 
@@ -49,10 +49,11 @@ class DealershipWebSocketHandler {
     this.hasGreeted = false;
     this.waitingForTimeSelection = false;
     
-    // Response timing
-    this.responseDelay = 1500;
+    // Response timing - INCREASED DELAYS
+    this.responseDelay = 2500; // Increased from 1500ms to 2500ms
     this.lastResponseTime = 0;
     this.pendingResponseTimeout = null;
+    this.minimumTimeBetweenResponses = 3000; // 3 seconds minimum
     
     // Initialize
     this.initialize();
@@ -107,16 +108,28 @@ class DealershipWebSocketHandler {
             const userMessage = parsed.transcript[parsed.transcript.length - 1]?.content || "";
             console.log(`🗣️ User: ${userMessage}`);
             
+            // Calculate delay based on time since last response
+            const now = Date.now();
+            const timeSinceLastResponse = now - this.lastResponseTime;
+            let delay = this.responseDelay;
+            
+            if (timeSinceLastResponse < this.minimumTimeBetweenResponses) {
+              delay = this.minimumTimeBetweenResponses - timeSinceLastResponse + 500;
+            }
+            
             if (!this.hasGreeted && userMessage.toLowerCase().includes('hello')) {
-              // Respond immediately to hello
+              // Respond to initial greeting with shorter delay
               this.hasGreeted = true;
               this.conversationPhase = 'greeting';
-              const greeting = this.generateDealershipGreeting();
-              await this.sendResponse(greeting, parsed.response_id);
-            } else {
-              // Quick delay for other messages
               if (this.pendingResponseTimeout) clearTimeout(this.pendingResponseTimeout);
-              this.pendingResponseTimeout = setTimeout(() => this.processMessage(parsed), this.responseDelay);
+              this.pendingResponseTimeout = setTimeout(async () => {
+                const greeting = this.generateDealershipGreeting();
+                await this.sendResponse(greeting, parsed.response_id);
+              }, 1000);
+            } else {
+              // All other messages with proper delay
+              if (this.pendingResponseTimeout) clearTimeout(this.pendingResponseTimeout);
+              this.pendingResponseTimeout = setTimeout(() => this.processMessage(parsed), delay);
             }
           }
         } catch (error) {
@@ -160,12 +173,17 @@ class DealershipWebSocketHandler {
   async sendResponse(content, responseId) {
     console.log(`🤖 ${this.config.aiAgent?.name || 'Sarah'}: ${content}`);
     
+    // Add a natural pause before sending
+    await new Promise(resolve => setTimeout(resolve, 200));
+    
     this.ws.send(JSON.stringify({
       content: content,
       content_complete: true,
       actions: [],
       response_id: responseId
     }));
+    
+    this.lastResponseTime = Date.now();
   }
   
   async getResponse(userMessage) {
@@ -210,7 +228,7 @@ class DealershipWebSocketHandler {
     if (lower.includes('good') || lower.includes('great') || lower.includes('fine')) {
       this.conversationPhase = 'vehicle_inquiry';
       return "That's great to hear! What brings you to " + this.config.companyName + " today? Are you looking for a specific vehicle?";
-    } else if (lower.includes('looking') || lower.includes('interested') || lower.includes('test drive')) {
+    } else if (lower.includes('looking') || lower.includes('interested') || lower.includes('test drive') || lower.includes('buy')) {
       this.conversationPhase = 'vehicle_inquiry';
       return "Excellent! Which vehicle are you interested in?";
     } else if (lower.includes('browse') || lower.includes('see')) {
@@ -229,34 +247,35 @@ class DealershipWebSocketHandler {
     const popularModels = this.config.vehicleInventory?.popularModels || [];
     let foundModel = null;
     
-    // Make the search more flexible
-    for (const model of popularModels) {
-      // Check if the message contains the model name (case-insensitive)
-      if (lower.includes(model.toLowerCase())) {
-        foundModel = model;
-        break;
-      }
-    }
-    
-    // Also check for partial matches for common model names
-    const modelKeywords = {
+    // Enhanced model detection with common variations
+    const modelVariations = {
       'mustang': 'Mustang',
       'f-150': 'F-150',
       'f150': 'F-150',
+      'f 150': 'F-150',
       'explorer': 'Explorer',
       'escape': 'Escape',
       'bronco': 'Bronco',
       'ranger': 'Ranger',
       'expedition': 'Expedition',
       'edge': 'Edge',
-      'maverick': 'Maverick'
+      'maverick': 'Maverick',
+      'bronco sport': 'Bronco Sport'
     };
     
-    // If we didn't find an exact match, check keywords
+    // Check for model variations first
+    for (const [variation, modelName] of Object.entries(modelVariations)) {
+      if (lower.includes(variation)) {
+        foundModel = modelName;
+        break;
+      }
+    }
+    
+    // If not found, check against popular models
     if (!foundModel) {
-      for (const [keyword, modelName] of Object.entries(modelKeywords)) {
-        if (lower.includes(keyword)) {
-          foundModel = modelName;
+      for (const model of popularModels) {
+        if (lower.includes(model.toLowerCase())) {
+          foundModel = model;
           break;
         }
       }
@@ -273,18 +292,21 @@ class DealershipWebSocketHandler {
       }
       return `Great choice! The ${foundModel} is one of our most popular vehicles. Are you looking for a new or used ${foundModel}?`;
     } else if (lower.includes('truck')) {
+      this.customerInfo.vehicleInterest = 'truck'; // Store general interest
       this.conversationPhase = 'new_or_used';
       return "Excellent choice! We have the F-150, Ranger, and Maverick. Which size truck works best for your needs?";
     } else if (lower.includes('suv')) {
+      this.customerInfo.vehicleInterest = 'SUV'; // Store general interest
       this.conversationPhase = 'new_or_used';
       return "Great! We have everything from the compact Escape to the full-size Expedition. What size SUV are you looking for?";
     } else if (lower.includes('car') || lower.includes('sedan')) {
+      this.customerInfo.vehicleInterest = 'car'; // Store general interest
       this.conversationPhase = 'new_or_used';  
       return "We have several great cars including the Mustang. Which model interests you most?";
     } else {
-      // If they mention wanting to test drive but don't specify, ask again more specifically
-      if (lower.includes('test drive') || lower.includes('drive')) {
-        return "I'd be happy to schedule a test drive for you! Which specific Ford model were you interested in? We have trucks like the F-150, SUVs like the Explorer, or cars like the Mustang.";
+      // If they mention wanting to test drive or buy but don't specify
+      if (lower.includes('test drive') || lower.includes('drive') || lower.includes('buy')) {
+        return "I'd be happy to help! Which specific Ford model were you interested in? We have trucks like the F-150, SUVs like the Explorer, or cars like the Mustang.";
       }
       return "What type of vehicle are you interested in? We have a great selection of trucks, SUVs, and cars.";
     }
@@ -327,6 +349,7 @@ class DealershipWebSocketHandler {
     } else if (lower.includes('this month')) {
       this.customerInfo.timeline = 'this month';
     } else {
+      // Default to researching for unclear responses
       this.customerInfo.timeline = 'researching';
     }
     
