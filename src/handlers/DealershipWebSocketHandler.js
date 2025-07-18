@@ -197,6 +197,9 @@ class DealershipWebSocketHandler {
       case 'vehicle_inquiry':
         return this.handleVehicleInquiry(userMessage);
         
+      case 'vehicle_selection':
+        return this.handleVehicleSelection(userMessage);
+        
       case 'new_or_used':
         return this.handleNewOrUsed(userMessage);
         
@@ -297,7 +300,7 @@ class DealershipWebSocketHandler {
       if (script) {
         return script.replace('{model}', foundModel);
       }
-      return `Great choice! The ${foundModel} is one of our most popular vehicles. We have several in stock.`;
+      return `Great choice! The ${foundModel} is one of our most popular vehicles. We have several in stock. Are you looking for a new or used ${foundModel}?`;
     } else if (lower.includes('truck')) {
       this.customerInfo.vehicleInterest = 'truck'; // Store general interest
       this.conversationPhase = 'vehicle_selection';
@@ -316,6 +319,54 @@ class DealershipWebSocketHandler {
         return "I'd be happy to help! Which specific Ford model were you interested in? We have trucks like the F-150, SUVs like the Explorer, or cars like the Mustang.";
       }
       return "What type of vehicle are you interested in? We have a great selection of trucks, SUVs, and cars.";
+    }
+  }
+  
+  handleVehicleSelection(userMessage) {
+    const lower = userMessage.toLowerCase();
+    
+    // Check for specific models mentioned after the category was selected
+    const modelVariations = {
+      'mustang': 'Mustang',
+      'f-150': 'F-150',
+      'f150': 'F-150',
+      'f 150': 'F-150',
+      'explorer': 'Explorer',
+      'escape': 'Escape',
+      'bronco': 'Bronco',
+      'ranger': 'Ranger',
+      'expedition': 'Expedition',
+      'edge': 'Edge',
+      'maverick': 'Maverick',
+      'bronco sport': 'Bronco Sport',
+      'compact': 'Escape',
+      'mid-size': 'Edge',
+      'midsize': 'Edge',
+      'full-size': 'Expedition',
+      'full size': 'Expedition',
+      'large': 'Expedition',
+      'small': 'Escape'
+    };
+    
+    // Check for model variations
+    for (const [variation, modelName] of Object.entries(modelVariations)) {
+      if (lower.includes(variation)) {
+        this.customerInfo.vehicleInterest = modelName;
+        this.conversationPhase = 'new_or_used';
+        return `Excellent choice! The ${modelName} is a fantastic vehicle. Are you looking for a new or used ${modelName}?`;
+      }
+    }
+    
+    // If they're still not specific, ask again based on their category
+    if (this.customerInfo.vehicleInterest === 'truck') {
+      return "Which truck are you interested in? The F-150 is our most popular full-size truck, the Ranger is perfect for those who want something smaller, and the Maverick is our newest compact truck.";
+    } else if (this.customerInfo.vehicleInterest === 'SUV') {
+      return "What size SUV works best for you? The Escape is great for city driving, the Edge offers more space, the Explorer is perfect for families, and the Expedition is our largest SUV.";
+    } else if (this.customerInfo.vehicleInterest === 'car') {
+      return "The Mustang is our iconic sports car. Are you interested in the Mustang, or were you looking for something else?";
+    } else {
+      // Fallback
+      return "Could you tell me which specific Ford model you're interested in?";
     }
   }
   
